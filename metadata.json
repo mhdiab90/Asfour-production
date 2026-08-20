@@ -1,0 +1,6 @@
+{
+  "name": "ASFOUR Factory Management",
+  "description": "نظام إدارة مصنع عصفور للإنتاج والبيانات الأساسية وتتبع الإنتاج والتقارير",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

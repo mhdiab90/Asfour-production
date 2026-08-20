@@ -1,0 +1,20 @@
+{
+  "name": "مصنع عصفور للحراريات - نظام إدارة الإنتاج",
+  "short_name": "ASFOUR ERP",
+  "description": "تطبيق الويب لإدارة خطوط الإنتاج والبيانات الأساسية لمصنع عصفور للحراريات",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#0f172a",
+  "theme_color": "#0f172a",
+  "orientation": "any",
+  "dir": "rtl",
+  "lang": "ar",
+  "icons": [
+    {
+      "src": "/favicon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}

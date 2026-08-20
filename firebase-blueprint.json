@@ -1,0 +1,656 @@
+{
+  "entities": {
+    "AdminUser": {
+      "title": "Admin User",
+      "description": "Administrator user authorized to manage the ASFOUR factory system",
+      "type": "object",
+      "properties": {
+        "email": {
+          "type": "string",
+          "format": "email",
+          "description": "Administrator email address"
+        },
+        "username": {
+          "type": "string",
+          "description": "Admin username (e.g. admin)"
+        },
+        "role": {
+          "type": "string",
+          "enum": ["SUPER_ADMIN", "ADMIN", "SUPERVISOR", "PRODUCTION_USER", "VIEWER"],
+          "description": "User authority role"
+        },
+        "active": {
+          "type": "boolean",
+          "description": "Whether the user account is active"
+        },
+        "fullName": {
+          "type": "string",
+          "description": "User or employee full name"
+        },
+        "employeeId": {
+          "type": "string",
+          "description": "Linked employee document ID from employees collection"
+        },
+        "employeeCode": {
+          "type": "string",
+          "description": "Linked employee badge/identification code"
+        },
+        "employeeName": {
+          "type": "string",
+          "description": "Linked employee name"
+        },
+        "lastLogin": {
+          "type": "string",
+          "description": "ISO timestamp of last login"
+        },
+        "lastActivity": {
+          "type": "string",
+          "description": "ISO timestamp of last recorded activity"
+        },
+        "createdAt": {
+          "type": "string",
+          "description": "ISO timestamp of creation"
+        },
+        "updatedAt": {
+          "type": "string",
+          "description": "ISO timestamp of last update"
+        }
+      },
+      "required": ["email", "role", "active"]
+    },
+    "Employee": {
+      "title": "Employee",
+      "description": "Factory worker or operator master data",
+      "type": "object",
+      "properties": {
+        "code": {
+          "type": "string",
+          "maxLength": 64,
+          "description": "Unique employee identification code"
+        },
+        "name": {
+          "type": "string",
+          "maxLength": 128,
+          "description": "Full name of the employee"
+        },
+        "departmentId": {
+          "type": "string",
+          "description": "Department document ID"
+        },
+        "departmentName": {
+          "type": "string",
+          "description": "Department name"
+        },
+        "jobTitle": {
+          "type": "string",
+          "maxLength": 100,
+          "description": "Job title or specialization"
+        },
+        "phone": {
+          "type": "string",
+          "maxLength": 30,
+          "description": "Contact phone number"
+        },
+        "active": {
+          "type": "boolean",
+          "description": "Active status"
+        }
+      },
+      "required": ["code", "name", "active"]
+    },
+    "Department": {
+      "title": "Department",
+      "description": "Factory department",
+      "type": "object",
+      "properties": {
+        "code": {
+          "type": "string",
+          "maxLength": 64,
+          "description": "Department code"
+        },
+        "name": {
+          "type": "string",
+          "maxLength": 128,
+          "description": "Department name in Arabic"
+        },
+        "description": {
+          "type": "string",
+          "maxLength": 255,
+          "description": "Department description"
+        },
+        "active": {
+          "type": "boolean",
+          "description": "Active status"
+        }
+      },
+      "required": ["code", "name", "active"]
+    },
+    "ProductType": {
+      "title": "ProductType",
+      "description": "Product classification and prefix code master data",
+      "type": "object",
+      "properties": {
+        "prefixCode": {
+          "type": "string",
+          "minLength": 3,
+          "maxLength": 3,
+          "description": "Unique 3-character uppercase prefix code (e.g. BAR, BHA, BSI)"
+        },
+        "nameEn": {
+          "type": "string",
+          "maxLength": 150,
+          "description": "Product classification name in English (e.g. Bricks Acid Resistance)"
+        },
+        "nameAr": {
+          "type": "string",
+          "maxLength": 150,
+          "description": "Product classification name in Arabic (e.g. طوب مقاوم للأحماض)"
+        },
+        "description": {
+          "type": "string",
+          "maxLength": 255,
+          "description": "Classification description"
+        },
+        "active": {
+          "type": "boolean",
+          "description": "Active status"
+        }
+      },
+      "required": ["prefixCode", "nameEn", "nameAr", "active"]
+    },
+    "Product": {
+      "title": "Product",
+      "description": "Refractory product master data",
+      "type": "object",
+      "properties": {
+        "code": {
+          "type": "string",
+          "maxLength": 64,
+          "description": "Unique product code / SKU"
+        },
+        "name": {
+          "type": "string",
+          "maxLength": 150,
+          "description": "Product name / description"
+        },
+        "category": {
+          "type": "string",
+          "maxLength": 100,
+          "description": "Product category"
+        },
+        "aluminaPercentage": {
+          "type": "number",
+          "description": "Alumina ratio percentage (e.g. 45, 60, 70)"
+        },
+        "pieceWeight": {
+          "type": "number",
+          "description": "Weight per piece in Kilograms (kg)"
+        },
+        "dimensions": {
+          "type": "string",
+          "maxLength": 100,
+          "description": "Physical dimensions (e.g. 230x114x65mm)"
+        },
+        "active": {
+          "type": "boolean",
+          "description": "Active status"
+        }
+      },
+      "required": ["code", "name", "aluminaPercentage", "pieceWeight", "active"]
+    },
+    "Customer": {
+      "title": "Customer",
+      "description": "Client or company purchasing products",
+      "type": "object",
+      "properties": {
+        "code": {
+          "type": "string",
+          "maxLength": 64,
+          "description": "Customer code"
+        },
+        "name": {
+          "type": "string",
+          "maxLength": 150,
+          "description": "Customer name"
+        },
+        "company": {
+          "type": "string",
+          "maxLength": 150,
+          "description": "Company name"
+        },
+        "phone": {
+          "type": "string",
+          "maxLength": 30,
+          "description": "Phone number"
+        },
+        "email": {
+          "type": "string",
+          "format": "email",
+          "description": "Email address"
+        },
+        "address": {
+          "type": "string",
+          "maxLength": 255,
+          "description": "Physical address"
+        },
+        "active": {
+          "type": "boolean",
+          "description": "Active status"
+        }
+      },
+      "required": ["code", "name", "active"]
+    },
+    "Shift": {
+      "title": "Shift",
+      "description": "Work shift schedule",
+      "type": "object",
+      "properties": {
+        "code": {
+          "type": "string",
+          "maxLength": 64,
+          "description": "Shift code (e.g. SHIFT-1)"
+        },
+        "name": {
+          "type": "string",
+          "maxLength": 100,
+          "description": "Shift name (e.g. وردية الصباح)"
+        },
+        "startTime": {
+          "type": "string",
+          "description": "Start time (HH:mm)"
+        },
+        "endTime": {
+          "type": "string",
+          "description": "End time (HH:mm)"
+        },
+        "hours": {
+          "type": "number",
+          "description": "Shift length in hours"
+        },
+        "active": {
+          "type": "boolean",
+          "description": "Active status"
+        }
+      },
+      "required": ["code", "name", "hours", "active"]
+    },
+    "Press": {
+      "title": "Press",
+      "description": "Hydraulic or mechanical press machine",
+      "type": "object",
+      "properties": {
+        "code": {
+          "type": "string",
+          "maxLength": 64,
+          "description": "Press code (e.g. PRESS-01)"
+        },
+        "name": {
+          "type": "string",
+          "maxLength": 100,
+          "description": "Press name / identifier"
+        },
+        "tonnage": {
+          "type": "number",
+          "description": "Press force tonnage"
+        },
+        "model": {
+          "type": "string",
+          "maxLength": 100,
+          "description": "Manufacturer model"
+        },
+        "status": {
+          "type": "string",
+          "enum": ["active", "maintenance", "inactive"],
+          "description": "Operational status"
+        },
+        "active": {
+          "type": "boolean",
+          "description": "Active status"
+        }
+      },
+      "required": ["code", "name", "active"]
+    },
+    "Furnace": {
+      "title": "Furnace",
+      "description": "Firing kiln / furnace unit",
+      "type": "object",
+      "properties": {
+        "code": {
+          "type": "string",
+          "maxLength": 64,
+          "description": "Furnace code (e.g. FURN-01)"
+        },
+        "name": {
+          "type": "string",
+          "maxLength": 100,
+          "description": "Furnace name"
+        },
+        "capacity": {
+          "type": "number",
+          "description": "Capacity in tons"
+        },
+        "maxTemperature": {
+          "type": "number",
+          "description": "Max temperature in Celsius"
+        },
+        "status": {
+          "type": "string",
+          "enum": ["active", "maintenance", "inactive"],
+          "description": "Operational status"
+        },
+        "active": {
+          "type": "boolean",
+          "description": "Active status"
+        }
+      },
+      "required": ["code", "name", "active"]
+    },
+    "FurnaceCar": {
+      "title": "FurnaceCar",
+      "description": "Kiln car loaded with refractory blocks",
+      "type": "object",
+      "properties": {
+        "code": {
+          "type": "string",
+          "maxLength": 64,
+          "description": "Car code"
+        },
+        "carNumber": {
+          "type": "string",
+          "maxLength": 64,
+          "description": "Physical car number / ID"
+        },
+        "furnaceId": {
+          "type": "string",
+          "description": "Assigned furnace ID"
+        },
+        "furnaceName": {
+          "type": "string",
+          "description": "Assigned furnace name"
+        },
+        "capacity": {
+          "type": "number",
+          "description": "Car capacity"
+        },
+        "active": {
+          "type": "boolean",
+          "description": "Active status"
+        }
+      },
+      "required": ["code", "carNumber", "active"]
+    },
+    "Production": {
+      "title": "Production",
+      "description": "Factory production operation record",
+      "type": "object",
+      "properties": {
+        "date": {
+          "type": "string",
+          "description": "Production date YYYY-MM-DD"
+        },
+        "shiftId": {
+          "type": "string",
+          "description": "Shift ID"
+        },
+        "shiftName": {
+          "type": "string",
+          "description": "Shift name"
+        },
+        "employeeIds": {
+          "type": "array",
+          "description": "List of employee IDs assigned to this operation"
+        },
+        "employeeNames": {
+          "type": "array",
+          "description": "List of employee names"
+        },
+        "employeeCodes": {
+          "type": "array",
+          "description": "List of employee codes"
+        },
+        "furnaceId": {
+          "type": "string",
+          "description": "Furnace ID"
+        },
+        "furnaceName": {
+          "type": "string",
+          "description": "Furnace name"
+        },
+        "furnaceCarIds": {
+          "type": "array",
+          "description": "List of furnace car IDs"
+        },
+        "furnaceCarNumbers": {
+          "type": "array",
+          "description": "List of furnace car numbers"
+        },
+        "pressId": {
+          "type": "string",
+          "description": "Press ID"
+        },
+        "pressName": {
+          "type": "string",
+          "description": "Press name"
+        },
+        "customerOrderNumber": {
+          "type": "string",
+          "maxLength": 100,
+          "description": "Customer order or batch number"
+        },
+        "customerId": {
+          "type": "string",
+          "description": "Customer ID"
+        },
+        "customerName": {
+          "type": "string",
+          "description": "Customer name"
+        },
+        "productId": {
+          "type": "string",
+          "description": "Product ID"
+        },
+        "productName": {
+          "type": "string",
+          "description": "Product name"
+        },
+        "productCode": {
+          "type": "string",
+          "description": "Product code"
+        },
+        "aluminaPercentage": {
+          "type": "number",
+          "description": "Alumina %"
+        },
+        "pieceWeight": {
+          "type": "number",
+          "description": "Piece weight in kg"
+        },
+        "productionQuantity": {
+          "type": "number",
+          "description": "Total pieces produced"
+        },
+        "wasteQuantity": {
+          "type": "number",
+          "description": "Defective/waste pieces"
+        },
+        "goodQuantity": {
+          "type": "number",
+          "description": "Good quality pieces"
+        },
+        "productionWeight": {
+          "type": "number",
+          "description": "Total production weight (kg)"
+        },
+        "goodWeight": {
+          "type": "number",
+          "description": "Good product weight (kg)"
+        },
+        "wasteWeight": {
+          "type": "number",
+          "description": "Waste weight (kg)"
+        },
+        "wastePercentage": {
+          "type": "number",
+          "description": "Waste percentage (%)"
+        },
+        "mechanicalFaults": {
+          "type": "number",
+          "description": "Mechanical downtime minutes"
+        },
+        "electricalFaults": {
+          "type": "number",
+          "description": "Electrical downtime minutes"
+        },
+        "workshopFaults": {
+          "type": "number",
+          "description": "Workshop downtime minutes"
+        },
+        "rawMaterialFaults": {
+          "type": "number",
+          "description": "Raw material faults minutes"
+        },
+        "furnaceFaults": {
+          "type": "number",
+          "description": "Furnace faults minutes"
+        },
+        "pressFaults": {
+          "type": "number",
+          "description": "Press faults minutes"
+        },
+        "otherFaults": {
+          "type": "number",
+          "description": "Other faults minutes"
+        },
+        "totalDowntimeMinutes": {
+          "type": "number",
+          "description": "Total downtime in minutes"
+        },
+        "totalDowntimeHours": {
+          "type": "number",
+          "description": "Total downtime in hours"
+        },
+        "notes": {
+          "type": "string",
+          "maxLength": 1000,
+          "description": "General operation notes"
+        },
+        "createdBy": {
+          "type": "string",
+          "description": "Auth UID of the operator or admin who created the record"
+        },
+        "createdAt": {
+          "type": "string",
+          "description": "Creation timestamp"
+        },
+        "updatedAt": {
+          "type": "string",
+          "description": "Last update timestamp"
+        }
+      },
+      "required": ["date", "shiftId", "pressId", "productId", "productionQuantity", "wasteQuantity"]
+    },
+    "AuditLog": {
+      "title": "AuditLog",
+      "description": "System activity audit log",
+      "type": "object",
+      "properties": {
+        "userId": {
+          "type": "string",
+          "description": "Firebase Auth UID"
+        },
+        "username": {
+          "type": "string",
+          "description": "Admin username or email"
+        },
+        "action": {
+          "type": "string",
+          "enum": ["CREATE", "UPDATE", "DELETE", "LOGIN", "LOGOUT", "BULK_IMPORT", "EXPORT"],
+          "description": "Action performed"
+        },
+        "collection": {
+          "type": "string",
+          "description": "Target Firestore collection"
+        },
+        "documentId": {
+          "type": "string",
+          "description": "Target document ID"
+        },
+        "details": {
+          "type": "string",
+          "description": "Description of action"
+        },
+        "timestamp": {
+          "type": "string",
+          "description": "ISO timestamp"
+        }
+      },
+      "required": ["userId", "action", "collection", "timestamp"]
+    }
+  },
+  "firestore": {
+    "/adminUsers/{uid}": {
+      "schema": "AdminUser",
+      "description": "Admin users with authorization status and roles"
+    },
+    "/employees/{employeeId}": {
+      "schema": "Employee",
+      "description": "Master data for factory employees"
+    },
+    "/departments/{departmentId}": {
+      "schema": "Department",
+      "description": "Master data for factory departments"
+    },
+    "/products/{productId}": {
+      "schema": "Product",
+      "description": "Master data for manufactured refractory products"
+    },
+    "/productTypes/{typeId}": {
+      "schema": "ProductType",
+      "description": "Master data for product classification types and prefix codes"
+    },
+    "/customers/{customerId}": {
+      "schema": "Customer",
+      "description": "Master data for company clients and customers"
+    },
+    "/shifts/{shiftId}": {
+      "schema": "Shift",
+      "description": "Master data for work shifts"
+    },
+    "/presses/{pressId}": {
+      "schema": "Press",
+      "description": "Master data for presses"
+    },
+    "/furnaces/{furnaceId}": {
+      "schema": "Furnace",
+      "description": "Master data for kilns and furnaces"
+    },
+    "/furnaceCars/{carId}": {
+      "schema": "FurnaceCar",
+      "description": "Master data for furnace cars"
+    },
+    "/production/{productionId}": {
+      "schema": "Production",
+      "description": "Daily production records"
+    },
+    "/productionEmployees/{peId}": {
+      "schema": "object",
+      "description": "Relational mappings of employees per production run"
+    },
+    "/productionFurnaceCars/{pfcId}": {
+      "schema": "object",
+      "description": "Relational mappings of furnace cars per production run"
+    },
+    "/downtime/{downtimeId}": {
+      "schema": "object",
+      "description": "Detailed downtime breakdown records"
+    },
+    "/auditLogs/{logId}": {
+      "schema": "AuditLog",
+      "description": "Audit trail logs for all system mutations"
+    },
+    "/systemTests/{testId}": {
+      "schema": "object",
+      "description": "Health check and diagnostics test entries"
+    }
+  }
+}

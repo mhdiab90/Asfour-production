@@ -1,0 +1,126 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Helper functions
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isAdmin() {
+      return isSignedIn() && (
+        exists(/databases/$(database)/documents/adminUsers/$(request.auth.uid)) &&
+        get(/databases/$(database)/documents/adminUsers/$(request.auth.uid)).data.role == 'SUPER_ADMIN' &&
+        get(/databases/$(database)/documents/adminUsers/$(request.auth.uid)).data.active == true
+      );
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    // Default deny
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Admin Users collection
+    // Direct get by authenticated user for their own UID is permitted for authorization check
+    match /adminUsers/{uid} {
+      allow get: if isSignedIn() && (request.auth.uid == uid || isAdmin());
+      allow list: if isAdmin();
+      allow create: if isAdmin();
+      allow update: if isAdmin() || (
+        isSignedIn() && 
+        request.auth.uid == uid && 
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly(['lastLogin', 'lastActivity'])
+      );
+      allow delete: if isAdmin();
+    }
+
+    // Master Data collections (Only Super Admin can mutate master data)
+    match /employees/{employeeId} {
+      allow read: if isSignedIn();
+      allow write: if isAdmin();
+    }
+
+    match /departments/{departmentId} {
+      allow read: if isSignedIn();
+      allow write: if isAdmin();
+    }
+
+    match /products/{productId} {
+      allow read: if isSignedIn();
+      allow write: if isAdmin();
+    }
+
+    match /productTypes/{typeId} {
+      allow read: if isSignedIn();
+      allow write: if isAdmin();
+    }
+
+    match /customers/{customerId} {
+      allow read: if isSignedIn();
+      allow write: if isAdmin();
+    }
+
+    match /shifts/{shiftId} {
+      allow read: if isSignedIn();
+      allow write: if isAdmin();
+    }
+
+    match /presses/{pressId} {
+      allow read: if isSignedIn();
+      allow write: if isAdmin();
+    }
+
+    match /furnaces/{furnaceId} {
+      allow read: if isSignedIn();
+      allow write: if isAdmin();
+    }
+
+    match /furnaceCars/{carId} {
+      allow read: if isSignedIn();
+      allow write: if isAdmin();
+    }
+
+    // Production records (Production users & admins can read and log production)
+    match /production/{productionId} {
+      allow read: if isSignedIn();
+      allow create: if isSignedIn();
+      allow update, delete: if isAdmin() || (isSignedIn() && resource.data.createdBy == request.auth.uid);
+    }
+
+    match /productionEmployees/{peId} {
+      allow read: if isSignedIn();
+      allow write: if isSignedIn();
+    }
+
+    match /productionFurnaceCars/{pfcId} {
+      allow read: if isSignedIn();
+      allow write: if isSignedIn();
+    }
+
+    match /downtime/{downtimeId} {
+      allow read: if isSignedIn();
+      allow write: if isSignedIn();
+    }
+
+    // Audit logs (Read only for Super Admin, write for all signed in users)
+    match /auditLogs/{logId} {
+      allow read: if isAdmin();
+      allow create: if isSignedIn();
+      allow update, delete: if false; // Immutable audit log
+    }
+
+    // Health check & testing
+    match /systemTests/{testId} {
+      allow read, write: if isSignedIn();
+    }
+
+    // Connection ping
+    match /test/{testId} {
+      allow read, write: if true;
+    }
+  }
+}
