@@ -15,10 +15,14 @@ import {
   Users,
   Sparkles,
   Package,
-  FileSpreadsheet
+  FileSpreadsheet,
+  RotateCcw,
+  Activity
 } from 'lucide-react';
 import { NavigationPage } from '../../types';
 import { useAuth } from '../../context/AuthContext';
+import { useUpdate } from '../../context/UpdateContext';
+import { CURRENT_APP_VERSION } from '../../config/appVersion';
 
 interface SidebarProps {
   currentPage: NavigationPage;
@@ -36,6 +40,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   onOpenProfile,
 }) => {
   const { logout, adminUser, isSuperAdmin, isProductionUser } = useAuth();
+  const { setShowVersionModal, hasUpdate } = useUpdate();
 
   const operatorNavigation = [
     { id: 'production-entry' as NavigationPage, label: 'إدخال الإنتاج اليومي (المراحل)', icon: PlusCircle },
@@ -55,6 +60,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
     { id: 'raw-materials' as NavigationPage, label: 'الخامات والمخزون', icon: Package },
     { id: 'master-data' as NavigationPage, label: 'البيانات الأساسية', icon: Database },
     { id: 'historical-import' as NavigationPage, label: 'استيراد الإنتاج التاريخي', icon: FileSpreadsheet, badge: 'Excel' },
+    { id: 'backup-restore' as NavigationPage, label: 'النسخ الاحتياطي والاستعادة', icon: RotateCcw, badge: 'آمن' },
+    { id: 'system-health' as NavigationPage, label: 'صحة النظام والإصدارات', icon: Activity },
     { id: 'user-management' as NavigationPage, label: 'إدارة المستخدمين', icon: Users },
     { id: 'reports' as NavigationPage, label: 'التقارير والإحصائيات', icon: BarChart3 },
     { id: 'settings' as NavigationPage, label: 'سجلات النظام والربط', icon: Settings },
@@ -213,6 +220,24 @@ export const Sidebar: React.FC<SidebarProps> = ({
             </>
           )}
         </nav>
+
+        {/* Version & Changelog Trigger Pill */}
+        <div className="px-4 py-2 bg-slate-950/60 border-t border-slate-800/80">
+          <button
+            onClick={() => setShowVersionModal(true)}
+            className="w-full flex items-center justify-between px-3 py-1.5 rounded-xl bg-slate-800/50 hover:bg-slate-800 border border-slate-700/50 text-xs transition group"
+          >
+            <div className="flex items-center gap-2">
+              <span className={`w-2 h-2 rounded-full ${hasUpdate ? 'bg-amber-400 animate-ping' : 'bg-emerald-400'}`} />
+              <span className="font-mono text-slate-300 font-bold group-hover:text-white">
+                v{CURRENT_APP_VERSION.version}
+              </span>
+            </div>
+            <span className="text-[10px] text-slate-400 font-mono">
+              {hasUpdate ? 'تحديث متاح' : 'Schema v3'}
+            </span>
+          </button>
+        </div>
 
         {/* User Profile & Logout Section in Footer */}
         <div className="p-4 border-t border-slate-800 bg-slate-950/40">

@@ -17,6 +17,8 @@ import { ProductionRecordsView } from './components/production/ProductionRecords
 import { DataReviewView } from './components/production/DataReviewView';
 import { DataImportView } from './components/admin/DataImportView';
 import { RawMaterialsView } from './components/admin/RawMaterialsView';
+import { BackupRestoreView } from './components/admin/BackupRestoreView';
+import { SystemHealthView } from './components/admin/SystemHealthView';
 import { AIAssistantView } from './components/ai/AIAssistantView';
 import { MasterDataView } from './components/masterData/MasterDataView';
 import { UserManagementView } from './components/users/UserManagementView';
@@ -24,10 +26,15 @@ import { BulkEntryView } from './components/bulk/BulkEntryView';
 import { ReportsView } from './components/reports/ReportsView';
 import { SettingsView } from './components/settings/SettingsView';
 import { ErrorBoundary } from './components/common/ErrorBoundary';
+import { UpdateProvider, useUpdate } from './context/UpdateContext';
+import { UpdateNotificationBanner } from './components/common/UpdateNotificationBanner';
+import { VersionModal } from './components/common/VersionModal';
+import { CURRENT_APP_VERSION, DATABASE_SCHEMA_VERSION } from './config/appVersion';
 import { ShieldCheck, CheckCircle2, Cpu } from 'lucide-react';
 
 const MainAppContent: React.FC = () => {
   const { isAuthenticated, isLoading, adminUser, isSuperAdmin, isProductionUser } = useAuth();
+  const { setShowVersionModal, hasUpdate } = useUpdate();
   
   // Default to 'production-entry' if operator, or 'dashboard' if super admin
   const [currentPage, setCurrentPage] = useState<NavigationPage>('dashboard');
@@ -226,6 +233,16 @@ const MainAppContent: React.FC = () => {
             <RawMaterialsView />
           )}
 
+          {/* Backup & Disaster Recovery Center */}
+          {currentPage === 'backup-restore' && isSuperAdmin && (
+            <BackupRestoreView />
+          )}
+
+          {/* System Health & DR Protocols */}
+          {currentPage === 'system-health' && isSuperAdmin && (
+            <SystemHealthView />
+          )}
+
           {/* AI Factory Assistant */}
           {currentPage === 'ai-assistant' && (
             <AIAssistantView />
@@ -251,11 +268,20 @@ const MainAppContent: React.FC = () => {
         </main>
 
         {/* Geometric Balance Persistent Footer */}
-        <footer className="h-10 bg-slate-100 border-t border-slate-200 flex items-center justify-between px-6 text-[10px] font-bold text-slate-500 uppercase tracking-widest mt-auto">
-          <div>ASFOUR PRODUCTION SYSTEM v2.0.0 (WEB)</div>
-          <div className="flex gap-4">
-            <span className="text-emerald-700">متصل بقاعدة البيانات ✅</span>
-            <span className="font-mono text-slate-600">
+        <footer className="h-10 bg-slate-900 border-t border-slate-800 flex items-center justify-between px-6 text-[10px] font-bold text-slate-400 uppercase tracking-widest mt-auto">
+          <div className="flex items-center gap-3">
+            <button
+              onClick={() => setShowVersionModal(true)}
+              className="flex items-center gap-1.5 text-slate-300 hover:text-amber-400 transition cursor-pointer"
+            >
+              <span className={`w-2 h-2 rounded-full ${hasUpdate ? 'bg-amber-400 animate-ping' : 'bg-emerald-400'}`} />
+              <span className="font-mono">ASFOUR ERP v{CURRENT_APP_VERSION.version}</span>
+              <span className="text-[9px] bg-slate-800 px-1.5 py-0.5 rounded text-slate-400 border border-slate-700">Schema v{DATABASE_SCHEMA_VERSION}</span>
+            </button>
+          </div>
+          <div className="flex gap-4 items-center">
+            <span className="text-emerald-400">متصل بقاعدة البيانات السحابية ✅</span>
+            <span className="font-mono text-slate-400">
               {isSuperAdmin ? `ADMIN: ${adminUser?.email || 'SUPER_ADMIN'}` : `USER: ${adminUser?.employeeCode || adminUser?.email}`}
             </span>
           </div>
@@ -273,6 +299,12 @@ const MainAppContent: React.FC = () => {
         isOpen={isProfileModalOpen}
         onClose={() => setIsProfileModalOpen(false)}
       />
+
+      {/* Auto-Update Toast / Banner */}
+      <UpdateNotificationBanner />
+
+      {/* System Version & Changelog Modal */}
+      <VersionModal />
     </div>
   );
 };
@@ -281,7 +313,9 @@ export default function App() {
   return (
     <ErrorBoundary>
       <AuthProvider>
-        <MainAppContent />
+        <UpdateProvider>
+          <MainAppContent />
+        </UpdateProvider>
       </AuthProvider>
     </ErrorBoundary>
   );

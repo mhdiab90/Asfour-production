@@ -1,9 +1,10 @@
-// ASFOUR ERP Service Worker for PWA Offline Caching - Version 3.2
-const CACHE_NAME = 'asfour-erp-v3.2';
+// ASFOUR ERP Service Worker for PWA Offline Caching - Version 3.2.0
+const CACHE_NAME = 'asfour-erp-v3.2.0';
 const STATIC_ASSETS = [
   '/',
   '/index.html',
   '/manifest.json',
+  '/version.json'
 ];
 
 self.addEventListener('install', (event) => {
@@ -33,13 +34,21 @@ self.addEventListener('activate', (event) => {
   self.clients.claim();
 });
 
+// Listen for messages from client
+self.addEventListener('message', (event) => {
+  if (event.data && event.data.type === 'SKIP_WAITING') {
+    self.skipWaiting();
+  }
+});
+
 self.addEventListener('fetch', (event) => {
-  // Never intercept Firebase, Google APIs, or Auth requests
+  // Never intercept Firebase, Google APIs, or Auth requests or version.json
   if (
     event.request.url.includes('firestore.googleapis.com') ||
     event.request.url.includes('identitytoolkit.googleapis.com') ||
     event.request.url.includes('securetoken.googleapis.com') ||
     event.request.url.includes('firebaseinstallations.googleapis.com') ||
+    event.request.url.includes('version.json') ||
     event.request.method !== 'GET'
   ) {
     return;

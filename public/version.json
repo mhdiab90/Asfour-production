@@ -1,0 +1,10 @@
+{
+  "version": "3.2.0",
+  "buildId": "2026-08-22-001",
+  "buildTimestamp": "2026-08-22T08:45:00Z",
+  "gitCommit": "main-v3.2.0",
+  "deploymentId": "asfour-prod-20260822",
+  "databaseSchemaVersion": 3,
+  "mandatory": false,
+  "releaseNotes": "تحديث نظام النسخ الاحتياطي والمراحل الصناعية الشاملة وإدارة الجودة وكشف التحديثات الفوري"
+}

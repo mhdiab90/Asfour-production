@@ -358,7 +358,10 @@ export interface AuditLog {
     | 'PRODUCT_TYPE_UPDATE'
     | 'PRODUCT_TYPE_ACTIVATE'
     | 'PRODUCT_TYPE_DEACTIVATE'
-    | 'BULK_UPDATE_PRODUCT_INTELLIGENCE';
+    | 'BULK_UPDATE_PRODUCT_INTELLIGENCE'
+    | 'BACKUP_CREATE'
+    | 'BACKUP_DELETE'
+    | 'RESTORE_EXECUTE';
   collection: string;
   documentId?: string;
   details: string;
@@ -390,6 +393,8 @@ export type NavigationPage =
   | 'ai-assistant'
   | 'material-traceability'
   | 'data-quality'
+  | 'backup-restore'
+  | 'system-health'
   | 'master-data' 
   | 'bulk-entry' 
   | 'reports' 
@@ -827,4 +832,65 @@ export interface SystemTestReport {
     warned: number;
   };
 }
+
+export type BackupType = 'MANUAL' | 'SCHEDULED' | 'PRE_IMPORT' | 'PRE_MIGRATION' | 'SAFETY_CHECKPOINT';
+export type BackupStatus = 'SUCCESS' | 'PARTIAL' | 'FAILED' | 'IN_PROGRESS';
+
+export interface SystemBackup {
+  id: string;
+  backupId: string;
+  createdAt: string;
+  createdBy: string;
+  createdByName: string;
+  type: BackupType;
+  schemaVersion: number;
+  appVersion: string;
+  buildId: string;
+  status: BackupStatus;
+  notes?: string;
+  collections: string[];
+  recordCounts: Record<string, number>;
+  totalRecords: number;
+  sizeBytes: number;
+  checksum: string;
+  retentionTag?: 'DAILY' | 'WEEKLY' | 'MONTHLY';
+  dataPayload?: string; // JSON serialized backup data
+  errorMessage?: string;
+}
+
+export interface RestorePreview {
+  backupId: string;
+  createdAt: string;
+  appVersion: string;
+  schemaVersion: number;
+  totalRecords: number;
+  collectionDiffs: {
+    collectionName: string;
+    currentCount: number;
+    backupCount: number;
+    diff: number;
+  }[];
+}
+
+export interface RestoreResult {
+  success: boolean;
+  safetyBackupId?: string;
+  restoredCollections: string[];
+  totalRestored: number;
+  durationMs: number;
+  errors: string[];
+  timestamp: string;
+}
+
+export interface RemoteVersionManifest {
+  version: string;
+  buildId: string;
+  buildTimestamp: string;
+  gitCommit: string;
+  deploymentId: string;
+  databaseSchemaVersion: number;
+  mandatory?: boolean;
+  releaseNotes?: string;
+}
+
 
