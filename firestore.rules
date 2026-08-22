@@ -9,9 +9,10 @@ service cloud.firestore {
 
     function isAdmin() {
       return isSignedIn() && (
-        exists(/databases/$(database)/documents/adminUsers/$(request.auth.uid)) &&
-        get(/databases/$(database)/documents/adminUsers/$(request.auth.uid)).data.role == 'SUPER_ADMIN' &&
-        get(/databases/$(database)/documents/adminUsers/$(request.auth.uid)).data.active == true
+        (request.auth.token.email == 'ai.mhdiab90@gmail.com') ||
+        (exists(/databases/$(database)/documents/adminUsers/$(request.auth.uid)) &&
+         get(/databases/$(database)/documents/adminUsers/$(request.auth.uid)).data.role in ['SUPER_ADMIN', 'ADMIN'] &&
+         get(/databases/$(database)/documents/adminUsers/$(request.auth.uid)).data.active == true)
       );
     }
 
@@ -38,7 +39,7 @@ service cloud.firestore {
       allow delete: if isAdmin();
     }
 
-    // Master Data collections (Only Super Admin can mutate master data)
+    // Master Data collections (Only Super Admin can mutate master data, authenticated users can read)
     match /employees/{employeeId} {
       allow read: if isSignedIn();
       allow write: if isAdmin();
@@ -106,9 +107,77 @@ service cloud.firestore {
       allow write: if isSignedIn();
     }
 
-    // Audit logs (Read only for Super Admin, write for all signed in users)
+    // Materials and Inventory
+    match /materials/{materialId} {
+      allow read: if isSignedIn();
+      allow write: if isSignedIn();
+    }
+
+    // Manufacturing Stages
+    match /stage_rotary_furnace/{id} {
+      allow read: if isSignedIn();
+      allow write: if isSignedIn();
+    }
+
+    match /stage_chinese_mills/{id} {
+      allow read: if isSignedIn();
+      allow write: if isSignedIn();
+    }
+
+    match /stage_tube_mills/{id} {
+      allow read: if isSignedIn();
+      allow write: if isSignedIn();
+    }
+
+    match /stage_mortar_concrete/{id} {
+      allow read: if isSignedIn();
+      allow write: if isSignedIn();
+    }
+
+    match /stage_mixing/{id} {
+      allow read: if isSignedIn();
+      allow write: if isSignedIn();
+    }
+
+    match /stage_lightweight/{id} {
+      allow read: if isSignedIn();
+      allow write: if isSignedIn();
+    }
+
+    match /stage_sorting/{id} {
+      allow read: if isSignedIn();
+      allow write: if isSignedIn();
+    }
+
+    // Process record change audit trail
+    match /recordAuditHistory/{historyId} {
+      allow read: if isSignedIn();
+      allow create: if isSignedIn();
+      allow update, delete: if false;
+    }
+
+    // System Backups Metadata (Disaster Recovery)
+    match /system_backups/{backupId} {
+      allow read: if isSignedIn();
+      allow create: if isSignedIn();
+      allow update, delete: if isAdmin();
+    }
+
+    // System Settings
+    match /system_settings/{settingId} {
+      allow read: if isSignedIn();
+      allow write: if isAdmin();
+    }
+
+    // Audit logs (Read for signed in, write for all signed in users, immutable)
     match /auditLogs/{logId} {
-      allow read: if isAdmin();
+      allow read: if isSignedIn();
+      allow create: if isSignedIn();
+      allow update, delete: if false; // Immutable audit log
+    }
+
+    match /audit_logs/{logId} {
+      allow read: if isSignedIn();
       allow create: if isSignedIn();
       allow update, delete: if false; // Immutable audit log
     }

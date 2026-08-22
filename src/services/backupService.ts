@@ -77,6 +77,23 @@ export function formatBackupFileName(date: Date, backupCode: string): string {
 }
 
 /**
+ * Strip undefined values recursively before Firestore writes
+ */
+function sanitizeForFirestore<T extends Record<string, any>>(obj: T): Record<string, any> {
+  const clean: Record<string, any> = {};
+  for (const [key, val] of Object.entries(obj)) {
+    if (val !== undefined) {
+      if (val !== null && typeof val === 'object' && !Array.isArray(val) && !(val instanceof Date) && !(val instanceof Timestamp)) {
+        clean[key] = sanitizeForFirestore(val);
+      } else {
+        clean[key] = val;
+      }
+    }
+  }
+  return clean;
+}
+
+/**
  * Perform a full database backup
  * Reads all collections, validates JSON, caches in memory, triggers download,
  * and saves ONLY metadata to Firestore to respect the 1 MiB document limit.
@@ -204,14 +221,16 @@ export async function createDatabaseBackup(
     sizeBytes,
     checksum,
     storageLocation: 'LOCAL_JSON',
-    retentionTag: type === 'SCHEDULED' ? 'DAILY' : undefined,
+    ...(type === 'SCHEDULED' ? { retentionTag: 'DAILY' } : {}),
   };
 
-  // Write ONLY the lightweight metadata document to Firestore (approx. 1-2 KB, safe under 1 MiB limit)
-  await setDoc(backupDocRef, {
+  const cleanFirestorePayload = sanitizeForFirestore({
     ...metadataRecord,
     serverCreatedAt: serverTimestamp(),
   });
+
+  // Write ONLY the lightweight metadata document to Firestore (approx. 1-2 KB, safe under 1 MiB limit)
+  await setDoc(backupDocRef, cleanFirestorePayload);
 
   // Stage 6: AUDIT LOG
   await logAuditAction(

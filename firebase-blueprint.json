@@ -648,6 +648,54 @@
       "schema": "AuditLog",
       "description": "Audit trail logs for all system mutations"
     },
+    "/audit_logs/{logId}": {
+      "schema": "AuditLog",
+      "description": "Audit trail logs for all system mutations"
+    },
+    "/system_backups/{backupId}": {
+      "schema": "object",
+      "description": "System backup metadata registry for disaster recovery and verification"
+    },
+    "/system_settings/{settingId}": {
+      "schema": "object",
+      "description": "System configuration and parameter settings"
+    },
+    "/materials/{materialId}": {
+      "schema": "object",
+      "description": "Raw material inventory and specifications"
+    },
+    "/recordAuditHistory/{historyId}": {
+      "schema": "object",
+      "description": "Stage process record modification audit log"
+    },
+    "/stage_rotary_furnace/{id}": {
+      "schema": "object",
+      "description": "Rotary furnace stage processing records"
+    },
+    "/stage_chinese_mills/{id}": {
+      "schema": "object",
+      "description": "Chinese mills grinding stage records"
+    },
+    "/stage_tube_mills/{id}": {
+      "schema": "object",
+      "description": "Tube mills stage records"
+    },
+    "/stage_mortar_concrete/{id}": {
+      "schema": "object",
+      "description": "Mortar and refractory concrete stage records"
+    },
+    "/stage_mixing/{id}": {
+      "schema": "object",
+      "description": "Raw material mixing stage records"
+    },
+    "/stage_lightweight/{id}": {
+      "schema": "object",
+      "description": "Lightweight refractory product stage records"
+    },
+    "/stage_sorting/{id}": {
+      "schema": "object",
+      "description": "Finished product sorting and packaging stage records"
+    },
     "/systemTests/{testId}": {
       "schema": "object",
       "description": "Health check and diagnostics test entries"
