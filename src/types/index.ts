@@ -898,4 +898,111 @@ export interface RemoteVersionManifest {
   releaseNotes?: string;
 }
 
+export type PressingImportStatus = 
+  | 'NEW'
+  | 'VALID'
+  | 'WARNING'
+  | 'DUPLICATE'
+  | 'DUPLICATE_IN_FILE'
+  | 'DUPLICATE_IN_DATABASE'
+  | 'UNKNOWN_EMPLOYEE'
+  | 'EMPLOYEE_MISMATCH'
+  | 'UNKNOWN_PRODUCT'
+  | 'PRODUCT_MISMATCH'
+  | 'UNKNOWN_PRESS'
+  | 'UNKNOWN_FURNACE_CAR'
+  | 'INVALID_SHIFT'
+  | 'INVALID_DATE'
+  | 'INVALID_NUMBER'
+  | 'FAULT_TOTAL_MISMATCH'
+  | 'MISSING_PIECE_WEIGHT'
+  | 'INVALID_ROW';
+
+export interface PressingImportRow {
+  rowIndex: number;
+  raw: Record<string, any>;
+  date: string;
+  
+  // Workers
+  worker1Name: string;
+  worker1Code: string;
+  resolvedWorker1?: { id: string; name: string; code: string; departmentName?: string };
+  worker2Name?: string;
+  worker2Code?: string;
+  resolvedWorker2?: { id: string; name: string; code: string; departmentName?: string };
+  productionEmployees?: Array<{ id: string; name: string; code: string; departmentName?: string }>;
+  employeeIds?: string[];
+  employeeNames?: string[];
+  employeeCodes?: string[];
+  
+  // Furnace Cars
+  furnaceCarsRaw: string;
+  resolvedFurnaceCars: Array<{ id?: string; code: string; carNumber: string }>;
+  furnaceCarNumbers: string[];
+  furnaceCarIds: string[];
+  carCodes: string[];
+  
+  // Press
+  pressRaw: string;
+  resolvedPress?: { id: string; name: string; code: string };
+  
+  // Customer & Order
+  customerOrder: string;
+  resolvedCustomerId?: string;
+  resolvedCustomerName?: string;
+  
+  // Shift
+  shiftRaw: string | number;
+  resolvedShift?: { id: string; name: string; code: string; hours?: number };
+  
+  // Product & Specs
+  productCodeRaw: string;
+  productNameRaw: string;
+  resolvedProduct?: { id: string; name: string; code: string; pieceWeight?: number; aluminaPercentage?: number };
+  productTypePrefix?: string;
+  productTypeName?: string;
+  aluminaPercentage: number;
+  pieceWeight: number;
+  
+  // Quantities & Calculations
+  productionQuantity: number;
+  wasteQuantity: number;
+  goodQuantity: number;
+  wastePercentage: number;
+  productionWeight: number;
+  goodWeight: number;
+  wasteWeight: number;
+  
+  // Downtime / Faults
+  mechanicalFaults: number;
+  electricalFaults: number;
+  workshopFaults: number;
+  rawMaterialFaults: number;
+  otherFaults: number;
+  calculatedTotalFaults: number;
+  excelTotalFaults?: number;
+  
+  // Status & Diagnostics
+  status: PressingImportStatus;
+  errors: string[];
+  warnings: string[];
+  isDuplicate: boolean;
+  duplicateType?: 'FILE' | 'DATABASE';
+}
+
+export interface PressingImportSummary {
+  totalRows: number;
+  validRows: number;
+  warningRows: number;
+  errorRows: number;
+  duplicateRows: number;
+  unknownEmployeesCount: number;
+  unknownProductsCount: number;
+  unknownPressesCount: number;
+  unknownFurnaceCarsCount: number;
+  shiftErrorsCount: number;
+  faultMismatchesCount: number;
+  rows: PressingImportRow[];
+}
+
 

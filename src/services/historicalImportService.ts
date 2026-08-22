@@ -25,6 +25,19 @@ import {
 import { fetchMasterData } from './masterDataService';
 import { logAuditAction } from './auditService';
 import { calculateProductionMetrics } from './productionService';
+import { 
+  downloadPressingExcelTemplate, 
+  parseAndValidatePressingExcel, 
+  executePressingBatchImport, 
+  PRESSING_IMPORT_HEADERS 
+} from './pressingHistoricalImportService';
+
+export { 
+  downloadPressingExcelTemplate, 
+  parseAndValidatePressingExcel, 
+  executePressingBatchImport, 
+  PRESSING_IMPORT_HEADERS 
+};
 
 export interface StageImportRow {
   rowIndex: number;
@@ -84,6 +97,11 @@ export interface HistoricalImportSummary {
  * Generate and download downloadable Excel template with correct headers for each stage
  */
 export function downloadStageExcelTemplate(stage: ProductionStageType) {
+  if (stage === 'pressing') {
+    downloadPressingExcelTemplate();
+    return;
+  }
+
   let headers: string[] = [];
   let sampleRow: Record<string, any> = {};
 
