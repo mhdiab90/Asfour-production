@@ -23,14 +23,24 @@ import { collection, getDocs, limit, query } from 'firebase/firestore';
 import { db, auth } from '../../config/firebase';
 import { fetchBackups } from '../../services/backupService';
 
-export const SystemHealthView: React.FC = () => {
+interface SystemHealthViewProps {
+  initialTab?: 'health' | 'protocols' | 'history';
+}
+
+export const SystemHealthView: React.FC<SystemHealthViewProps> = ({ initialTab = 'health' }) => {
   const { checkForUpdates, hasUpdate, remoteVersion, isChecking, setShowVersionModal } = useUpdate();
-  const [activeTab, setActiveTab] = useState<'health' | 'protocols' | 'history'>('health');
+  const [activeTab, setActiveTab] = useState<'health' | 'protocols' | 'history'>(initialTab);
   const [dbLatencyMs, setDbLatencyMs] = useState<number | null>(null);
   const [dbStatus, setDbStatus] = useState<'CONNECTED' | 'CHECKING' | 'ERROR'>('CHECKING');
   const [backupCount, setBackupCount] = useState<number>(0);
   const [lastBackupTime, setLastBackupTime] = useState<string | null>(null);
   const [isRefreshing, setIsRefreshing] = useState<boolean>(false);
+
+  useEffect(() => {
+    if (initialTab) {
+      setActiveTab(initialTab);
+    }
+  }, [initialTab]);
 
   const runDiagnostics = async () => {
     setIsRefreshing(true);
@@ -377,39 +387,78 @@ export const SystemHealthView: React.FC = () => {
 
       {/* Tab 3: Version History */}
       {activeTab === 'history' && (
-        <div className="bg-slate-900 border border-slate-800 rounded-3xl p-6 shadow-xl space-y-6">
-          <h3 className="text-base font-bold text-white flex items-center gap-2">
-            <GitBranch className="w-5 h-5 text-amber-400" />
-            <span>سجل الإصدارات والتطور التاريخي لمنظومة عصفور</span>
-          </h3>
-
-          <div className="space-y-6">
-            {CURRENT_APP_VERSION.changelog.map((release, idx) => (
-              <div key={idx} className="bg-slate-800/40 border border-slate-800 rounded-2xl p-5">
-                <div className="flex items-center justify-between gap-4 mb-3">
-                  <div className="flex items-center gap-3">
-                    <span className="font-mono font-bold text-amber-400 text-base">
-                      الإصدار v{release.version}
-                    </span>
-                    {idx === 0 && (
-                      <span className="bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 px-2.5 py-0.5 rounded-full text-[11px] font-bold">
-                        الإصدار الحالي في الإنتاج
-                      </span>
-                    )}
-                  </div>
-                  <span className="text-xs text-slate-400 font-mono">{release.date}</span>
-                </div>
-
-                <ul className="space-y-2 text-xs text-slate-300 pr-1">
-                  {release.highlights.map((highlight, hIdx) => (
-                    <li key={hIdx} className="flex items-start gap-2.5">
-                      <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0 mt-0.5" />
-                      <span className="leading-relaxed">{highlight}</span>
-                    </li>
-                  ))}
-                </ul>
+        <div className="space-y-6">
+          {/* Active Version Status Card */}
+          <div className="bg-slate-900 border border-slate-800 rounded-3xl p-6 shadow-xl flex flex-col md:flex-row items-center justify-between gap-4">
+            <div className="flex items-center gap-4">
+              <div className="w-14 h-14 rounded-2xl bg-amber-500/20 border border-amber-500/30 flex items-center justify-center text-amber-400 font-mono font-bold text-lg">
+                v{CURRENT_APP_VERSION.version}
               </div>
-            ))}
+              <div>
+                <div className="flex items-center gap-2">
+                  <h3 className="text-base font-bold text-white">
+                    الإصدار الحالي: <span className="font-mono text-amber-400 font-bold">v{CURRENT_APP_VERSION.version}</span>
+                  </h3>
+                  <span className={`text-xs px-2.5 py-0.5 rounded-full font-bold border ${
+                    hasUpdate 
+                      ? 'bg-amber-500/20 text-amber-300 border-amber-500/30' 
+                      : 'bg-emerald-500/20 text-emerald-300 border-emerald-500/30'
+                  }`}>
+                    {hasUpdate ? 'توجد نسخة جديدة متاحة' : 'أنت تستخدم أحدث إصدار'}
+                  </span>
+                </div>
+                <p className="text-xs text-slate-400 mt-1 font-mono">
+                  Build: {CURRENT_APP_VERSION.buildId} • Schema: v{DATABASE_SCHEMA_VERSION} • Branch: main
+                </p>
+              </div>
+            </div>
+
+            <div className="flex items-center gap-3">
+              <button
+                onClick={() => checkForUpdates()}
+                disabled={isChecking}
+                className="bg-slate-800 hover:bg-slate-700 active:scale-95 text-slate-200 px-5 py-2.5 rounded-2xl text-xs font-bold border border-slate-700 transition flex items-center gap-2"
+              >
+                <RefreshCw className={`w-3.5 h-3.5 ${isChecking ? 'animate-spin' : ''}`} />
+                <span>{isChecking ? 'جاري الفحص...' : 'فحص التحديثات الآن'}</span>
+              </button>
+            </div>
+          </div>
+
+          <div className="bg-slate-900 border border-slate-800 rounded-3xl p-6 shadow-xl space-y-6">
+            <h3 className="text-base font-bold text-white flex items-center gap-2">
+              <GitBranch className="w-5 h-5 text-amber-400" />
+              <span>سجل الإصدارات والتطور التاريخي لمنظومة عصفور</span>
+            </h3>
+
+            <div className="space-y-6">
+              {CURRENT_APP_VERSION.changelog.map((release, idx) => (
+                <div key={idx} className="bg-slate-800/40 border border-slate-800 rounded-2xl p-5">
+                  <div className="flex items-center justify-between gap-4 mb-3">
+                    <div className="flex items-center gap-3">
+                      <span className="font-mono font-bold text-amber-400 text-base">
+                        الإصدار v{release.version}
+                      </span>
+                      {idx === 0 && (
+                        <span className="bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 px-2.5 py-0.5 rounded-full text-[11px] font-bold">
+                          الإصدار الحالي في الإنتاج
+                        </span>
+                      )}
+                    </div>
+                    <span className="text-xs text-slate-400 font-mono">{release.date}</span>
+                  </div>
+
+                  <ul className="space-y-2 text-xs text-slate-300 pr-1">
+                    {release.highlights.map((highlight, hIdx) => (
+                      <li key={hIdx} className="flex items-start gap-2.5">
+                        <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0 mt-0.5" />
+                        <span className="leading-relaxed">{highlight}</span>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              ))}
+            </div>
           </div>
         </div>
       )}

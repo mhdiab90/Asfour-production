@@ -234,13 +234,23 @@ const MainAppContent: React.FC = () => {
           )}
 
           {/* Backup & Disaster Recovery Center */}
-          {currentPage === 'backup-restore' && isSuperAdmin && (
-            <BackupRestoreView />
+          {(currentPage === 'backup-restore' || currentPage === 'backups') && isSuperAdmin && (
+            <BackupRestoreView initialTab="backups" />
           )}
 
-          {/* System Health & DR Protocols */}
+          {/* Dedicated Restore Center */}
+          {currentPage === 'restore' && isSuperAdmin && (
+            <BackupRestoreView initialTab="restore" />
+          )}
+
+          {/* System Health & Cloud Connection */}
           {currentPage === 'system-health' && isSuperAdmin && (
-            <SystemHealthView />
+            <SystemHealthView initialTab="health" />
+          )}
+
+          {/* System Versions & Changelog */}
+          {currentPage === 'versions' && isSuperAdmin && (
+            <SystemHealthView initialTab="history" />
           )}
 
           {/* AI Factory Assistant */}

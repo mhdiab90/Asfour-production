@@ -17,7 +17,10 @@ import {
   Package,
   FileSpreadsheet,
   RotateCcw,
-  Activity
+  Activity,
+  HardDrive,
+  GitBranch,
+  Terminal
 } from 'lucide-react';
 import { NavigationPage } from '../../types';
 import { useAuth } from '../../context/AuthContext';
@@ -60,11 +63,16 @@ export const Sidebar: React.FC<SidebarProps> = ({
     { id: 'raw-materials' as NavigationPage, label: 'الخامات والمخزون', icon: Package },
     { id: 'master-data' as NavigationPage, label: 'البيانات الأساسية', icon: Database },
     { id: 'historical-import' as NavigationPage, label: 'استيراد الإنتاج التاريخي', icon: FileSpreadsheet, badge: 'Excel' },
-    { id: 'backup-restore' as NavigationPage, label: 'النسخ الاحتياطي والاستعادة', icon: RotateCcw, badge: 'آمن' },
-    { id: 'system-health' as NavigationPage, label: 'صحة النظام والإصدارات', icon: Activity },
     { id: 'user-management' as NavigationPage, label: 'إدارة المستخدمين', icon: Users },
     { id: 'reports' as NavigationPage, label: 'التقارير والإحصائيات', icon: BarChart3 },
-    { id: 'settings' as NavigationPage, label: 'سجلات النظام والربط', icon: Settings },
+  ];
+
+  const systemNavigation = [
+    { id: 'backups' as NavigationPage, label: 'مركز النسخ الاحتياطي', icon: HardDrive, badge: 'تلقائي' },
+    { id: 'restore' as NavigationPage, label: 'مركز الاستعادة', icon: RotateCcw, badge: 'آمن' },
+    { id: 'system-health' as NavigationPage, label: 'حالة النظام', icon: Activity },
+    { id: 'versions' as NavigationPage, label: 'إصدارات النظام', icon: GitBranch, badge: `v${CURRENT_APP_VERSION.version}` },
+    { id: 'settings' as NavigationPage, label: 'سجلات النشاط والربط', icon: Settings },
   ];
 
   const handleSelectPage = (page: NavigationPage) => {
@@ -217,6 +225,45 @@ export const Sidebar: React.FC<SidebarProps> = ({
                   })}
                 </div>
               </div>
+
+              {/* System Section - ADMIN ONLY */}
+              {isSuperAdmin && (
+                <div>
+                  <div className="px-6 mb-2 text-[11px] text-amber-400 font-bold uppercase tracking-wider flex items-center gap-1.5">
+                    <ShieldCheck className="w-3.5 h-3.5" />
+                    <span>النظام</span>
+                  </div>
+                  <div className="space-y-0.5">
+                    {systemNavigation.map((item) => {
+                      const Icon = item.icon;
+                      const isActive = currentPage === item.id;
+                      return (
+                        <button
+                          key={item.id}
+                          id={`nav-item-${item.id}`}
+                          type="button"
+                          onClick={() => handleSelectPage(item.id)}
+                          className={`w-full flex items-center justify-between px-6 py-2.5 text-sm font-semibold transition-colors duration-150 cursor-pointer text-right ${
+                            isActive
+                              ? 'bg-amber-500 text-slate-950 border-r-4 border-amber-300 font-bold shadow-sm'
+                              : 'text-slate-400 hover:bg-slate-800 hover:text-white'
+                          }`}
+                        >
+                          <div className="flex items-center">
+                            <Icon className="w-4 h-4 ml-3 shrink-0" />
+                            <span>{item.label}</span>
+                          </div>
+                          {item.badge && !isActive && (
+                            <span className="text-[10px] px-1.5 py-0.5 rounded bg-slate-800 text-amber-300/80 border border-slate-700 font-mono">
+                              {item.badge}
+                            </span>
+                          )}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
             </>
           )}
         </nav>

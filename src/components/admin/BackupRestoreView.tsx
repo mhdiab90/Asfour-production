@@ -31,12 +31,23 @@ import { generateRestorePreview, executeSafeRestore } from '../../services/resto
 import { CURRENT_APP_VERSION, DATABASE_SCHEMA_VERSION } from '../../config/appVersion';
 import { useAuth } from '../../context/AuthContext';
 
-export const BackupRestoreView: React.FC = () => {
+interface BackupRestoreViewProps {
+  initialTab?: 'backups' | 'restore';
+}
+
+export const BackupRestoreView: React.FC<BackupRestoreViewProps> = ({ initialTab = 'backups' }) => {
   const { adminUser } = useAuth();
-  const [activeTab, setActiveTab] = useState<'backups' | 'restore'>('backups');
+  const [activeTab, setActiveTab] = useState<'backups' | 'restore'>(initialTab);
   const [backups, setBackups] = useState<SystemBackup[]>([]);
   const [isLoading, setIsLoading] = useState<boolean>(true);
   const [searchQuery, setSearchQuery] = useState<string>('');
+
+  // Synchronize with initialTab if it changes via routing/sidebar
+  useEffect(() => {
+    if (initialTab) {
+      setActiveTab(initialTab);
+    }
+  }, [initialTab]);
 
   // Backup Creation State
   const [isCreatingBackup, setIsCreatingBackup] = useState<boolean>(false);
@@ -44,6 +55,7 @@ export const BackupRestoreView: React.FC = () => {
   const [backupPercent, setBackupPercent] = useState<number>(0);
   const [backupNote, setBackupNote] = useState<string>('');
   const [showCreateModal, setShowCreateModal] = useState<boolean>(false);
+  const [latestCreatedBackup, setLatestCreatedBackup] = useState<SystemBackup | null>(null);
 
   // Restore State
   const [selectedBackupForRestore, setSelectedBackupForRestore] = useState<SystemBackup | null>(null);
@@ -97,6 +109,7 @@ export const BackupRestoreView: React.FC = () => {
         }
       );
 
+      setLatestCreatedBackup(newBackup);
       setShowCreateModal(false);
       setBackupNote('');
       setFeedback({
@@ -204,6 +217,45 @@ export const BackupRestoreView: React.FC = () => {
             <span>{feedback.message}</span>
           </div>
           <button onClick={() => setFeedback(null)} className="text-xs hover:underline opacity-80">إغلاق</button>
+        </div>
+      )}
+
+      {/* Latest Backup Download Action Card */}
+      {latestCreatedBackup && (
+        <div className="bg-gradient-to-r from-amber-500/20 via-slate-900 to-slate-900 border-2 border-amber-500/50 rounded-3xl p-5 shadow-2xl flex flex-col md:flex-row items-center justify-between gap-4 animate-in fade-in zoom-in-95">
+          <div className="flex items-center gap-4">
+            <div className="w-12 h-12 rounded-2xl bg-amber-500 text-slate-950 flex items-center justify-center font-bold shadow-lg shrink-0">
+              <Download className="w-6 h-6" />
+            </div>
+            <div>
+              <div className="flex items-center gap-2">
+                <span className="text-white font-bold text-base">تم إنشاء النسخة الاحتياطية بنجاح!</span>
+                <span className="bg-emerald-500/20 text-emerald-300 text-xs px-2.5 py-0.5 rounded-full font-bold border border-emerald-500/30">سليم وجاهز</span>
+              </div>
+              <p className="text-xs text-slate-300 mt-1">
+                رقم النسخة: <span className="font-mono text-amber-400 font-bold">{latestCreatedBackup.backupId}</span> • 
+                السجلات: <span className="font-mono text-white font-bold">{latestCreatedBackup.totalRecords.toLocaleString()}</span> • 
+                الحجم: <span className="font-mono text-slate-300">{(latestCreatedBackup.sizeBytes / 1024).toFixed(1)} KB</span>
+              </p>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-3 w-full md:w-auto">
+            <button
+              onClick={() => exportBackupToFile(latestCreatedBackup)}
+              className="flex-1 md:flex-none bg-amber-500 hover:bg-amber-600 active:scale-95 text-slate-950 font-bold px-6 py-3 rounded-2xl text-xs flex items-center justify-center gap-2 shadow-lg shadow-amber-500/20 transition cursor-pointer"
+            >
+              <Download className="w-4 h-4" />
+              <span>تحميل النسخة الاحتياطية (JSON)</span>
+            </button>
+            <button
+              onClick={() => setLatestCreatedBackup(null)}
+              className="p-3 rounded-2xl bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-white transition"
+              title="إخفاء"
+            >
+              ✕
+            </button>
+          </div>
         </div>
       )}
 
