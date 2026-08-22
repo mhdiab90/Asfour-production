@@ -856,8 +856,10 @@ export interface SystemBackup {
   totalRecords: number;
   sizeBytes: number;
   checksum: string;
+  storageLocation?: 'LOCAL_JSON' | 'CLOUD_MANAGED' | 'SESSION_MEMORY';
+  fileName?: string;
   retentionTag?: 'DAILY' | 'WEEKLY' | 'MONTHLY';
-  dataPayload?: string; // JSON serialized backup data
+  dataPayload?: string; // In-memory/session JSON serialized backup data (NOT persisted to Firestore doc)
   errorMessage?: string;
 }
 

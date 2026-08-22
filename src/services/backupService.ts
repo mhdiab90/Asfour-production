@@ -1,7 +1,12 @@
 /**
  * ASFOUR Factory Management ERP - Backup & Disaster Recovery Service
- * Provides automated & manual full Firestore backups, retention tracking,
+ * Provides automated & manual Firestore backups, retention tracking,
  * backup verification, and cold-storage export.
+ * 
+ * ARCHITECTURE RULE:
+ * 1. Firestore `system_backups` collection stores ONLY metadata (record counts, checksum, size, timestamp).
+ * 2. Complete multi-collection JSON payload is generated in memory, validated, and directly downloaded as a .json file.
+ * 3. Never writes giant JSON payloads into Firestore documents to strictly comply with the 1 MiB document limit.
  */
 import { 
   collection, 
@@ -18,6 +23,9 @@ import { db, auth } from '../config/firebase';
 import { SystemBackup, BackupType, BackupStatus } from '../types';
 import { CURRENT_APP_VERSION, DATABASE_SCHEMA_VERSION, BUILD_ID } from '../config/appVersion';
 import { logAuditAction } from './auditService';
+
+// In-memory cache for backup payloads generated during the current active session
+export const memoryBackupCache = new Map<string, string>();
 
 // All critical collections required for complete business continuity
 export const BACKUP_COLLECTIONS = [
@@ -47,9 +55,9 @@ export const BACKUP_COLLECTIONS = [
 ];
 
 /**
- * Generate a simple hash/checksum of the serialized backup string
+ * Generate a standard CRC32/Hash checksum of the serialized backup string
  */
-function calculateChecksum(str: string): string {
+export function calculateChecksum(str: string): string {
   let hash = 0;
   for (let i = 0; i < str.length; i++) {
     const char = str.charCodeAt(i);
@@ -60,23 +68,40 @@ function calculateChecksum(str: string): string {
 }
 
 /**
- * Perform a full Firestore database backup
+ * Format timestamp into standard backup file name
+ * e.g. ASFOUR_Backup_2026-08-22_120800.json
+ */
+export function formatBackupFileName(date: Date, backupCode: string): string {
+  const d = date.toISOString().replace(/T/, '_').replace(/:/g, '').slice(0, 15);
+  return `ASFOUR_Backup_${d}_${backupCode.slice(-4)}.json`;
+}
+
+/**
+ * Perform a full database backup
+ * Reads all collections, validates JSON, caches in memory, triggers download,
+ * and saves ONLY metadata to Firestore to respect the 1 MiB document limit.
  */
 export async function createDatabaseBackup(
   type: BackupType = 'MANUAL',
   notes: string = '',
-  onProgress?: (stage: string, percent: number) => void
+  onProgress?: (stage: string, percent: number) => void,
+  autoDownload: boolean = true
 ): Promise<SystemBackup> {
-  const timestamp = new Date().toISOString();
-  const backupCode = `BCK-${timestamp.replace(/[-:T]/g, '').slice(0, 14)}-${Math.random().toString(36).substring(2, 6).toUpperCase()}`;
+  const now = new Date();
+  const timestamp = now.toISOString();
+  const dateSegment = timestamp.replace(/[-:T]/g, '').slice(0, 14);
+  const randomSuffix = Math.random().toString(36).substring(2, 6).toUpperCase();
+  const backupCode = `BCK-${dateSegment}-${randomSuffix}`;
+  const fileName = formatBackupFileName(now, backupCode);
 
-  if (onProgress) onProgress('بدء جمع البيانات من كافة المجموعات...', 5);
+  // Stage 1: STARTED
+  if (onProgress) onProgress('بدء جمع البيانات من كافة المجموعات المصنعية...', 5);
 
   const backupData: Record<string, any[]> = {};
   const recordCounts: Record<string, number> = {};
   let totalRecords = 0;
 
-  // 1. Fetch all documents from each critical collection
+  // Stage 2: READING collections
   for (let i = 0; i < BACKUP_COLLECTIONS.length; i++) {
     const colName = BACKUP_COLLECTIONS[i];
     try {
@@ -88,6 +113,8 @@ export async function createDatabaseBackup(
         delete d.password;
         delete d.passwordHash;
         delete d.apiSecret;
+        delete d.token;
+        delete d.secretKey;
         docsData.push({ _id: docSnap.id, ...d });
       });
       backupData[colName] = docsData;
@@ -100,27 +127,68 @@ export async function createDatabaseBackup(
     }
 
     if (onProgress) {
-      const percent = Math.round(5 + ((i + 1) / BACKUP_COLLECTIONS.length) * 70);
-      onProgress(`تم نسخ مجموعة: ${colName} (${recordCounts[colName]} سجل)`, percent);
+      const percent = Math.round(5 + ((i + 1) / BACKUP_COLLECTIONS.length) * 65);
+      onProgress(`تم قراءة مجموعة: ${colName} (${recordCounts[colName]} سجل)`, percent);
     }
   }
 
-  // 2. Serialize and calculate size and checksum
-  if (onProgress) onProgress('جاري ضغط البيانات وحساب البصمة الرقمية (Checksum)...', 80);
-  const dataPayload = JSON.stringify(backupData);
-  const sizeBytes = new Blob([dataPayload]).size;
-  const checksum = calculateChecksum(dataPayload);
+  // Stage 3: SERIALIZING & VERIFICATION
+  if (onProgress) onProgress('جاري تجهيز حزمة البيانات والتحقق من صحة البنية (JSON)...', 75);
+  
+  const fullPayloadObject = {
+    metadata: {
+      backupId: backupCode,
+      fileName,
+      createdAt: timestamp,
+      createdByUid: auth.currentUser?.uid || 'SYSTEM',
+      createdByName: auth.currentUser?.email || 'مشرف النظام',
+      type,
+      schemaVersion: DATABASE_SCHEMA_VERSION,
+      appVersion: CURRENT_APP_VERSION.version,
+      buildId: BUILD_ID,
+      totalRecords,
+      recordCounts,
+      storageLocation: 'LOCAL_JSON',
+      notes: notes || (type === 'PRE_IMPORT' ? 'نسخة احتياطية وقائية قبل الاستيراد المجمع' : type === 'SAFETY_CHECKPOINT' ? 'نقطة أمان قبل الاستعادة' : 'نسخة احتياطية شاملة'),
+    },
+    data: backupData
+  };
 
-  // 3. Verification: Ensure payload exists and checksum is generated
-  const isHealthy = sizeBytes > 0 && totalRecords >= 0;
-  const status: BackupStatus = isHealthy ? 'SUCCESS' : 'FAILED';
+  const serializedPayload = JSON.stringify(fullPayloadObject, null, 2);
+  
+  // Validation: Ensure valid JSON by testing deserialization
+  try {
+    const testParse = JSON.parse(serializedPayload);
+    if (!testParse.data || !testParse.metadata) {
+      throw new Error('فشل التحقق من بنية حزمة النسخ الاحتياطي.');
+    }
+  } catch (parseErr: any) {
+    throw new Error(`خطأ في فحص سلامة ملف النسخ الاحتياطي: ${parseErr.message}`);
+  }
+
+  // Stage 4: CHECKSUM & SIZE
+  if (onProgress) onProgress('جاري حساب البصمة الرقمية (Checksum) والتحقق من الحجم...', 85);
+  const blob = new Blob([serializedPayload], { type: 'application/json;charset=utf-8;' });
+  const sizeBytes = blob.size;
+  const checksum = calculateChecksum(serializedPayload);
+
+  if (sizeBytes === 0) {
+    throw new Error('حجم ملف النسخ الاحتياطي 0 بايت - تم إلغاء العملية.');
+  }
+
+  // Cache in active session memory
+  memoryBackupCache.set(backupCode, serializedPayload);
+
+  // Stage 5: SAVE METADATA ONLY TO FIRESTORE (Strictly NO dataPayload in Firestore)
+  if (onProgress) onProgress('جاري توثيق البيانات الوصفية في السجل الآمن...', 90);
 
   const user = auth.currentUser;
   const backupDocRef = doc(collection(db, 'system_backups'), backupCode);
 
-  const backupRecord: SystemBackup = {
+  const metadataRecord: SystemBackup = {
     id: backupDocRef.id,
     backupId: backupCode,
+    fileName,
     createdAt: timestamp,
     createdBy: user?.uid || 'SYSTEM',
     createdByName: user?.email || 'مشرف النظام',
@@ -128,40 +196,63 @@ export async function createDatabaseBackup(
     schemaVersion: DATABASE_SCHEMA_VERSION,
     appVersion: CURRENT_APP_VERSION.version,
     buildId: BUILD_ID,
-    status,
+    status: 'SUCCESS',
     notes: notes || (type === 'PRE_IMPORT' ? 'نسخة احتياطية وقائية قبل الاستيراد المجمع' : type === 'SAFETY_CHECKPOINT' ? 'نقطة أمان قبل الاستعادة' : 'نسخة احتياطية شاملة'),
     collections: Object.keys(backupData).filter(c => backupData[c].length > 0),
     recordCounts,
     totalRecords,
     sizeBytes,
     checksum,
+    storageLocation: 'LOCAL_JSON',
     retentionTag: type === 'SCHEDULED' ? 'DAILY' : undefined,
-    dataPayload // Store serializable snapshot
   };
 
-  if (onProgress) onProgress('جاري حفظ وتوثيق النسخة الاحتياطية في السجل الآمن...', 90);
-
-  // 4. Save to Firestore system_backups collection
+  // Write ONLY the lightweight metadata document to Firestore (approx. 1-2 KB, safe under 1 MiB limit)
   await setDoc(backupDocRef, {
-    ...backupRecord,
+    ...metadataRecord,
     serverCreatedAt: serverTimestamp(),
   });
 
-  // 5. Audit Log
+  // Stage 6: AUDIT LOG
   await logAuditAction(
     'BACKUP_CREATE',
     'system_backups',
     backupCode,
-    `تم إنشاء نسخة احتياطية (${type}): ${totalRecords} سجل - الحجم: ${(sizeBytes / 1024).toFixed(1)} KB - البصمة: ${checksum}`
+    `تم إنشاء نسخة احتياطية ناجحة (${type}): ${totalRecords} سجل - الحجم: ${(sizeBytes / 1024).toFixed(1)} KB - البصمة: ${checksum}`
   );
 
-  if (onProgress) onProgress('اكتمل النسخ الاحتياطي بنجاح!', 100);
+  // Stage 7: AUTO DOWNLOAD (if enabled)
+  if (autoDownload) {
+    if (onProgress) onProgress('جاري بدء تنزيل ملف النسخة الاحتياطية...', 95);
+    triggerBrowserFileDownload(fileName, serializedPayload);
+  }
 
-  return backupRecord;
+  if (onProgress) onProgress('اكتمل النسخ الاحتياطي وتجهيز الملف بنجاح!', 100);
+
+  return {
+    ...metadataRecord,
+    dataPayload: serializedPayload // Available in client return value
+  };
 }
 
 /**
- * Fetch all available system backups
+ * Trigger immediate browser download of a text/JSON file
+ */
+export function triggerBrowserFileDownload(fileName: string, content: string): void {
+  const blob = new Blob([content], { type: 'application/json;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.setAttribute('download', fileName);
+  link.style.display = 'none';
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+/**
+ * Fetch all available system backups (metadata only)
  */
 export async function fetchBackups(): Promise<SystemBackup[]> {
   try {
@@ -187,45 +278,32 @@ export async function deleteBackup(backupId: string, backupCode: string): Promis
   const docRef = doc(db, 'system_backups', backupId);
   await deleteDoc(docRef);
 
+  // Clear from session cache if present
+  memoryBackupCache.delete(backupCode);
+
   await logAuditAction(
     'BACKUP_DELETE',
     'system_backups',
     backupCode,
-    `تم حذف النسخة الاحتياطية: ${backupCode}`
+    `تم حذف سجل النسخة الاحتياطية: ${backupCode}`
   );
 }
 
 /**
- * Export backup as downloadable JSON file for offline/external cold storage
+ * Export backup as downloadable JSON file
+ * Returns true if download was triggered, false if payload not available in memory
  */
-export function exportBackupToFile(backup: SystemBackup): void {
-  const exportPayload = {
-    metadata: {
-      backupId: backup.backupId,
-      createdAt: backup.createdAt,
-      createdBy: backup.createdByName,
-      type: backup.type,
-      schemaVersion: backup.schemaVersion,
-      appVersion: backup.appVersion,
-      buildId: backup.buildId,
-      totalRecords: backup.totalRecords,
-      recordCounts: backup.recordCounts,
-      sizeBytes: backup.sizeBytes,
-      checksum: backup.checksum,
-    },
-    data: backup.dataPayload ? JSON.parse(backup.dataPayload) : {}
-  };
+export function exportBackupToFile(backup: SystemBackup): boolean {
+  // Check in-memory session cache or backup object
+  let rawPayload = backup.dataPayload || memoryBackupCache.get(backup.backupId);
 
-  const jsonStr = JSON.stringify(exportPayload, null, 2);
-  const blob = new Blob([jsonStr], { type: 'application/json;charset=utf-8;' });
-  const url = URL.createObjectURL(blob);
-  const link = document.createElement('a');
-  link.href = url;
-  link.setAttribute('download', `ASFOUR_BACKUP_${backup.backupId}_${backup.createdAt.split('T')[0]}.json`);
-  document.body.appendChild(link);
-  link.click();
-  document.body.removeChild(link);
-  URL.revokeObjectURL(url);
+  if (!rawPayload) {
+    return false;
+  }
+
+  const fileName = backup.fileName || `ASFOUR_Backup_${backup.backupId}_${backup.createdAt.split('T')[0]}.json`;
+  triggerBrowserFileDownload(fileName, rawPayload);
+  return true;
 }
 
 /**

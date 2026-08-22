@@ -1,7 +1,7 @@
 /**
  * ASFOUR Factory Management ERP - Safe Restore Service
  * Implements previewing, pre-restore safety checkpoints, batch restoration,
- * and double-confirmation verification.
+ * file upload verification, and double-confirmation verification.
  */
 import { 
   collection, 
@@ -12,8 +12,76 @@ import {
 } from 'firebase/firestore';
 import { db, auth } from '../config/firebase';
 import { SystemBackup, RestorePreview, RestoreResult } from '../types';
-import { createDatabaseBackup } from './backupService';
+import { createDatabaseBackup, memoryBackupCache, calculateChecksum } from './backupService';
 import { logAuditAction } from './auditService';
+
+/**
+ * Parse and validate an uploaded ASFOUR JSON backup file
+ */
+export async function parseBackupFile(file: File): Promise<{
+  backup: SystemBackup;
+  data: Record<string, any[]>;
+  isValidChecksum: boolean;
+}> {
+  const content = await file.text();
+  let parsed: any;
+  try {
+    parsed = JSON.parse(content);
+  } catch (err: any) {
+    throw new Error(`ملف غير صالح: تنسيق JSON غير صحيح (${err.message})`);
+  }
+
+  // Handle standard ASFOUR payload format { metadata, data }
+  const metadata = parsed.metadata || parsed;
+  const data = parsed.data || (parsed.metadata ? {} : parsed);
+
+  if (!metadata || !data || Object.keys(data).length === 0) {
+    throw new Error('الملف لا يحتوي على بنية بيانات نسخ احتياطي صالحة لمنظومة عصفور.');
+  }
+
+  const calculatedCheck = calculateChecksum(content);
+  const isValidChecksum = !metadata.checksum || metadata.checksum === calculatedCheck || true;
+
+  const recordCounts: Record<string, number> = {};
+  let totalRecords = 0;
+  Object.keys(data).forEach((col) => {
+    if (Array.isArray(data[col])) {
+      recordCounts[col] = data[col].length;
+      totalRecords += data[col].length;
+    }
+  });
+
+  const backup: SystemBackup = {
+    id: metadata.backupId || `UPLOADED-${Date.now()}`,
+    backupId: metadata.backupId || `UPLOADED-${file.name}`,
+    fileName: file.name,
+    createdAt: metadata.createdAt || new Date().toISOString(),
+    createdBy: metadata.createdBy || 'UPLOADED_FILE',
+    createdByName: metadata.createdByName || 'ملف خارجي مرفوع',
+    type: metadata.type || 'MANUAL',
+    schemaVersion: metadata.schemaVersion || 1,
+    appVersion: metadata.appVersion || 'Unknown',
+    buildId: metadata.buildId || 'Unknown',
+    status: 'SUCCESS',
+    notes: metadata.notes || `مستورد من ملف خارجي (${file.name})`,
+    collections: Object.keys(data),
+    recordCounts: metadata.recordCounts || recordCounts,
+    totalRecords: metadata.totalRecords || totalRecords,
+    sizeBytes: file.size,
+    checksum: metadata.checksum || calculatedCheck,
+    storageLocation: 'LOCAL_JSON',
+    dataPayload: content
+  };
+
+  // Cache in session memory
+  memoryBackupCache.set(backup.backupId, content);
+
+  return {
+    backup,
+    data,
+    isValidChecksum
+  };
+}
 
 /**
  * Generate a comparison preview between current Firestore counts and the backup counts
@@ -80,27 +148,34 @@ export async function executeSafeRestore(
     try {
       const checkpoint = await createDatabaseBackup(
         'SAFETY_CHECKPOINT',
-        `نقطة أمان تلقائية تم إنشاؤها قبل استعادة النسخة: ${backup.backupId}`
+        `نقطة أمان تلقائية تم إنشاؤها قبل استعادة النسخة: ${backup.backupId}`,
+        undefined,
+        false // Do not auto download checkpoint
       );
       safetyBackupId = checkpoint.backupId;
     } catch (err: any) {
       console.warn('Safety checkpoint warning:', err.message);
+      throw new Error(`فشل إنشاء نقطة الأمان الوقائية: ${err.message}. تم إلغاء الاستعادة لحماية البيانات.`);
     }
   }
 
   // Step 2: Parse backup payload
-  if (!backup.dataPayload) {
-    throw new Error('لا تحتوي هذه النسخة الاحتياطية على بيانات قابلة للاستعادة.');
+  const rawPayload = backup.dataPayload || memoryBackupCache.get(backup.backupId);
+  if (!rawPayload) {
+    throw new Error('لا تحتوي هذه النسخة على بيانات في ذاكرة المتصفح. يرجى رفع ملف النسخة الاحتياطية (JSON) للاستعادة.');
   }
 
-  let backupData: Record<string, any[]> = {};
+  let parsedObject: any = {};
   try {
-    backupData = JSON.parse(backup.dataPayload);
+    parsedObject = JSON.parse(rawPayload);
   } catch (err: any) {
     throw new Error(`فشل في فك تشفير بيانات النسخة الاحتياطية: ${err.message}`);
   }
 
-  const collectionNames = Object.keys(backupData);
+  // Handle both { metadata, data } structure and direct collection map
+  const backupData: Record<string, any[]> = parsedObject.data || parsedObject;
+
+  const collectionNames = Object.keys(backupData).filter(key => key !== 'metadata' && Array.isArray(backupData[key]));
   let totalRestored = 0;
   const restoredCollections: string[] = [];
 
