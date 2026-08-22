@@ -24,7 +24,8 @@ import {
   Info,
   ExternalLink,
   XCircle,
-  Check
+  Check,
+  Copy
 } from 'lucide-react';
 import { SystemBackup, RestorePreview, RestoreResult } from '../../types';
 import { 
@@ -35,7 +36,8 @@ import {
   evaluateBackupHealth, 
   BackupHealthStats,
   memoryBackupCache,
-  triggerBrowserFileDownload
+  triggerBrowserFileDownload,
+  retrySaveBackupMetadata
 } from '../../services/backupService';
 import { 
   generateRestorePreview, 
@@ -90,6 +92,8 @@ export const BackupRestoreView: React.FC<BackupRestoreViewProps> = ({ initialTab
 
   // Verification State
   const [verifiedBackup, setVerifiedBackup] = useState<SystemBackup | null>(null);
+  const [isRetryingMetadata, setIsRetryingMetadata] = useState<boolean>(false);
+  const [copiedBackupId, setCopiedBackupId] = useState<string | null>(null);
 
   // Deletion State
   const [backupToDelete, setBackupToDelete] = useState<SystemBackup | null>(null);
@@ -118,6 +122,37 @@ export const BackupRestoreView: React.FC<BackupRestoreViewProps> = ({ initialTab
 
   const healthStats: BackupHealthStats = evaluateBackupHealth(backups);
 
+  // Handle Copy Backup ID to Clipboard
+  const handleCopyBackupCode = (code: string) => {
+    if (navigator.clipboard) {
+      navigator.clipboard.writeText(code);
+      setCopiedBackupId(code);
+      setTimeout(() => setCopiedBackupId(null), 2500);
+    }
+  };
+
+  // Handle Retry Saving Metadata for existing backup
+  const handleRetrySaveMetadata = async () => {
+    if (!latestCreatedBackup) return;
+    setIsRetryingMetadata(true);
+    try {
+      const updated = await retrySaveBackupMetadata(latestCreatedBackup);
+      setLatestCreatedBackup(updated);
+      setFeedback({
+        type: 'success',
+        message: `✅ تم تسجيل وتوثيق البيانات الوصفية للنسخة الاحتياطية (${updated.backupId}) في Firestore بنجاح!`
+      });
+      await loadBackups();
+    } catch (err: any) {
+      setFeedback({
+        type: 'error',
+        message: `تعذر حفظ البيانات الوصفية: ${err.message}`
+      });
+    } finally {
+      setIsRetryingMetadata(false);
+    }
+  };
+
   // Handle Manual Backup Creation & Download
   const handleCreateBackup = async () => {
     if (!isSuperAdmin) {
@@ -127,7 +162,7 @@ export const BackupRestoreView: React.FC<BackupRestoreViewProps> = ({ initialTab
 
     setIsCreatingBackup(true);
     setBackupPercent(0);
-    setBackupProgressMsg('جاري قراءة البيانات...');
+    setBackupProgressMsg('جاري بدء بروتوكول النسخ الاحتياطي...');
     setBackupErrorDetails(null);
 
     try {
@@ -149,10 +184,20 @@ export const BackupRestoreView: React.FC<BackupRestoreViewProps> = ({ initialTab
       setLatestCreatedBackup(newBackup);
       setShowCreateModal(false);
       setBackupNote('');
-      setFeedback({
-        type: 'success',
-        message: `✅ تم إنشاء النسخة الاحتياطية وتنزيل الملف (${newBackup.fileName || newBackup.backupId}) بنجاح! تم حفظ ${newBackup.totalRecords.toLocaleString()} سجل.`
-      });
+
+      if (newBackup.status === 'SUCCESS') {
+        setFeedback({
+          type: 'success',
+          message: `✅ تم إنشاء النسخة الاحتياطية وتنزيل الملف (${newBackup.fileName || newBackup.backupId}) بنجاح! تم حفظ ${newBackup.totalRecords.toLocaleString()} سجل.`
+        });
+      } else if (newBackup.status === 'FILE_READY_METADATA_FAILED') {
+        setFeedback({
+          type: 'info',
+          message: '⚠️ تم إنشاء ملف النسخ الاحتياطي وتنزيله محلياً، ولكن تعذر تسجيل بيانات النسخة في Firestore.',
+          details: newBackup.errorMessage
+        });
+      }
+
       await loadBackups();
     } catch (err: any) {
       console.error('Backup creation error:', err);
@@ -334,36 +379,82 @@ export const BackupRestoreView: React.FC<BackupRestoreViewProps> = ({ initialTab
 
       {/* Latest Backup Download Action Card */}
       {latestCreatedBackup && (
-        <div className="bg-gradient-to-r from-amber-500/20 via-slate-900 to-slate-900 border-2 border-amber-500/60 rounded-3xl p-6 shadow-2xl flex flex-col md:flex-row items-center justify-between gap-5 animate-in fade-in zoom-in-95">
-          <div className="flex items-center gap-4">
-            <div className="w-14 h-14 rounded-2xl bg-amber-500 text-slate-950 flex items-center justify-center font-bold shadow-lg shrink-0">
+        <div className={`bg-gradient-to-r ${
+          latestCreatedBackup.status === 'SUCCESS' 
+            ? 'from-amber-500/20 via-slate-900 to-slate-900 border-amber-500/60' 
+            : 'from-amber-600/30 via-slate-900 to-slate-900 border-amber-500/80'
+        } border-2 rounded-3xl p-6 shadow-2xl flex flex-col lg:flex-row items-center justify-between gap-5 animate-in fade-in zoom-in-95`}>
+          <div className="flex items-center gap-4 w-full lg:w-auto">
+            <div className={`w-14 h-14 rounded-2xl ${
+              latestCreatedBackup.status === 'SUCCESS' ? 'bg-amber-500 text-slate-950' : 'bg-amber-600 text-white'
+            } flex items-center justify-center font-bold shadow-lg shrink-0`}>
               <Download className="w-7 h-7" />
             </div>
             <div>
-              <div className="flex items-center gap-2">
-                <span className="text-white font-bold text-base">✅ النسخة الاحتياطية جاهزة وموثقة</span>
-                <span className="bg-emerald-500/20 text-emerald-300 text-xs px-2.5 py-0.5 rounded-full font-bold border border-emerald-500/30">سليم ومتحقق</span>
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="text-white font-bold text-base">
+                  {latestCreatedBackup.status === 'SUCCESS' 
+                    ? '✅ النسخة الاحتياطية جاهزة وموثقة' 
+                    : '⚠️ تم إنشاء ملف النسخ الاحتياطي، ولكن تعذر تسجيل بيانات النسخة في Firestore'}
+                </span>
+                <span className={`text-xs px-2.5 py-0.5 rounded-full font-bold border ${
+                  latestCreatedBackup.status === 'SUCCESS'
+                    ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/30'
+                    : 'bg-amber-500/20 text-amber-300 border-amber-500/30'
+                }`}>
+                  {latestCreatedBackup.status === 'SUCCESS' ? 'سليم ومتحقق' : 'ملف جاهز - تنبيه توثيق سحابي'}
+                </span>
               </div>
               <p className="text-xs text-slate-300 mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1">
                 <span>الملف: <span className="font-mono text-amber-400 font-bold">{latestCreatedBackup.fileName || latestCreatedBackup.backupId}</span></span>
                 <span>• الحجم: <span className="font-mono text-white font-bold">{(latestCreatedBackup.sizeBytes / 1024).toFixed(1)} KB</span></span>
                 <span>• السجلات: <span className="font-mono text-emerald-400 font-bold">{latestCreatedBackup.totalRecords.toLocaleString()}</span></span>
-                <span>• البصمة: <span className="font-mono text-slate-400 text-[11px]">{latestCreatedBackup.checksum}</span></span>
+                <span>• البصمة: <span className="font-mono text-slate-400 text-[11px]" title={latestCreatedBackup.checksum}>{latestCreatedBackup.checksum.substring(0, 16)}...</span></span>
               </p>
             </div>
           </div>
 
-          <div className="flex items-center gap-3 w-full md:w-auto shrink-0">
+          <div className="flex flex-wrap items-center gap-2.5 w-full lg:w-auto shrink-0 justify-end">
             <button
               onClick={() => exportBackupToFile(latestCreatedBackup)}
-              className="flex-1 md:flex-none bg-amber-500 hover:bg-amber-600 active:scale-95 text-slate-950 font-bold px-6 py-3 rounded-2xl text-xs flex items-center justify-center gap-2 shadow-lg shadow-amber-500/20 transition cursor-pointer"
+              className="bg-amber-500 hover:bg-amber-600 active:scale-95 text-slate-950 font-bold px-5 py-2.5 rounded-2xl text-xs flex items-center justify-center gap-2 shadow-lg shadow-amber-500/20 transition cursor-pointer"
             >
               <Download className="w-4 h-4" />
               <span>تحميل النسخة الاحتياطية</span>
             </button>
+
+            <button
+              onClick={() => handleCopyBackupCode(latestCreatedBackup.backupId)}
+              className="bg-slate-800 hover:bg-slate-700 active:scale-95 text-slate-200 font-bold px-4 py-2.5 rounded-2xl text-xs flex items-center justify-center gap-1.5 border border-slate-700 transition cursor-pointer"
+              title="نسخ رقم النسخة"
+            >
+              {copiedBackupId === latestCreatedBackup.backupId ? (
+                <>
+                  <Check className="w-4 h-4 text-emerald-400" />
+                  <span className="text-emerald-400">تم النسخ</span>
+                </>
+              ) : (
+                <>
+                  <Copy className="w-4 h-4 text-slate-400" />
+                  <span>نسخ رقم النسخة</span>
+                </>
+              )}
+            </button>
+
+            {latestCreatedBackup.status === 'FILE_READY_METADATA_FAILED' && (
+              <button
+                onClick={handleRetrySaveMetadata}
+                disabled={isRetryingMetadata}
+                className="bg-amber-500/20 hover:bg-amber-500 active:scale-95 text-amber-300 hover:text-slate-950 font-bold px-4 py-2.5 rounded-2xl text-xs flex items-center justify-center gap-1.5 border border-amber-500/40 transition cursor-pointer disabled:opacity-50"
+              >
+                <RefreshCw className={`w-4 h-4 ${isRetryingMetadata ? 'animate-spin' : ''}`} />
+                <span>{isRetryingMetadata ? 'جاري إعادة الحفظ...' : 'إعادة محاولة حفظ البيانات الوصفية'}</span>
+              </button>
+            )}
+
             <button
               onClick={() => setLatestCreatedBackup(null)}
-              className="p-3 rounded-2xl bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-white transition"
+              className="p-2.5 rounded-2xl bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-white transition cursor-pointer"
               title="إغلاق"
             >
               ✕
@@ -607,9 +698,12 @@ export const BackupRestoreView: React.FC<BackupRestoreViewProps> = ({ initialTab
                         <td className="py-3.5 px-4">
                           <div className="flex flex-col gap-1">
                             <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold inline-block text-center ${
-                              backup.status === 'SUCCESS' ? 'bg-emerald-500/20 text-emerald-400' : 'bg-rose-500/20 text-rose-400'
+                              backup.status === 'SUCCESS' ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30' :
+                              backup.status === 'FILE_READY_METADATA_FAILED' ? 'bg-amber-500/20 text-amber-300 border border-amber-500/30' :
+                              'bg-rose-500/20 text-rose-400 border border-rose-500/30'
                             }`}>
-                              {backup.status === 'SUCCESS' ? 'ناجح ومحقق' : 'فشل'}
+                              {backup.status === 'SUCCESS' ? 'ناجح ومحقق' :
+                               backup.status === 'FILE_READY_METADATA_FAILED' ? 'ملف جاهز (تنبيه توثيق)' : 'فشل'}
                             </span>
                             <span className="text-[10px] text-slate-400">
                               {backup.storageLocation === 'LOCAL_JSON' ? 'ملف محلي (JSON)' : 'سحابي'}

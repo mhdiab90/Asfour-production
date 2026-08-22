@@ -837,7 +837,7 @@ export interface SystemTestReport {
 }
 
 export type BackupType = 'MANUAL' | 'SCHEDULED' | 'PRE_IMPORT' | 'PRE_MIGRATION' | 'SAFETY_CHECKPOINT';
-export type BackupStatus = 'SUCCESS' | 'PARTIAL' | 'FAILED' | 'IN_PROGRESS';
+export type BackupStatus = 'SUCCESS' | 'FILE_READY_METADATA_FAILED' | 'PARTIAL' | 'FAILED' | 'IN_PROGRESS';
 
 export interface SystemBackup {
   id: string;
