@@ -12,7 +12,10 @@ import {
   Factory, 
   ChevronLeft,
   Cpu,
-  Users
+  Users,
+  Sparkles,
+  Package,
+  FileSpreadsheet
 } from 'lucide-react';
 import { NavigationPage } from '../../types';
 import { useAuth } from '../../context/AuthContext';
@@ -35,22 +38,26 @@ export const Sidebar: React.FC<SidebarProps> = ({
   const { logout, adminUser, isSuperAdmin, isProductionUser } = useAuth();
 
   const operatorNavigation = [
-    { id: 'production-entry' as NavigationPage, label: 'إدخال الإنتاج اليومي', icon: PlusCircle },
+    { id: 'production-entry' as NavigationPage, label: 'إدخال الإنتاج اليومي (المراحل)', icon: PlusCircle },
     { id: 'production-records' as NavigationPage, label: 'سجلات الإنتاج', icon: FileText },
+    { id: 'data-review' as NavigationPage, label: 'مراجعة وتدقيق السجلات', icon: ShieldCheck },
   ];
 
   const mainNavigation = [
     { id: 'dashboard' as NavigationPage, label: 'لوحة التحكم', icon: LayoutDashboard },
-    { id: 'production-entry' as NavigationPage, label: 'إدخال الإنتاج', icon: PlusCircle },
+    { id: 'production-entry' as NavigationPage, label: 'تسجيل الإنتاج (8 مراحل)', icon: PlusCircle },
     { id: 'production-records' as NavigationPage, label: 'سجلات الإنتاج', icon: FileText },
+    { id: 'data-review' as NavigationPage, label: 'التدقيق والاعتماد', icon: ShieldCheck, badge: 'جديد' },
+    { id: 'ai-assistant' as NavigationPage, label: 'المساعد الذكي للتحليل', icon: Sparkles, badge: 'AI' },
   ];
 
   const adminNavigation = [
+    { id: 'raw-materials' as NavigationPage, label: 'الخامات والمخزون', icon: Package },
     { id: 'master-data' as NavigationPage, label: 'البيانات الأساسية', icon: Database },
-    { id: 'user-management' as NavigationPage, label: 'إدارة المستخدمين', icon: Users, badge: 'جديد' },
-    { id: 'bulk-entry' as NavigationPage, label: 'الاستيراد المجمع', icon: UploadCloud, badge: 'Excel' },
+    { id: 'historical-import' as NavigationPage, label: 'استيراد الإنتاج التاريخي', icon: FileSpreadsheet, badge: 'Excel' },
+    { id: 'user-management' as NavigationPage, label: 'إدارة المستخدمين', icon: Users },
     { id: 'reports' as NavigationPage, label: 'التقارير والإحصائيات', icon: BarChart3 },
-    { id: 'settings' as NavigationPage, label: 'سجلات التدقيق والربط', icon: Settings },
+    { id: 'settings' as NavigationPage, label: 'سجلات النظام والربط', icon: Settings },
   ];
 
   const handleSelectPage = (page: NavigationPage) => {

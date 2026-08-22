@@ -12,8 +12,12 @@ import { Sidebar } from './components/layout/Sidebar';
 import { MobileNav } from './components/layout/MobileNav';
 import { AdminProfileModal } from './components/admin/AdminProfileModal';
 import { DashboardView } from './components/dashboard/DashboardView';
-import { ProductionEntryForm } from './components/production/ProductionEntryForm';
+import { StageProductionEntryView } from './components/production/StageProductionEntryView';
 import { ProductionRecordsView } from './components/production/ProductionRecordsView';
+import { DataReviewView } from './components/production/DataReviewView';
+import { DataImportView } from './components/admin/DataImportView';
+import { RawMaterialsView } from './components/admin/RawMaterialsView';
+import { AIAssistantView } from './components/ai/AIAssistantView';
 import { MasterDataView } from './components/masterData/MasterDataView';
 import { UserManagementView } from './components/users/UserManagementView';
 import { BulkEntryView } from './components/bulk/BulkEntryView';
@@ -96,8 +100,8 @@ const MainAppContent: React.FC = () => {
     const normalizedPage: NavigationPage = targetPage === 'production' ? 'production-entry' : targetPage;
 
     if (isProductionUser) {
-      // Production user is strictly restricted to production entry and daily records
-      const allowedPages: NavigationPage[] = ['production', 'production-entry', 'production-records'];
+      // Production user is strictly restricted to production entry, daily records, and data review
+      const allowedPages: NavigationPage[] = ['production', 'production-entry', 'production-records', 'data-review'];
       if (!allowedPages.includes(normalizedPage)) {
         setCurrentPage('production-entry');
         return;
@@ -199,15 +203,32 @@ const MainAppContent: React.FC = () => {
 
           {/* Production Entry Form (Accessible by both Admin and Production User; routed to /production) */}
           {(currentPage === 'production-entry' || currentPage === 'production') && (
-            <ProductionEntryForm
-              onNavigate={handleNavigate}
-              onSuccess={() => {}}
-            />
+            <StageProductionEntryView onNavigate={handleNavigate} />
           )}
 
           {/* Production Records View (Accessible by both Admin and Production User) */}
           {currentPage === 'production-records' && (
             <ProductionRecordsView onNavigate={handleNavigate} />
+          )}
+
+          {/* Data Review & Versioned Audits View */}
+          {currentPage === 'data-review' && (
+            <DataReviewView />
+          )}
+
+          {/* Historical Import Center */}
+          {(currentPage === 'historical-import' || currentPage === 'bulk-entry') && (
+            <DataImportView />
+          )}
+
+          {/* Raw Materials & Stock Management */}
+          {currentPage === 'raw-materials' && isSuperAdmin && (
+            <RawMaterialsView />
+          )}
+
+          {/* AI Factory Assistant */}
+          {currentPage === 'ai-assistant' && (
+            <AIAssistantView />
           )}
 
           {/* Admin-only views */}
@@ -218,10 +239,6 @@ const MainAppContent: React.FC = () => {
           {/* Super Admin User Management */}
           {currentPage === 'user-management' && isSuperAdmin && (
             <UserManagementView onNavigate={handleNavigate} />
-          )}
-
-          {currentPage === 'bulk-entry' && isSuperAdmin && (
-            <BulkEntryView onNavigate={handleNavigate} />
           )}
 
           {currentPage === 'reports' && isSuperAdmin && (

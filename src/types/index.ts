@@ -4,6 +4,26 @@
 
 export type UserRole = 'SUPER_ADMIN' | 'ADMIN' | 'SUPERVISOR' | 'PRODUCTION_USER' | 'VIEWER';
 
+export interface UserPermission {
+  recordsReadOwn: boolean;
+  recordsReadShift: boolean;
+  recordsReadAll: boolean;
+  recordsCreate: boolean;
+  recordsEditOwn: boolean;
+  recordsEditAll: boolean;
+  recordsApprove: boolean;
+  recordsDelete: boolean;
+  masterDataView: boolean;
+  masterDataCreate: boolean;
+  masterDataEdit: boolean;
+  masterDataDelete: boolean;
+  usersManage: boolean;
+  importHistorical: boolean;
+  exportData: boolean;
+  analyticsView: boolean;
+  aiUse: boolean;
+}
+
 export interface AdminUser {
   uid: string;
   email: string;
@@ -16,6 +36,7 @@ export interface AdminUser {
   employeeName?: string;
   operatorCode?: string;
   operatorStation?: string;
+  permissions?: Partial<UserPermission>;
   createdBy?: string;
   createdByName?: string;
   createdAt?: string;
@@ -54,6 +75,7 @@ export interface Employee {
   name: string;
   departmentId?: string;
   departmentName?: string;
+  department?: string;
   jobTitle?: string;
   phone?: string;
   active: boolean;
@@ -154,6 +176,7 @@ export interface Customer {
   phone?: string;
   email?: string;
   address?: string;
+  city?: string;
   customerCodeNormalized?: string;
   nameNormalized?: string;
   active: boolean;
@@ -351,19 +374,373 @@ export type MasterDataTab =
   | 'furnaces' 
   | 'furnaceCars' 
   | 'customers' 
-  | 'shifts';
+  | 'shifts'
+  | 'materials'
+  | 'machines'
+  | 'stages';
 
 export type NavigationPage = 
   | 'dashboard' 
   | 'production'
   | 'production-entry' 
-  | 'production-records' 
+  | 'production-records'
+  | 'data-review'
+  | 'historical-import'
+  | 'raw-materials'
+  | 'ai-assistant'
+  | 'material-traceability'
+  | 'data-quality'
   | 'master-data' 
   | 'bulk-entry' 
   | 'reports' 
   | 'settings' 
   | 'user-management'
   | 'admin-panel';
+
+export type RecordStatus = 'DRAFT' | 'SUBMITTED' | 'REVIEWED' | 'APPROVED' | 'REJECTED' | 'CORRECTED';
+
+export type ProductionStageType = 
+  | 'pressing'             // 1. التشكيل والمكابس
+  | 'rotary_furnace'      // 2. الفرن الدوار
+  | 'chinese_mills'       // 3. الطواحين الصينية
+  | 'tube_ball_mills'     // 4. طواحين الأنابيب والكرات
+  | 'mortar_concrete'     // 5. المونة والخرسانات
+  | 'mixing'              // 6. الخلط والتجهيز
+  | 'lightweight_foam'    // 7. الشاموت الخفيف / عزل الفوم
+  | 'sorting';            // 8. الفرز والمراقبة
+
+export interface ProductionStage {
+  id: ProductionStageType;
+  code: string;
+  nameAr: string;
+  nameEn: string;
+  iconName: string;
+  descriptionAr: string;
+  order: number;
+  active: boolean;
+}
+
+export interface Material {
+  id?: string;
+  code: string;
+  name: string;
+  unit: string; // e.g. "كجم", "طن", "شيكارة"
+  category?: string;
+  description?: string;
+  density?: number;
+  currentStock?: number;
+  reorderLevel?: number;
+  costPerUnit?: number;
+  notes?: string;
+  materialCodeNormalized?: string;
+  nameNormalized?: string;
+  active: boolean;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+export interface Machine {
+  id?: string;
+  code: string;
+  name: string;
+  stageType: ProductionStageType;
+  model?: string;
+  capacity?: number;
+  active: boolean;
+  machineCodeNormalized?: string;
+  nameNormalized?: string;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+export interface MaterialConsumptionItem {
+  materialId: string;
+  materialCode: string;
+  materialName: string;
+  quantity: number;
+  unit: string;
+}
+
+export interface StageWorkerItem {
+  employeeId: string;
+  employeeCode: string;
+  employeeName: string;
+  role?: 'production' | 'maintenance' | 'operator' | 'helper' | 'supervisor';
+  hours?: number;
+}
+
+// Stage 2: Rotary Furnace Record
+export interface RotaryFurnaceRecord {
+  id?: string;
+  date: string;
+  operationPeriod?: string;
+  batchNumber?: string;
+  productId: string;
+  productCode: string;
+  productName: string;
+  productOperatingHours?: number;
+  
+  // Consumption Mode: 'batch' or 'per_ton'
+  consumptionMode: 'batch' | 'per_ton';
+  gasConsumption: number; // m3 or units
+  electricityConsumption: number; // kWh
+  gasPerTon?: number;
+  electricityPerTon?: number;
+  
+  // Materials used (Multiple)
+  materials: MaterialConsumptionItem[];
+  
+  // Labor
+  productionWorkers: StageWorkerItem[];
+  maintenanceWorkers: StageWorkerItem[];
+  
+  productionQuantity: number; // in tons or units
+  wasteQuantity: number;
+  goodQuantity: number;
+  wastePercentage: number;
+  
+  downtimeMinutes: number;
+  faultType?: string;
+  machineInfo?: string;
+  shiftId: string;
+  shiftName: string;
+  
+  status: RecordStatus;
+  notes?: string;
+  createdBy: string;
+  createdByName?: string;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+// Stage 3: Chinese Mills Record
+export interface ChineseMillsRecord {
+  id?: string;
+  date: string;
+  customerId?: string;
+  customerCode?: string;
+  customerName?: string;
+  specificationCode?: string;
+  millType: string;
+  shiftType: string;
+  quantity: number;
+  numberOfBags: number;
+  rejectedQuantity: number;
+  operatingDays: number;
+  operatingHours: number;
+  totalOperatingTimeHours: number;
+  downtimeHours: number;
+  faultType?: string;
+  specification?: string;
+  weightCategory?: string;
+  dayName?: string;
+  theoreticalRatePerHour?: number;
+  actualRatePerHour?: number;
+  efficiencyPercentage?: number;
+  
+  status: RecordStatus;
+  notes?: string;
+  createdBy: string;
+  createdByName?: string;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+// Stage 4: Tube & Ball Mills Record
+export interface TubeBallMillsRecord {
+  id?: string;
+  date: string;
+  millType: string;
+  rawMaterialType: string;
+  operatingHours: number;
+  tonsPerHour: number;
+  storageBunker?: string;
+  totalTons: number;
+  
+  status: RecordStatus;
+  notes?: string;
+  createdBy: string;
+  createdByName?: string;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+// Stage 5: Mortar & Concrete Record
+export interface MortarConcreteRecord {
+  id?: string;
+  date: string;
+  productId: string;
+  productCode: string;
+  productName: string;
+  customerId?: string;
+  customerCode?: string;
+  customerName?: string;
+  batchNumber?: string;
+  manufacturingOrderNumber?: string;
+  customerRequestNumber?: string;
+  productionQuantity: number;
+  materials: MaterialConsumptionItem[];
+  operatingHours: number;
+  workers: StageWorkerItem[];
+  
+  status: RecordStatus;
+  notes?: string;
+  createdBy: string;
+  createdByName?: string;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+// Stage 6: Mixing Record
+export interface MixingRecord {
+  id?: string;
+  date: string;
+  mixProductName: string;
+  mixProductCode?: string;
+  materials: MaterialConsumptionItem[];
+  workers: StageWorkerItem[];
+  productionQuantity: number;
+  operatingHours: number;
+  batchNumber?: string;
+  wasteQuantity?: number;
+  yieldPercentage?: number;
+  
+  status: RecordStatus;
+  notes?: string;
+  createdBy: string;
+  createdByName?: string;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+// Stage 7: Lightweight Foam Record
+export interface LightweightFoamRecord {
+  id?: string;
+  date: string;
+  productName: string;
+  productCode?: string;
+  materials: MaterialConsumptionItem[];
+  workers: StageWorkerItem[];
+  productionQuantity: number;
+  operatingHours: number;
+  batchNumber?: string;
+  wasteQuantity?: number;
+  yieldPercentage?: number;
+  
+  status: RecordStatus;
+  notes?: string;
+  createdBy: string;
+  createdByName?: string;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+// Stage 8: Sorting / Inspection Record
+export interface SortingRecord {
+  id?: string;
+  date: string;
+  dischargeDate?: string;
+  customerOrderNumber?: string;
+  truckNumber?: string;
+  customerId?: string;
+  customerCode?: string;
+  customerName?: string;
+  productId: string;
+  productCode: string;
+  productName: string;
+  pieceWeight: number; // in kg
+  ratioCode?: string;
+  
+  totalCount: number;
+  totalTons: number;
+  goodCount: number;
+  goodTons: number;
+  brokenCount: number;
+  brokenTons: number;
+  
+  // Defect breakdown categories (Preserving Arabic factory terminology)
+  shiverDefectCount: number;      // شطف
+  crackDefectCount: number;       // شروخ
+  ironDefectCount: number;        // بقع حديد
+  contaminationDefectCount: number; // شوائب
+  kilnDefectCount: number;        // حريق فرن
+  returnDefectCount: number;      // مرتجع
+  returnTons?: number;
+  returnType?: string;
+  
+  month?: string;
+  goodPercentage?: number;
+  brokenPercentage?: number;
+  returnPercentage?: number;
+  
+  status: RecordStatus;
+  notes?: string;
+  createdBy: string;
+  createdByName?: string;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+// Generic Unified Stage Record for unified query & review
+export interface UniversalStageRecord {
+  id: string;
+  stageType: ProductionStageType;
+  stageNameAr: string;
+  date: string;
+  productId?: string;
+  productCode?: string;
+  productName?: string;
+  customerId?: string;
+  customerName?: string;
+  quantity: number;
+  unit: string;
+  wasteQuantity?: number;
+  goodQuantity?: number;
+  totalDowntimeMinutes?: number;
+  gasConsumption?: number;
+  electricityConsumption?: number;
+  materials?: MaterialConsumptionItem[];
+  workers?: StageWorkerItem[];
+  status: RecordStatus;
+  createdBy: string;
+  createdByName?: string;
+  createdAt: string;
+  updatedAt: string;
+  rawData?: any;
+}
+
+export interface RecordAuditLog {
+  id?: string;
+  recordId: string;
+  stageType: ProductionStageType | 'pressing';
+  collection: string;
+  action: 'CREATE' | 'UPDATE' | 'STATUS_CHANGE' | 'APPROVE' | 'REJECT' | 'CORRECT';
+  changedByUid: string;
+  changedByName: string;
+  changedAt: string;
+  oldStatus?: RecordStatus;
+  newStatus?: RecordStatus;
+  oldValue?: Record<string, any>;
+  newValue?: Record<string, any>;
+  reason: string;
+}
+
+export interface MultiDimensionFilter {
+  startDate?: string;
+  endDate?: string;
+  stageType?: ProductionStageType | 'all';
+  employeeId?: string;
+  departmentId?: string;
+  shiftId?: string;
+  productId?: string;
+  productTypeId?: string;
+  customerId?: string;
+  pressId?: string;
+  furnaceId?: string;
+  machineId?: string;
+  status?: RecordStatus | 'all';
+  searchQuery?: string;
+}
 
 export interface ProductionFilter {
   startDate?: string;

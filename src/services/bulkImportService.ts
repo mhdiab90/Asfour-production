@@ -145,6 +145,30 @@ export const MASTER_DATA_SCHEMAS: Record<MasterDataTab, { title: string; fields:
       { key: 'furnaceName', label: 'اسم الفرن المخصص', required: false, type: 'string', description: 'مثال: فرن النفق 1', aliases: ['furnaceName', 'الفرن'] },
       { key: 'capacity', label: 'سعة الحمولة (قطع)', required: false, type: 'number', description: 'مثال: 1200', aliases: ['capacity', 'سعة الحمولة'] },
     ]
+  },
+  materials: {
+    title: 'المواد والخامات الأولية',
+    fields: [
+      { key: 'code', label: 'كود الخامة', required: true, type: 'string', description: 'مثال: CHAMOTTE-40', aliases: ['code', 'كود الخامة'] },
+      { key: 'name', label: 'اسم الخامة', required: true, type: 'string', description: 'مثال: شاموت 40%', aliases: ['name', 'اسم الخامة'] },
+      { key: 'unit', label: 'وحدة القياس', required: true, type: 'string', description: 'طن أو كجم', aliases: ['unit', 'الوحدة'] },
+      { key: 'category', label: 'التصنيف', required: false, type: 'string', description: 'مثال: شاموت', aliases: ['category', 'التصنيف'] },
+    ]
+  },
+  machines: {
+    title: 'المعدات والماكينات',
+    fields: [
+      { key: 'code', label: 'كود الماكينة', required: true, type: 'string', description: 'مثال: MILL-01', aliases: ['code', 'كود الماكينة'] },
+      { key: 'name', label: 'اسم الماكينة', required: true, type: 'string', description: 'مثال: طاحونة صينية 1', aliases: ['name', 'اسم الماكينة'] },
+      { key: 'stageType', label: 'المرحلة', required: true, type: 'string', description: 'مثال: chinese_mills', aliases: ['stageType', 'المرحلة'] },
+    ]
+  },
+  stages: {
+    title: 'مراحل الإنتاج',
+    fields: [
+      { key: 'code', label: 'كود المرحلة', required: true, type: 'string', description: 'مثال: STAGE-01', aliases: ['code', 'كود المرحلة'] },
+      { key: 'nameAr', label: 'اسم المرحلة بالعربية', required: true, type: 'string', description: 'مثال: التشكيل والمكابس', aliases: ['nameAr', 'اسم المرحلة'] },
+    ]
   }
 };
 

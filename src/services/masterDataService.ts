@@ -44,6 +44,9 @@ export const MASTER_DATA_COLLECTIONS: Record<MasterDataTab, string> = {
   furnaceCars: 'furnaceCars',
   customers: 'customers',
   shifts: 'shifts',
+  materials: 'materials',
+  machines: 'machines',
+  stages: 'stages',
 };
 
 // Check if a code already exists in the collection to prevent duplicates
