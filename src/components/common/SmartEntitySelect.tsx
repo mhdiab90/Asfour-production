@@ -107,7 +107,8 @@ export const SmartEntitySelect: React.FC<SmartEntitySelectProps> = ({
     if (!allowAddNew) return false;
     if (!adminUser) return false;
     if (adminUser.role === 'SUPER_ADMIN' || adminUser.role === 'ADMIN') return true;
-    return adminUser.permissions?.masterDataCreate === true;
+    const perms = adminUser.permissions as Record<string, any> | undefined;
+    return perms?.masterDataCreate === true || perms?.['masterdata.view'] === true || perms?.['products.create'] === true;
   }, [adminUser, allowAddNew]);
 
   const selectedOption = useMemo(() => {

@@ -16,8 +16,10 @@ import {
 } from 'firebase/auth';
 import { doc, getDoc, updateDoc, serverTimestamp } from 'firebase/firestore';
 import { auth, db } from '../config/firebase';
-import { AdminUser, UserRole } from '../types';
+import { AdminUser, UserRole, NavigationPage } from '../types';
 import { logAuditAction } from '../services/auditService';
+import { GranularPermissions, PermissionKey } from '../types/permissions';
+import { resolveUserPermissions, hasPermission as checkPermission, canAccessPage as checkPageAccess } from '../utils/permissions';
 
 // Security mapping for admin username
 export const SECURITY_ADMIN_EMAIL = 'ai.mhdiab90@gmail.com';
@@ -26,6 +28,7 @@ interface AuthContextType {
   currentUser: User | null;
   adminUser: AdminUser | null;
   userRole: UserRole | null;
+  permissions: GranularPermissions;
   isSuperAdmin: boolean;
   isProductionUser: boolean;
   isAuthenticated: boolean;
@@ -35,6 +38,8 @@ interface AuthContextType {
   logout: () => Promise<void>;
   clearError: () => void;
   refreshUserProfile: () => Promise<void>;
+  hasPermission: (permission: PermissionKey) => boolean;
+  canAccessPage: (page: NavigationPage) => boolean;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -267,6 +272,16 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   const clearError = () => setAuthError(null);
 
+  const permissions: GranularPermissions = resolveUserPermissions(adminUser);
+
+  const hasPermission = (permission: PermissionKey): boolean => {
+    return checkPermission(adminUser, permission);
+  };
+
+  const canAccessPage = (page: NavigationPage): boolean => {
+    return checkPageAccess(adminUser, page);
+  };
+
   const isAuthenticated = Boolean(currentUser && adminUser && adminUser.active);
 
   return (
@@ -275,6 +290,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         currentUser,
         adminUser,
         userRole,
+        permissions,
         isSuperAdmin,
         isProductionUser,
         isAuthenticated,
@@ -284,6 +300,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         logout,
         clearError,
         refreshUserProfile,
+        hasPermission,
+        canAccessPage,
       }}
     >
       {children}

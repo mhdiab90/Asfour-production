@@ -18,15 +18,23 @@ import {
   where
 } from 'firebase/firestore';
 import { db, auth, handleFirestoreError, OperationType } from '../config/firebase';
-import { ProductionRecord, ProductionFilter, DashboardKPIs } from '../types';
+import { 
+  ProductionRecord, 
+  ProductionFilter, 
+  DashboardKPIs,
+  ProductionInputUnit,
+  QuantitySource,
+  CalculationMethod
+} from '../types';
 import { logAuditAction } from './auditService';
 import { matchesSearch, enrichWithNormalizedFields } from '../utils/searchUtils';
+import { calculatePieceBasedProduction } from '../utils/productionCalculations';
 
-// Pure Production Calculation Engine
+// Pure Production Calculation Engine (Factory Standard: TON is primary, COUNT is operational)
 export function calculateProductionMetrics(
   productionQuantity: number,
   wasteQuantity: number,
-  pieceWeight: number,
+  pieceWeight: number | null | undefined,
   faults: {
     mechanicalFaults?: number;
     electricalFaults?: number;
@@ -35,17 +43,18 @@ export function calculateProductionMetrics(
     furnaceFaults?: number;
     pressFaults?: number;
     otherFaults?: number;
-  }
+  } = {},
+  operatingHours?: number,
+  laborHours?: number
 ) {
-  const prodQty = Math.max(0, Number(productionQuantity) || 0);
-  const wasteQty = Math.max(0, Number(wasteQuantity) || 0);
-  const pWeight = Math.max(0, Number(pieceWeight) || 0);
-  
-  const goodQuantity = Math.max(0, prodQty - wasteQty);
-  const productionWeight = Number((prodQty * pWeight).toFixed(2));
-  const goodWeight = Number((goodQuantity * pWeight).toFixed(2));
-  const wasteWeight = Number((wasteQty * pWeight).toFixed(2));
-  const wastePercentage = prodQty > 0 ? Number(((wasteQty / prodQty) * 100).toFixed(2)) : 0;
+  const pieceCalc = calculatePieceBasedProduction({
+    productionCount: productionQuantity,
+    wasteCount: wasteQuantity,
+    pieceWeightKg: pieceWeight,
+    operatingHours,
+    laborHours,
+    source: 'DIRECT_ENTRY',
+  });
 
   const mechanical = Number(faults.mechanicalFaults) || 0;
   const electrical = Number(faults.electricalFaults) || 0;
@@ -59,14 +68,41 @@ export function calculateProductionMetrics(
   const totalDowntimeHours = Number((totalDowntimeMinutes / 60).toFixed(2));
 
   return {
-    productionQuantity: prodQty,
-    wasteQuantity: wasteQty,
-    goodQuantity,
-    pieceWeight: pWeight,
-    productionWeight,
-    goodWeight,
-    wasteWeight,
-    wastePercentage,
+    productionQuantity: pieceCalc.productionCount || 0,
+    wasteQuantity: pieceCalc.wasteCount || 0,
+    goodQuantity: pieceCalc.goodCount || 0,
+    pieceWeight: pieceCalc.pieceWeightKg ?? 0,
+    pieceWeightKg: pieceCalc.pieceWeightKg,
+    
+    // Weights (Kg)
+    productionWeight: pieceCalc.productionKg ?? 0,
+    goodWeight: pieceCalc.goodKg ?? 0,
+    wasteWeight: pieceCalc.wasteKg ?? 0,
+    productionKg: pieceCalc.productionKg,
+    goodKg: pieceCalc.goodKg,
+    wasteKg: pieceCalc.wasteKg,
+
+    // Weights (Tons) - Primary Factory Metric
+    productionTons: pieceCalc.productionTons,
+    goodTons: pieceCalc.goodTons,
+    wasteTons: pieceCalc.wasteTons,
+    
+    // Normalized Explicit Fields
+    productionCount: pieceCalc.productionCount,
+    wasteCount: pieceCalc.wasteCount,
+    goodCount: pieceCalc.goodCount,
+    
+    // Metadata & Provenance
+    productionUnit: pieceCalc.productionUnit,
+    quantitySource: pieceCalc.quantitySource,
+    calculationMethod: pieceCalc.calculationMethod,
+    
+    // Rates & KPIs
+    wastePercentage: pieceCalc.wastePercentage,
+    productionRateTonsPerHour: pieceCalc.productionRateTonsPerHour,
+    laborProductivityTonsPerHour: pieceCalc.laborProductivityTonsPerHour,
+
+    // Faults Breakdown
     mechanicalFaults: mechanical,
     electricalFaults: electrical,
     workshopFaults: workshop,
@@ -328,8 +364,12 @@ export function filterProductionRecords(
   });
 }
 
-// Calculate Dashboard / Report KPIs from a list of records
+// Calculate Dashboard / Report KPIs from a list of records (Factory Standard: TON is primary)
 export function calculateKPIsFromRecords(records: ProductionRecord[]): DashboardKPIs {
+  let totalProductionTons = 0;
+  let totalGoodTons = 0;
+  let totalWasteTons = 0;
+
   let totalProductionCount = 0;
   let totalGoodCount = 0;
   let totalWasteCount = 0;
@@ -337,22 +377,64 @@ export function calculateKPIsFromRecords(records: ProductionRecord[]): Dashboard
   let totalGoodWeightKg = 0;
   let totalWasteWeightKg = 0;
   let totalDowntimeMinutes = 0;
+  let missingWeightCount = 0;
 
   records.forEach(r => {
-    totalProductionCount += Number(r.productionQuantity) || 0;
-    totalGoodCount += Number(r.goodQuantity) || 0;
-    totalWasteCount += Number(r.wasteQuantity) || 0;
-    totalProductionWeightKg += Number(r.productionWeight) || 0;
-    totalGoodWeightKg += Number(r.goodWeight) || 0;
-    totalWasteWeightKg += Number(r.wasteWeight) || 0;
+    const prodCount = Number(r.productionQuantity) || 0;
+    const wasteCount = Number(r.wasteQuantity) || 0;
+    const goodCount = Number(r.goodQuantity) || Math.max(0, prodCount - wasteCount);
+
+    totalProductionCount += prodCount;
+    totalGoodCount += goodCount;
+    totalWasteCount += wasteCount;
+
+    // Piece weight & ton calculations
+    const pWeight = r.pieceWeightKg !== undefined && r.pieceWeightKg !== null 
+      ? Number(r.pieceWeightKg) 
+      : (r.pieceWeight !== undefined && r.pieceWeight !== null ? Number(r.pieceWeight) : null);
+
+    const hasValidWeight = pWeight !== null && !isNaN(pWeight) && pWeight > 0;
+
+    if (r.productionTons !== undefined && r.productionTons !== null && r.productionTons > 0) {
+      totalProductionTons += Number(r.productionTons);
+      totalGoodTons += Number(r.goodTons ?? (r.productionTons - (r.wasteTons || 0)));
+      totalWasteTons += Number(r.wasteTons || 0);
+      totalProductionWeightKg += (Number(r.productionTons) * 1000);
+      totalGoodWeightKg += ((Number(r.goodTons) || Number(r.productionTons)) * 1000);
+      totalWasteWeightKg += ((Number(r.wasteTons) || 0) * 1000);
+    } else if (hasValidWeight && pWeight !== null) {
+      const prodKg = prodCount * pWeight;
+      const goodKg = goodCount * pWeight;
+      const wasteKg = wasteCount * pWeight;
+
+      totalProductionWeightKg += prodKg;
+      totalGoodWeightKg += goodKg;
+      totalWasteWeightKg += wasteKg;
+
+      totalProductionTons += (prodKg / 1000);
+      totalGoodTons += (goodKg / 1000);
+      totalWasteTons += (wasteKg / 1000);
+    } else {
+      if (prodCount > 0) {
+        missingWeightCount += 1;
+      }
+    }
+
     totalDowntimeMinutes += Number(r.totalDowntimeMinutes) || 0;
   });
 
-  const wastePercentage = totalProductionCount > 0 
-    ? Number(((totalWasteCount / totalProductionCount) * 100).toFixed(2)) 
-    : 0;
+  // Prefer Ton-based waste percentage when ton data is present, else count-based
+  let wastePercentage = 0;
+  if (totalProductionTons > 0) {
+    wastePercentage = Number(((totalWasteTons / totalProductionTons) * 100).toFixed(2));
+  } else if (totalProductionCount > 0) {
+    wastePercentage = Number(((totalWasteCount / totalProductionCount) * 100).toFixed(2));
+  }
 
   return {
+    totalProductionTons: Number(totalProductionTons.toFixed(2)),
+    totalGoodTons: Number(totalGoodTons.toFixed(2)),
+    totalWasteTons: Number(totalWasteTons.toFixed(2)),
     totalProductionCount,
     totalGoodCount,
     totalWasteCount,
@@ -363,5 +445,6 @@ export function calculateKPIsFromRecords(records: ProductionRecord[]): Dashboard
     totalDowntimeMinutes,
     totalDowntimeHours: Number((totalDowntimeMinutes / 60).toFixed(2)),
     totalRecordsCount: records.length,
+    recordsWithMissingPieceWeightCount: missingWeightCount,
   };
 }

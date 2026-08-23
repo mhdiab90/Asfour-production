@@ -148,6 +148,7 @@ export async function createSystemUser(payload: CreateUserPayload): Promise<Admi
     employeeCode: payload.employeeCode || '',
     employeeName: payload.employeeName || '',
     operatorStation: payload.operatorStation || '',
+    permissions: payload.permissions || {},
     createdBy: auth.currentUser?.uid || 'SUPER_ADMIN',
     createdByName: auth.currentUser?.email || 'المشرف العام',
     createdAt: nowIso,

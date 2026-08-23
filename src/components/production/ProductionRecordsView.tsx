@@ -103,15 +103,43 @@ export const ProductionRecordsView: React.FC<ProductionRecordsViewProps> = ({ on
     return true;
   });
 
-  // Calculate live aggregations of filtered list
+  // Calculate live aggregations of filtered list (Factory Standard: TON is primary)
+  let totalProductionTons = 0;
+  let totalGoodTons = 0;
+  let totalWasteTons = 0;
+  let missingWeightsCount = 0;
+
   const totalProductionQuantity = filteredRecords.reduce((sum, r) => sum + (r.productionQuantity || 0), 0);
   const totalGoodQuantity = filteredRecords.reduce((sum, r) => sum + (r.goodQuantity || 0), 0);
   const totalWasteQuantity = filteredRecords.reduce((sum, r) => sum + (r.wasteQuantity || 0), 0);
   const totalProductionWeightKg = filteredRecords.reduce((sum, r) => sum + (r.productionWeight || 0), 0);
   const totalDowntimeMinutes = filteredRecords.reduce((sum, r) => sum + (r.totalDowntimeMinutes || 0), 0);
-  const averageWastePercentage = totalProductionQuantity > 0 
-    ? Number(((totalWasteQuantity / totalProductionQuantity) * 100).toFixed(2)) 
-    : 0;
+
+  filteredRecords.forEach(r => {
+    const pWeight = r.pieceWeightKg !== undefined && r.pieceWeightKg !== null 
+      ? Number(r.pieceWeightKg) 
+      : (r.pieceWeight !== undefined && r.pieceWeight !== null ? Number(r.pieceWeight) : null);
+    const hasWeight = pWeight !== null && !isNaN(pWeight) && pWeight > 0;
+
+    if (r.productionTons !== undefined && r.productionTons !== null && r.productionTons > 0) {
+      totalProductionTons += Number(r.productionTons);
+      totalGoodTons += Number(r.goodTons ?? (r.productionTons - (r.wasteTons || 0)));
+      totalWasteTons += Number(r.wasteTons || 0);
+    } else if (hasWeight && pWeight !== null) {
+      const prodKg = (r.productionQuantity || 0) * pWeight;
+      const goodKg = (r.goodQuantity || 0) * pWeight;
+      const wasteKg = (r.wasteQuantity || 0) * pWeight;
+      totalProductionTons += (prodKg / 1000);
+      totalGoodTons += (goodKg / 1000);
+      totalWasteTons += (wasteKg / 1000);
+    } else if ((r.productionQuantity || 0) > 0) {
+      missingWeightsCount += 1;
+    }
+  });
+
+  const averageWastePercentage = totalProductionTons > 0 
+    ? Number(((totalWasteTons / totalProductionTons) * 100).toFixed(2))
+    : (totalProductionQuantity > 0 ? Number(((totalWasteQuantity / totalProductionQuantity) * 100).toFixed(2)) : 0);
 
   const handleOpenEdit = (rec: ProductionRecord) => {
     setEditingRecord({ ...rec });
@@ -442,12 +470,32 @@ export const ProductionRecordsView: React.FC<ProductionRecordsViewProps> = ({ on
                     </td>
 
                     <td className="px-4 py-3">
-                      <div className="font-extrabold text-slate-900">
-                        {formatDecimal((Number(rec.productionWeight) || 0) / 1000, 2)} طن
-                      </div>
-                      <div className="text-[10px] text-slate-400 font-mono">
-                        {formatNumber(rec.productionWeight)} كجم
-                      </div>
+                      {(() => {
+                        const pWeight = rec.pieceWeightKg ?? rec.pieceWeight ?? null;
+                        const hasWeight = pWeight !== null && !isNaN(pWeight) && Number(pWeight) > 0;
+                        const prodTons = rec.productionTons !== undefined && rec.productionTons !== null && Number(rec.productionTons) > 0
+                          ? Number(rec.productionTons)
+                          : (hasWeight ? (Number(rec.productionQuantity || 0) * Number(pWeight)) / 1000 : null);
+                        
+                        if (prodTons !== null) {
+                          return (
+                            <>
+                              <div className="font-extrabold text-slate-900">
+                                {formatDecimal(prodTons, 3)} طن
+                              </div>
+                              <div className="text-[10px] text-slate-400 font-mono">
+                                {formatNumber(rec.productionWeight || prodTons * 1000)} كجم
+                              </div>
+                            </>
+                          );
+                        }
+                        return (
+                          <div className="text-amber-700 bg-amber-50 px-2 py-0.5 rounded text-[11px] font-bold border border-amber-200 inline-block">
+                            غير محسوب
+                            <div className="text-[9px] font-normal text-amber-600">وزن القطعة غير متوفر</div>
+                          </div>
+                        );
+                      })()}
                     </td>
 
                     <td className="px-4 py-3 font-mono">

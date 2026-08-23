@@ -1,26 +1,61 @@
 @import "tailwindcss";
 
 @layer base {
+  :root {
+    --font-primary: Arial, "Arial Unicode MS", sans-serif;
+  }
+
   * {
     border-color: rgba(226, 232, 240, 0.8);
+    font-family: Arial, "Arial Unicode MS", sans-serif;
   }
   
-  body {
+  html {
+    font-family: Arial, "Arial Unicode MS", sans-serif;
+  }
+
+  html[lang="ar"],
+  html[dir="rtl"] {
+    font-family: Arial, "Arial Unicode MS", sans-serif;
     direction: rtl;
     text-align: right;
+  }
+
+  html[lang="en"],
+  html[dir="ltr"] {
+    font-family: Arial, "Arial Unicode MS", sans-serif;
+    direction: ltr;
+    text-align: left;
+  }
+
+  body {
     background-color: #f8fafc;
     color: #0f172a;
-    font-feature-settings: "cv02", "cv03", "cv04", "cv11";
-    selection-background-color: #4f46e5;
-    selection-color: #ffffff;
+    font-family: Arial, "Arial Unicode MS", sans-serif;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  button, input, optgroup, select, textarea, table, th, td, h1, h2, h3, h4, h5, h6, p, span, a, label {
+    font-family: Arial, "Arial Unicode MS", sans-serif !important;
+  }
+
+  /* Western Arabic Numerals / Tabular figures for factory precision */
+  .tabular-nums,
+  table td,
+  table th,
+  .metric-value,
+  input[type="number"],
+  .code-badge {
+    font-variant-numeric: tabular-nums lining-nums;
   }
 
   ::selection {
-    background-color: #4f46e5;
+    background-color: #d97706;
     color: #ffffff;
   }
 
-  /* Geometric Balance Custom Scrollbar */
+  /* Custom Corporate Scrollbar */
   ::-webkit-scrollbar {
     width: 6px;
     height: 6px;
@@ -44,4 +79,14 @@ input[type="number"]::-webkit-outer-spin-button {
 }
 input[type="number"] {
   -moz-appearance: textfield;
+}
+
+@media print {
+  body {
+    background-color: #ffffff !important;
+    color: #000000 !important;
+  }
+  .no-print {
+    display: none !important;
+  }
 }

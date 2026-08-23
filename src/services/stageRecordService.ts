@@ -274,6 +274,60 @@ export async function fetchUniversalStageRecords(
       snap.forEach(docSnap => {
         const d = docSnap.data();
         
+        // Derive Tons accurately based on stage and piece weight
+        let prodTons: number | null = null;
+        let goodTons: number | null = null;
+        let wasteTons: number | null = null;
+        let prodCount: number | undefined = undefined;
+        let pieceWeightKg: number | null = null;
+
+        const rawPieceWeight = d.pieceWeightKg !== undefined && d.pieceWeightKg !== null 
+          ? Number(d.pieceWeightKg) 
+          : (d.pieceWeight !== undefined && d.pieceWeight !== null ? Number(d.pieceWeight) : null);
+        
+        if (rawPieceWeight !== null && !isNaN(rawPieceWeight) && rawPieceWeight > 0) {
+          pieceWeightKg = rawPieceWeight;
+        }
+
+        if (st === 'pressing') {
+          prodCount = Number(d.productionQuantity ?? d.productionCount ?? 0);
+          if (d.productionTons !== undefined && d.productionTons !== null && d.productionTons > 0) {
+            prodTons = Number(d.productionTons);
+            goodTons = Number(d.goodTons ?? (prodTons - Number(d.wasteTons || 0)));
+            wasteTons = Number(d.wasteTons || 0);
+          } else if (pieceWeightKg !== null) {
+            prodTons = Number(((prodCount * pieceWeightKg) / 1000).toFixed(3));
+            const gCount = Number(d.goodQuantity ?? d.goodCount ?? Math.max(0, prodCount - Number(d.wasteQuantity || 0)));
+            const wCount = Number(d.wasteQuantity ?? d.wasteCount ?? 0);
+            goodTons = Number(((gCount * pieceWeightKg) / 1000).toFixed(3));
+            wasteTons = Number(((wCount * pieceWeightKg) / 1000).toFixed(3));
+          }
+        } else if (st === 'sorting') {
+          prodCount = Number(d.totalCount ?? d.productionQuantity ?? 0);
+          if (d.totalTons !== undefined && d.totalTons !== null && d.totalTons > 0) {
+            prodTons = Number(d.totalTons);
+            goodTons = Number(d.goodTons ?? d.totalTons);
+            wasteTons = Number(d.brokenTons ?? 0);
+          } else if (pieceWeightKg !== null) {
+            prodTons = Number(((prodCount * pieceWeightKg) / 1000).toFixed(3));
+            const gCount = Number(d.goodCount ?? Math.max(0, prodCount - Number(d.brokenCount || 0)));
+            const wCount = Number(d.brokenCount ?? 0);
+            goodTons = Number(((gCount * pieceWeightKg) / 1000).toFixed(3));
+            wasteTons = Number(((wCount * pieceWeightKg) / 1000).toFixed(3));
+          }
+        } else {
+          // Direct ton-based stages (Rotary Furnace, Ball Mills, Mixing, etc.)
+          prodTons = Number(d.productionQuantity ?? d.quantity ?? d.totalTons ?? 0);
+          const wQty = Number(d.wasteQuantity ?? d.rejectedQuantity ?? 0);
+          wasteTons = wQty;
+          goodTons = Number(d.goodQuantity ?? Math.max(0, prodTons - wQty));
+        }
+
+        const gas = Number(d.gasConsumption || 0);
+        const elec = Number(d.electricityConsumption || 0);
+        const gasPerTon = (prodTons && prodTons > 0 && gas > 0) ? Number((gas / prodTons).toFixed(3)) : null;
+        const electricityPerTon = (prodTons && prodTons > 0 && elec > 0) ? Number((elec / prodTons).toFixed(3)) : null;
+
         // Map stage-specific fields to UniversalStageRecord
         const rec: UniversalStageRecord = {
           id: docSnap.id,
@@ -286,12 +340,19 @@ export async function fetchUniversalStageRecords(
           customerId: d.customerId || '',
           customerName: d.customerName || '',
           quantity: Number(d.productionQuantity ?? d.quantity ?? d.totalTons ?? d.totalCount ?? 0),
-          unit: st === 'sorting' ? 'قطعة' : st === 'chinese_mills' ? 'شيكارة' : 'طن',
+          unit: st === 'sorting' || st === 'pressing' ? 'قطعة' : st === 'chinese_mills' ? 'شيكارة' : 'طن',
+          productionTons: prodTons,
+          goodTons: goodTons,
+          wasteTons: wasteTons,
+          productionCount: prodCount,
           wasteQuantity: Number(d.wasteQuantity ?? d.rejectedQuantity ?? d.brokenCount ?? 0),
           goodQuantity: Number(d.goodQuantity ?? d.goodCount ?? 0),
+          pieceWeightKg: pieceWeightKg,
           totalDowntimeMinutes: Number(d.totalDowntimeMinutes ?? d.downtimeMinutes ?? ((d.downtimeHours || 0) * 60)),
-          gasConsumption: Number(d.gasConsumption || 0),
-          electricityConsumption: Number(d.electricityConsumption || 0),
+          gasConsumption: gas,
+          electricityConsumption: elec,
+          gasPerTon,
+          electricityPerTon,
           materials: d.materials || [],
           workers: d.productionWorkers || d.workers || (d.employeeNames ? d.employeeNames.map((n: string, i: number) => ({
             employeeId: d.employeeIds?.[i] || '',

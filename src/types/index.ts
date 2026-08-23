@@ -2,7 +2,22 @@
  * ASFOUR Factory Management System - Master TypeScript Types
  */
 
-export type UserRole = 'SUPER_ADMIN' | 'ADMIN' | 'SUPERVISOR' | 'PRODUCTION_USER' | 'VIEWER';
+import { GranularPermissions } from './permissions';
+
+export type UserRole = 
+  | 'SUPER_ADMIN' 
+  | 'ADMIN' 
+  | 'SUPERVISOR' 
+  | 'PRODUCTION_SUPERVISOR'
+  | 'PRODUCTION_USER' 
+  | 'PRODUCTION_OPERATOR'
+  | 'QUALITY_CONTROL'
+  | 'DATA_ENTRY'
+  | 'ACCOUNTING'
+  | 'REPORT_VIEWER'
+  | 'MAINTENANCE'
+  | 'VIEWER'
+  | 'CUSTOM';
 
 export interface UserPermission {
   recordsReadOwn: boolean;
@@ -36,7 +51,7 @@ export interface AdminUser {
   employeeName?: string;
   operatorCode?: string;
   operatorStation?: string;
-  permissions?: Partial<UserPermission>;
+  permissions?: Partial<GranularPermissions> | Partial<UserPermission>;
   createdBy?: string;
   createdByName?: string;
   createdAt?: string;
@@ -56,6 +71,7 @@ export interface CreateUserPayload {
   fullName?: string;
   username?: string;
   operatorStation?: string;
+  permissions?: Partial<GranularPermissions>;
 }
 
 export interface UpdateUserPayload {
@@ -67,6 +83,7 @@ export interface UpdateUserPayload {
   employeeName?: string;
   fullName?: string;
   operatorStation?: string;
+  permissions?: Partial<GranularPermissions>;
 }
 
 export interface Employee {
@@ -119,6 +136,19 @@ export type SmartParseStatus =
   | 'PARTIAL' 
   | 'NOT_APPLICABLE';
 
+export type ProductionInputUnit = 'COUNT' | 'KG' | 'TON' | 'MIXED';
+export type QuantitySource = 
+  | 'DIRECT_ENTRY' 
+  | 'CALCULATED_FROM_COUNT' 
+  | 'CALCULATED_FROM_WEIGHT' 
+  | 'IMPORTED_HISTORICAL' 
+  | 'MANUAL_OVERRIDE';
+export type CalculationMethod = 
+  | 'COUNT_X_PIECE_WEIGHT' 
+  | 'DIRECT_TON' 
+  | 'DIRECT_KG' 
+  | 'NOT_CALCULATED';
+
 export interface Product {
   id?: string;
   code: string; // Product Code (e.g. BAR250102305, 123456789, or CUSTOM-BRICK-001)
@@ -134,6 +164,9 @@ export interface Product {
   aluminaPercentage?: number | null; // e.g. 25 (optional / nullable - MUST remain null for numeric codes)
   pieceWeight?: number | null; // in kg (e.g. 4.5)
   pieceWeightKg?: number | null; // alias for pieceWeight
+  defaultProductionUnit?: ProductionInputUnit; // Default input unit (COUNT, TON, MIXED)
+  pieceWeightSource?: string; // Origin of piece weight data (e.g. MASTER_DATA, SMART_CODE, MANUAL)
+  conversionMethod?: CalculationMethod;
   unit?: string; // e.g. "قطعة" / "كجم" / "طن"
   dimensions?: string;
   description?: string;
@@ -301,14 +334,39 @@ export interface ProductionRecord extends ProductionFaults {
   aluminaPercentage: number;
   pieceWeight: number; // in kg
   
-  // Quantities & Calculations
+  // Quantities & Calculations (Factory Standard: TON is primary, COUNT is operational)
   productionQuantity: number; // total pressed/produced pieces
   wasteQuantity: number; // defective pieces
   goodQuantity: number; // productionQuantity - wasteQuantity
-  productionWeight: number; // productionQuantity * pieceWeight (kg)
+  
+  // Weights (Kg)
+  productionWeight: number; // productionQuantity * pieceWeight (kg) or pieceWeight * count
   goodWeight: number; // goodQuantity * pieceWeight (kg)
   wasteWeight: number; // wasteQuantity * pieceWeight (kg)
-  wastePercentage: number; // (wasteQuantity / productionQuantity) * 100
+
+  // Weights (Tons) - Primary Factory Metric
+  productionTons?: number | null; // Production in Tons
+  goodTons?: number | null; // Good production in Tons
+  wasteTons?: number | null; // Waste in Tons
+  
+  // Normalized Explicit Fields
+  productionCount?: number;
+  wasteCount?: number;
+  goodCount?: number;
+  pieceWeightKg?: number | null;
+  productionKg?: number | null;
+  goodKg?: number | null;
+  wasteKg?: number | null;
+  
+  // Tracking and Provenance
+  productionUnit?: ProductionInputUnit;
+  quantitySource?: QuantitySource;
+  calculationMethod?: CalculationMethod;
+  
+  // Rates & KPIs
+  wastePercentage: number; // Ton-based waste % or Count-based fallback
+  productionRateTonsPerHour?: number | null;
+  laborProductivityTonsPerHour?: number | null;
   
   // Downtime
   totalDowntimeMinutes: number;
@@ -402,6 +460,7 @@ export type NavigationPage =
   | 'bulk-entry' 
   | 'reports' 
   | 'settings' 
+  | 'branding'
   | 'user-management'
   | 'admin-panel';
 
@@ -702,11 +761,18 @@ export interface UniversalStageRecord {
   customerName?: string;
   quantity: number;
   unit: string;
+  productionTons?: number | null;
+  goodTons?: number | null;
+  wasteTons?: number | null;
+  productionCount?: number;
   wasteQuantity?: number;
   goodQuantity?: number;
+  pieceWeightKg?: number | null;
   totalDowntimeMinutes?: number;
   gasConsumption?: number;
   electricityConsumption?: number;
+  gasPerTon?: number | null;
+  electricityPerTon?: number | null;
   materials?: MaterialConsumptionItem[];
   workers?: StageWorkerItem[];
   status: RecordStatus;
@@ -763,6 +829,12 @@ export interface ProductionFilter {
 }
 
 export interface DashboardKPIs {
+  // Factory Primary Metric: TON
+  totalProductionTons: number;
+  totalGoodTons: number;
+  totalWasteTons: number;
+  
+  // Operational Counts & Weights (Kg)
   totalProductionCount: number;
   totalGoodCount: number;
   totalWasteCount: number;
@@ -770,9 +842,13 @@ export interface DashboardKPIs {
   totalProductionWeightKg: number;
   totalGoodWeightKg: number;
   totalWasteWeightKg: number;
+  
+  // Downtime & Production Rates
   totalDowntimeMinutes: number;
   totalDowntimeHours: number;
   totalRecordsCount: number;
+  productionRateTonsPerHour?: number;
+  recordsWithMissingPieceWeightCount?: number;
 }
 
 export type BulkImportRowStatus = 
@@ -1003,6 +1079,27 @@ export interface PressingImportSummary {
   shiftErrorsCount: number;
   faultMismatchesCount: number;
   rows: PressingImportRow[];
+}
+
+export interface BrandingSettings {
+  id?: string;
+  companyLogoUrl: string | null;
+  companyLogoPath?: string | null;
+  companyLogoFileName?: string | null;
+  companyLogoContentType?: string | null;
+  companyLogoSize?: number | null;
+  companyLogoUpdatedAt?: string | null;
+
+  developerImageUrl: string | null;
+  developerImagePath?: string | null;
+  developerImageFileName?: string | null;
+  developerImageContentType?: string | null;
+  developerImageSize?: number | null;
+  developerImageUpdatedAt?: string | null;
+
+  updatedAt?: string;
+  updatedByUid?: string;
+  updatedByEmail?: string;
 }
 
 

@@ -73,13 +73,15 @@ export const DataReviewView: React.FC = () => {
   const canApprove = useMemo(() => {
     if (!adminUser) return false;
     if (adminUser.role === 'SUPER_ADMIN' || adminUser.role === 'ADMIN' || adminUser.role === 'SUPERVISOR') return true;
-    return adminUser.permissions?.recordsApprove === true;
+    const perms = adminUser.permissions as Record<string, any> | undefined;
+    return perms?.recordsApprove === true || perms?.['production.approve'] === true;
   }, [adminUser]);
 
   const canEdit = useMemo(() => {
     if (!adminUser) return false;
     if (adminUser.role === 'SUPER_ADMIN' || adminUser.role === 'ADMIN') return true;
-    return adminUser.permissions?.recordsEditAll === true;
+    const perms = adminUser.permissions as Record<string, any> | undefined;
+    return perms?.recordsEditAll === true || perms?.['production.edit'] === true || perms?.['production.correct'] === true;
   }, [adminUser]);
 
   const loadRecords = async () => {
@@ -94,7 +96,8 @@ export const DataReviewView: React.FC = () => {
       });
 
       // Permission filter: if normal user only has read.own
-      if (adminUser?.role === 'PRODUCTION_USER' && !adminUser?.permissions?.recordsReadAll) {
+      const perms = adminUser?.permissions as Record<string, any> | undefined;
+      if (adminUser?.role === 'PRODUCTION_USER' && !perms?.recordsReadAll && !perms?.['production.view']) {
         setRecords(data.filter(r => r.createdBy === adminUser.uid));
       } else {
         setRecords(data);

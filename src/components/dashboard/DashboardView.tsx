@@ -97,19 +97,47 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigate }) => {
     return records;
   }, [records, timeRange]);
 
-  // Aggregated KPIs
-  const totalProductionWeightKg = (filteredRecords || []).reduce((sum, r) => sum + (Number(r?.productionWeight) || 0), 0);
+  // Aggregated KPIs (Factory Standard: TON is primary)
+  let totalProductionTons = 0;
+  let totalGoodTons = 0;
+  let totalWasteTons = 0;
+  let missingPieceWeightRecordsCount = 0;
+
   const totalProductionQuantity = (filteredRecords || []).reduce((sum, r) => sum + (Number(r?.productionQuantity) || 0), 0);
   const totalGoodQuantity = (filteredRecords || []).reduce((sum, r) => sum + (Number(r?.goodQuantity) || 0), 0);
   const totalWasteQuantity = (filteredRecords || []).reduce((sum, r) => sum + (Number(r?.wasteQuantity) || 0), 0);
   const totalDowntimeMinutes = (filteredRecords || []).reduce((sum, r) => sum + (Number(r?.totalDowntimeMinutes) || 0), 0);
 
-  const qualityRate = totalProductionQuantity > 0 
-    ? ((totalGoodQuantity / totalProductionQuantity) * 100).toFixed(1) 
-    : '100';
-  const wasteRate = totalProductionQuantity > 0 
-    ? ((totalWasteQuantity / totalProductionQuantity) * 100).toFixed(1) 
-    : '0';
+  (filteredRecords || []).forEach(r => {
+    const pWeight = r?.pieceWeightKg !== undefined && r?.pieceWeightKg !== null 
+      ? Number(r.pieceWeightKg) 
+      : (r?.pieceWeight !== undefined && r?.pieceWeight !== null ? Number(r.pieceWeight) : null);
+    
+    const hasWeight = pWeight !== null && !isNaN(pWeight) && pWeight > 0;
+
+    if (r?.productionTons !== undefined && r?.productionTons !== null && Number(r.productionTons) > 0) {
+      totalProductionTons += Number(r.productionTons);
+      totalGoodTons += Number(r.goodTons ?? (Number(r.productionTons) - Number(r.wasteTons || 0)));
+      totalWasteTons += Number(r.wasteTons || 0);
+    } else if (hasWeight && pWeight !== null) {
+      const prodKg = (Number(r?.productionQuantity) || 0) * pWeight;
+      const goodKg = (Number(r?.goodQuantity) || 0) * pWeight;
+      const wasteKg = (Number(r?.wasteQuantity) || 0) * pWeight;
+      totalProductionTons += (prodKg / 1000);
+      totalGoodTons += (goodKg / 1000);
+      totalWasteTons += (wasteKg / 1000);
+    } else if ((Number(r?.productionQuantity) || 0) > 0) {
+      missingPieceWeightRecordsCount += 1;
+    }
+  });
+
+  const qualityRate = totalProductionTons > 0 
+    ? ((totalGoodTons / totalProductionTons) * 100).toFixed(1)
+    : (totalProductionQuantity > 0 ? ((totalGoodQuantity / totalProductionQuantity) * 100).toFixed(1) : '100');
+
+  const wasteRate = totalProductionTons > 0 
+    ? ((totalWasteTons / totalProductionTons) * 100).toFixed(2)
+    : (totalProductionQuantity > 0 ? ((totalWasteQuantity / totalProductionQuantity) * 100).toFixed(2) : '0');
 
   // Press Production Breakdown
   const pressProductionList = useMemo(() => {
@@ -117,15 +145,19 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigate }) => {
     (filteredRecords || []).forEach((r) => {
       const key = r?.pressName || 'مكبس عام';
       if (!map[key]) map[key] = { name: key, weightTon: 0, quantity: 0 };
-      map[key].weightTon += (Number(r?.productionWeight) || 0) / 1000;
+      
+      const pWeight = Number(r?.pieceWeightKg ?? r?.pieceWeight ?? 0);
+      const tons = r?.productionTons ? Number(r.productionTons) : (pWeight > 0 ? (Number(r?.productionQuantity || 0) * pWeight) / 1000 : (Number(r?.productionWeight || 0) / 1000));
+      
+      map[key].weightTon += tons;
       map[key].quantity += Number(r?.productionQuantity) || 0;
     });
-    const totalQty = Object.values(map).reduce((acc, curr) => acc + (Number(curr.quantity) || 0), 0) || 1;
+    const totalTonsAll = Object.values(map).reduce((acc, curr) => acc + (Number(curr.weightTon) || 0), 0) || 1;
     return Object.values(map).map(item => ({
       ...item,
-      percentage: Math.round(((Number(item.quantity) || 0) / totalQty) * 100),
+      percentage: Math.round(((Number(item.weightTon) || 0) / totalTonsAll) * 100),
       weightTon: Number(item.weightTon.toFixed(2)),
-    })).sort((a, b) => (b.quantity || 0) - (a.quantity || 0));
+    })).sort((a, b) => (b.weightTon || 0) - (a.weightTon || 0));
   }, [filteredRecords]);
 
   // Daily Trend Data
@@ -138,8 +170,12 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigate }) => {
       if (!map[d]) {
         map[d] = { date: d.length > 5 ? d.substring(5) : d, weightTon: 0, wasteTon: 0 };
       }
-      map[d].weightTon += (Number(r?.productionWeight) || 0) / 1000;
-      map[d].wasteTon += ((Number(r?.wasteQuantity) || 0) * (Number(r?.pieceWeight) || 0)) / 1000;
+      const pWeight = Number(r?.pieceWeightKg ?? r?.pieceWeight ?? 0);
+      const prodTons = r?.productionTons ? Number(r.productionTons) : (pWeight > 0 ? (Number(r?.productionQuantity || 0) * pWeight) / 1000 : (Number(r?.productionWeight || 0) / 1000));
+      const wasteTons = r?.wasteTons ? Number(r.wasteTons) : (pWeight > 0 ? (Number(r?.wasteQuantity || 0) * pWeight) / 1000 : 0);
+
+      map[d].weightTon += prodTons;
+      map[d].wasteTon += wasteTons;
     });
     return Object.values(map).map(item => ({
       ...item,
@@ -150,49 +186,72 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigate }) => {
 
   return (
     <div className="space-y-6">
-      {/* 4-Column Geometric KPI Grid */}
+      {/* Missing Piece Weight Notice */}
+      {missingPieceWeightRecordsCount > 0 && (
+        <div className="bg-amber-950/40 border border-amber-800/80 rounded p-3 text-xs text-amber-300 flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0" />
+            <span>
+              تنبيه: يوجد <strong>{missingPieceWeightRecordsCount}</strong> سجل إنتاج بدون وزن قطعة مسجل. تظهر أوزانها كـ "غير محسوب" طبقاً للقواعد القياسية للمصنع.
+            </span>
+          </div>
+          <button
+            type="button"
+            onClick={() => onNavigate('master-data')}
+            className="text-amber-400 underline hover:text-amber-200 cursor-pointer font-bold shrink-0 ml-2"
+          >
+            تحديث أوزان المنتجات
+          </button>
+        </div>
+      )}
+
+      {/* 4-Column Geometric KPI Grid (Primary Factory Unit: TON) */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-        {/* Total Production */}
+        {/* Total Production in Tons */}
         <StatCard
           id="stat-total-production"
-          title="إجمالي الإنتاج (قطعة)"
-          value={totalProductionQuantity || 14250}
-          unit="قطعة"
+          title="إجمالي الإنتاج (طن)"
+          value={totalProductionTons > 0 ? totalProductionTons.toFixed(2) : (totalProductionQuantity > 0 ? `${formatNumber(totalProductionQuantity)} ق` : '0.00')}
+          unit={totalProductionTons > 0 ? 'طن' : 'قطعة'}
           color="indigo"
           icon={Factory}
-          trend={{ value: '+12.5% من الأمس', isPositive: true }}
+          subtitle={`العدد: ${formatNumber(totalProductionQuantity)} قطعة`}
+          trend={{ value: 'الوحدة القياسية للمصنع (طن)', isPositive: true }}
         />
 
-        {/* Good Products */}
+        {/* Good Products in Tons */}
         <StatCard
           id="stat-good-production"
-          title="المنتج السليم"
-          value={totalGoodQuantity || 13800}
-          unit="قطعة"
+          title="الإنتاج السليم (طن)"
+          value={totalGoodTons > 0 ? totalGoodTons.toFixed(2) : (totalGoodQuantity > 0 ? `${formatNumber(totalGoodQuantity)} ق` : '0.00')}
+          unit={totalGoodTons > 0 ? 'طن' : 'قطعة'}
           color="emerald"
           icon={CheckCircle2}
-          trend={{ value: `${qualityRate}% كفاءة الجودة`, isPositive: true }}
+          subtitle={`السليم: ${formatNumber(totalGoodQuantity)} قطعة`}
+          trend={{ value: `${qualityRate}% كفاءة الجودة بالوزن`, isPositive: true }}
         />
 
-        {/* Waste Quantity */}
+        {/* Waste Quantity in Tons */}
         <StatCard
           id="stat-waste-production"
-          title="الفواقد / الهالك"
-          value={totalWasteQuantity || 450}
-          unit="قطعة"
+          title="الهالك والتالف (طن)"
+          value={totalWasteTons > 0 ? totalWasteTons.toFixed(2) : (totalWasteQuantity > 0 ? `${formatNumber(totalWasteQuantity)} ق` : '0.00')}
+          unit={totalWasteTons > 0 ? 'طن' : 'قطعة'}
           color="rose"
           icon={AlertTriangle}
-          trend={{ value: `-${wasteRate}% عن المستهدف`, isPositive: false }}
+          subtitle={`التالف: ${formatNumber(totalWasteQuantity)} قطعة`}
+          trend={{ value: `${wasteRate}% نسبة الهالك بالوزن`, isPositive: false }}
         />
 
         {/* Downtime Hours */}
         <StatCard
           id="stat-downtime-hours"
-          title="ساعات التوقف"
+          title="ساعات التوقف والأعطال"
           value={`${(totalDowntimeMinutes / 60).toFixed(1)} hr`}
           color="amber"
           icon={Clock}
           subtitle={`إجمالي: ${totalDowntimeMinutes} دقيقة`}
+          trend={totalProductionTons > 0 ? { value: `${(totalProductionTons / Math.max(1, (filteredRecords.length * 8))).toFixed(2)} طن/ساعة عمل تقريبية`, isPositive: true } : undefined}
         />
       </div>
 
