@@ -19,6 +19,7 @@ import {
   writeBatch
 } from 'firebase/firestore';
 import { db, auth, handleFirestoreError, OperationType } from '../config/firebase';
+import { safeAddDoc, safeUpdateDoc, sanitizeForFirestore } from '../utils/firestoreSanitizer';
 import { 
   ProductionStageType, 
   RecordStatus, 
@@ -82,7 +83,7 @@ export async function createStageRecord(
   };
 
   try {
-    const docRef = await addDoc(collection(db, collectionName), payload);
+    const docRef = await safeAddDoc(collection(db, collectionName), payload);
 
     await logAuditAction(
       'CREATE',
@@ -129,7 +130,7 @@ export async function updateStageRecord(
     const existingSnap = await getDoc(docRef);
     const oldData = existingSnap.exists() ? existingSnap.data() : {};
 
-    await updateDoc(docRef, {
+    await safeUpdateDoc(docRef, {
       ...updatedFields,
       status: 'CORRECTED',
       updatedAt: new Date().toISOString(),

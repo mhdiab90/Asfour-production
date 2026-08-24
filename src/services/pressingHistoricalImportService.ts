@@ -38,6 +38,7 @@ import { fetchMasterData } from './masterDataService';
 import { fetchProductTypes } from './productTypeService';
 import { parseProductCode } from '../utils/productCodeParser';
 import { logAuditAction } from './auditService';
+import { safeBatchSet } from '../utils/firestoreSanitizer';
 import { calculateProductionMetrics } from './productionService';
 import { toWesternDigits } from '../utils/formatters';
 
@@ -912,7 +913,7 @@ export async function executePressingBatchImport(
         ...(backupId ? { backupId } : {}),
       };
 
-      batch.set(docRef, enrichedPayload);
+      safeBatchSet(batch, docRef, enrichedPayload);
     });
 
     try {

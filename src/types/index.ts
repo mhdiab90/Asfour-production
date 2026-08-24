@@ -1083,23 +1083,33 @@ export interface PressingImportSummary {
 
 export interface BrandingSettings {
   id?: string;
-  companyLogoUrl: string | null;
+  brandingStorageMode?: 'STATIC_ASSET' | string;
+  // Company Logo
+  companyLogoUrl?: string | null;
+  companyLogoPublicId?: string | null;
   companyLogoPath?: string | null;
   companyLogoFileName?: string | null;
   companyLogoContentType?: string | null;
   companyLogoSize?: number | null;
+  companyLogoWidth?: number | null;
+  companyLogoHeight?: number | null;
   companyLogoUpdatedAt?: string | null;
   companyLogoUpdatedByUid?: string | null;
 
-  developerImageUrl: string | null;
+  // Developer Image
+  developerImageUrl?: string | null;
+  developerImagePublicId?: string | null;
   developerImagePath?: string | null;
   developerImageFileName?: string | null;
   developerImageContentType?: string | null;
   developerImageSize?: number | null;
+  developerImageWidth?: number | null;
+  developerImageHeight?: number | null;
   developerImageUpdatedAt?: string | null;
   developerImageUpdatedByUid?: string | null;
 
   updatedAt?: string;
+  serverUpdatedAt?: any;
   updatedByUid?: string;
   updatedByEmail?: string;
 }

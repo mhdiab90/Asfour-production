@@ -1,10 +1,10 @@
 /**
  * Developer Badge & System Creator Identity Component
  * Official recognition: "Developed by MHDIAB"
- * Uses original developer image (/branding/developer-original.png) with proportional scaling.
+ * Uses original developer image (/branding/developer.jpeg) with proportional scaling.
  * Rendered in About / حول النظام, System Information, and subtle login screen credit.
  */
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Github, Terminal } from 'lucide-react';
 import { useBranding } from '../../context/BrandingContext';
 
@@ -22,7 +22,7 @@ interface DeveloperBadgeProps {
   customSrc?: string;
 }
 
-export const ORIGINAL_DEVELOPER_SRC = '/branding/developer-original.png';
+export const ORIGINAL_DEVELOPER_SRC = '/branding/developer.jpeg';
 
 export const DeveloperBadge: React.FC<DeveloperBadgeProps> = ({
   variant = 'compact',
@@ -43,6 +43,10 @@ export const DeveloperBadge: React.FC<DeveloperBadgeProps> = ({
   }
 
   const activeSrc = customSrc || brandingDevSrc;
+
+  useEffect(() => {
+    setImageError(false);
+  }, [activeSrc]);
 
   // Fallback vector avatar
   const renderFallbackVector = (size: number) => {
@@ -68,14 +72,14 @@ export const DeveloperBadge: React.FC<DeveloperBadgeProps> = ({
   const renderDeveloperAvatar = (size: number) => {
     return (
       <div 
-        className="relative rounded-full shrink-0 overflow-hidden shadow-md flex items-center justify-center bg-slate-900 border-2 border-slate-500/80"
+        className="relative rounded-lg shrink-0 overflow-hidden shadow-xs flex items-center justify-center bg-slate-950 border border-slate-700/80 p-0.5"
         style={{ width: `${size}px`, height: `${size}px` }}
       >
         {!imageError ? (
           <img
             src={activeSrc}
             alt="MHDIAB - Lead Developer"
-            className="w-full h-full object-cover shrink-0"
+            className="w-full h-full object-contain shrink-0"
             onError={() => setImageError(true)}
           />
         ) : (

@@ -1,0 +1,45 @@
+rules_version = '2';
+
+service firebase.storage {
+  match /b/{bucket}/o {
+    
+    // Helper functions for authorization
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isSecurityMasterEmail() {
+      return isSignedIn() && 
+        request.auth.token.email != null &&
+        request.auth.token.email.lower() == 'ai.mhdiab90@gmail.com';
+    }
+
+    function isSuperAdmin() {
+      return isSecurityMasterEmail() || (
+        isSignedIn() &&
+        firestore.exists(/databases/(default)/documents/adminUsers/$(request.auth.uid)) &&
+        firestore.get(/databases/(default)/documents/adminUsers/$(request.auth.uid)).data.role in ['SUPER_ADMIN', 'ADMIN'] &&
+        firestore.get(/databases/(default)/documents/adminUsers/$(request.auth.uid)).data.active == true
+      );
+    }
+
+    // Branding & Identity Assets (Company Logo & Developer Image)
+    // Public read: allows unauthenticated clients on Login page, printed receipts, and invoices to load the company logo
+    // Restricted write: ONLY authenticated SUPER_ADMIN / ADMIN can upload, update, or delete branding assets
+    match /branding/{allPaths=**} {
+      allow read: if true;
+      allow write: if isSuperAdmin();
+    }
+
+    // Diagnostic Connection Test bucket folder
+    match /branding/test/{testFile} {
+      allow read: if isSignedIn();
+      allow write: if isSuperAdmin();
+    }
+    
+    // Deny all other access by default
+    match /{allPaths=**} {
+      allow read, write: if false;
+    }
+  }
+}

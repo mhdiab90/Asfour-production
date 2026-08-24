@@ -17,6 +17,7 @@ import {
   serverTimestamp 
 } from 'firebase/firestore';
 import { db, handleFirestoreError, OperationType } from '../config/firebase';
+import { safeAddDoc, safeUpdateDoc } from '../utils/firestoreSanitizer';
 import { 
   Employee, 
   Department, 
@@ -173,7 +174,7 @@ export async function createMasterDataItem<T extends Record<string, any>>(
   };
 
   try {
-    const docRef = await addDoc(collection(db, collectionName), payload);
+    const docRef = await safeAddDoc(collection(db, collectionName), payload);
     await logAuditAction('CREATE', collectionName, docRef.id, `إضافة سجل جديد بكود: ${itemData.code || docRef.id}`);
     return docRef.id;
   } catch (error) {
@@ -239,7 +240,7 @@ export async function updateMasterDataItem<T extends Record<string, any>>(
 
   try {
     const docRef = doc(db, collectionName, id);
-    await updateDoc(docRef, payload);
+    await safeUpdateDoc(docRef, payload);
     await logAuditAction('UPDATE', collectionName, id, `تعديل بيانات السجل: ${itemData.code || id}`);
   } catch (error) {
     handleFirestoreError(error, OperationType.UPDATE, `${collectionName}/${id}`);

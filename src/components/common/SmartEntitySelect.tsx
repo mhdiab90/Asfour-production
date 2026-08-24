@@ -101,6 +101,8 @@ export const SmartEntitySelect: React.FC<SmartEntitySelectProps> = ({
 
   const containerRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+  const modalCodeInputRef = useRef<HTMLInputElement>(null);
+  const modalNameInputRef = useRef<HTMLInputElement>(null);
 
   // Check if user has permission to create master data
   const canCreate = useMemo(() => {
@@ -136,6 +138,20 @@ export const SmartEntitySelect: React.FC<SmartEntitySelectProps> = ({
     document.addEventListener('mousedown', handleClickOutside);
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
+
+  // Autofocus modal input when opened
+  useEffect(() => {
+    if (showAddModal) {
+      const timer = setTimeout(() => {
+        if (newCode) {
+          modalNameInputRef.current?.focus();
+        } else {
+          modalCodeInputRef.current?.focus();
+        }
+      }, 50);
+      return () => clearTimeout(timer);
+    }
+  }, [showAddModal, newCode]);
 
   const handleSelect = (option: SmartOption) => {
     onChange(option.id, option);
@@ -181,18 +197,43 @@ export const SmartEntitySelect: React.FC<SmartEntitySelectProps> = ({
 
   const handleOpenAddModal = (e?: React.MouseEvent) => {
     if (e) e.stopPropagation();
-    setNewCode(searchQuery.trim().match(/^[0-9A-Za-z_-]+$/) ? searchQuery.trim() : '');
-    setNewName(!searchQuery.trim().match(/^[0-9A-Za-z_-]+$/) ? searchQuery.trim() : '');
+    const query = searchQuery.trim();
+    const isCodeLike = /^[0-9A-Za-z_.-]+$/.test(query);
+    setNewCode(isCodeLike ? query : '');
+    setNewName(!isCodeLike ? query : '');
     setNewExtra('');
     setModalError('');
     setShowAddModal(true);
     setIsOpen(false);
   };
 
-  const handleCreateQuickEntity = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!newCode.trim() || !newName.trim()) {
-      setModalError('يرجى ملء كود واسم العنصر.');
+  const handleCloseModal = () => {
+    setShowAddModal(false);
+    setModalError('');
+    setTimeout(() => {
+      inputRef.current?.focus();
+    }, 50);
+  };
+
+  const executeSaveQuickEntity = async () => {
+    const code = newCode.trim();
+    const name = newName.trim();
+
+    if (!code || !name) {
+      setModalError('يرجى ملء كود واسم العنصر بدقة.');
+      return;
+    }
+
+    // Pre-flight duplicate check
+    const codeExists = options.some(opt => opt.code && opt.code.trim().toLowerCase() === code.toLowerCase());
+    const nameExists = options.some(opt => opt.name && opt.name.trim().toLowerCase() === name.toLowerCase());
+
+    if (codeExists || nameExists) {
+      setModalError(
+        codeExists 
+          ? `هذا البيان موجود بالفعل: الكود "${code}" مسجل مسبقاً. / This record already exists.`
+          : `هذا البيان موجود بالفعل: الاسم "${name}" مسجل مسبقاً. / This record already exists.`
+      );
       return;
     }
 
@@ -200,8 +241,6 @@ export const SmartEntitySelect: React.FC<SmartEntitySelectProps> = ({
     setModalError('');
     try {
       let createdId: string | undefined;
-      const code = newCode.trim();
-      const name = newName.trim();
 
       if (entityType === 'material') {
         createdId = await createMaterial({
@@ -236,11 +275,34 @@ export const SmartEntitySelect: React.FC<SmartEntitySelectProps> = ({
       onChange(newOption.id, newOption);
       setShowAddModal(false);
       setSearchQuery('');
+      setTimeout(() => {
+        inputRef.current?.focus();
+      }, 50);
     } catch (err: any) {
       setModalError(err.message || 'حدث خطأ أثناء حفظ العنصر الجديد.');
     } finally {
       setIsSaving(false);
     }
+  };
+
+  const handleModalKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      e.stopPropagation();
+      if (!isSaving) {
+        executeSaveQuickEntity();
+      }
+    } else if (e.key === 'Escape') {
+      e.preventDefault();
+      e.stopPropagation();
+      handleCloseModal();
+    }
+  };
+
+  const handleCreateQuickEntity = async (e: React.FormEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    await executeSaveQuickEntity();
   };
 
   return (
@@ -454,12 +516,13 @@ export const SmartEntitySelect: React.FC<SmartEntitySelectProps> = ({
               </div>
             )}
 
-            <form onSubmit={handleCreateQuickEntity} className="space-y-4">
+            <form onSubmit={handleCreateQuickEntity} onKeyDown={handleModalKeyDown} className="space-y-4">
               <div>
                 <label className="block text-xs font-bold text-slate-700 mb-1">
                   كود {getEntityTitleAr(entityType)} <span className="text-red-500">*</span>
                 </label>
                 <input
+                  ref={modalCodeInputRef}
                   type="text"
                   required
                   value={newCode}
@@ -474,6 +537,7 @@ export const SmartEntitySelect: React.FC<SmartEntitySelectProps> = ({
                   اسم {getEntityTitleAr(entityType)} <span className="text-red-500">*</span>
                 </label>
                 <input
+                  ref={modalNameInputRef}
                   type="text"
                   required
                   value={newName}
@@ -514,31 +578,52 @@ export const SmartEntitySelect: React.FC<SmartEntitySelectProps> = ({
                 </div>
               )}
 
-              <div className="flex items-center justify-end gap-2 pt-3 border-t border-slate-100">
-                <button
-                  type="button"
-                  onClick={() => setShowAddModal(false)}
-                  className="px-4 py-2 text-xs font-bold text-slate-600 hover:bg-slate-100 rounded-xl transition-colors cursor-pointer"
-                >
-                  إلغاء
-                </button>
-                <button
-                  type="submit"
-                  disabled={isSaving}
-                  className="flex items-center gap-1.5 px-5 py-2.5 bg-red-600 hover:bg-red-700 disabled:opacity-50 text-white text-xs font-bold rounded-xl shadow-md transition-all cursor-pointer"
-                >
-                  {isSaving ? (
-                    <>
-                      <Loader2 className="w-4 h-4 animate-spin" />
-                      جاري الحفظ...
-                    </>
-                  ) : (
-                    <>
-                      <Save className="w-4 h-4" />
-                      حفظ واختيار
-                    </>
-                  )}
-                </button>
+              {entityType === 'employee' && (
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 mb-1">
+                    القسم / الوردية
+                  </label>
+                  <input
+                    type="text"
+                    value={newExtra}
+                    onChange={(e) => setNewExtra(e.target.value)}
+                    placeholder="الإنتاج / المكابس"
+                    className="w-full px-3.5 py-2.5 text-sm bg-slate-50 border border-slate-300 rounded-xl focus:ring-2 focus:ring-red-500/20 focus:border-red-500 outline-none"
+                  />
+                </div>
+              )}
+
+              <div className="flex items-center justify-between pt-3 border-t border-slate-100">
+                <span className="text-[11px] text-slate-400">
+                  اضغط <kbd className="px-1.5 py-0.5 bg-slate-100 border border-slate-300 rounded text-slate-700 font-mono text-[10px]">Enter</kbd> للحفظ، <kbd className="px-1.5 py-0.5 bg-slate-100 border border-slate-300 rounded text-slate-700 font-mono text-[10px]">Esc</kbd> للإلغاء
+                </span>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={handleCloseModal}
+                    className="px-4 py-2 text-xs font-bold text-slate-600 hover:bg-slate-100 rounded-xl transition-colors cursor-pointer"
+                  >
+                    إلغاء
+                  </button>
+                  <button
+                    type="button"
+                    onClick={executeSaveQuickEntity}
+                    disabled={isSaving}
+                    className="flex items-center gap-1.5 px-5 py-2.5 bg-red-600 hover:bg-red-700 disabled:opacity-50 text-white text-xs font-bold rounded-xl shadow-md transition-all cursor-pointer"
+                  >
+                    {isSaving ? (
+                      <>
+                        <Loader2 className="w-4 h-4 animate-spin" />
+                        جاري الحفظ...
+                      </>
+                    ) : (
+                      <>
+                        <Save className="w-4 h-4" />
+                        حفظ واختيار (Enter)
+                      </>
+                    )}
+                  </button>
+                </div>
               </div>
             </form>
           </div>

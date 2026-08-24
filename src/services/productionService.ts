@@ -29,6 +29,7 @@ import {
 import { logAuditAction } from './auditService';
 import { matchesSearch, enrichWithNormalizedFields } from '../utils/searchUtils';
 import { calculatePieceBasedProduction } from '../utils/productionCalculations';
+import { safeBatchSet, safeUpdateDoc, sanitizeForFirestore } from '../utils/firestoreSanitizer';
 
 // Pure Production Calculation Engine (Factory Standard: TON is primary, COUNT is operational)
 export function calculateProductionMetrics(
@@ -143,7 +144,7 @@ export async function createProductionRecord(
   const newDocRef = doc(collection(db, 'production'));
   const productionId = newDocRef.id;
 
-  const payload: ProductionRecord = {
+  const rawPayload: ProductionRecord = {
     ...data,
     ...metrics,
     id: productionId,
@@ -153,10 +154,11 @@ export async function createProductionRecord(
     updatedAt: new Date().toISOString(),
   };
 
+  const payload = sanitizeForFirestore(rawPayload);
   const batch = writeBatch(db);
 
-  // 1. Production record
-  batch.set(newDocRef, {
+  // 1. Production record (Sanitized & Pre-Write Validated)
+  safeBatchSet(batch, newDocRef, {
     ...payload,
     serverCreatedAt: serverTimestamp(),
     serverUpdatedAt: serverTimestamp(),
@@ -165,8 +167,9 @@ export async function createProductionRecord(
   // 2. Production employees mapping
   if (data.employeeIds && data.employeeIds.length > 0) {
     data.employeeIds.forEach((empId, idx) => {
+      if (!empId) return;
       const peDocRef = doc(collection(db, 'productionEmployees'));
-      batch.set(peDocRef, {
+      const empPayload = sanitizeForFirestore({
         productionId,
         employeeId: empId,
         employeeName: data.employeeNames?.[idx] || '',
@@ -175,33 +178,36 @@ export async function createProductionRecord(
         shiftId: data.shiftId,
         createdAt: new Date().toISOString(),
       });
+      safeBatchSet(batch, peDocRef, empPayload);
     });
   }
 
   // 3. Production furnace cars mapping
   if (data.furnaceCarIds && data.furnaceCarIds.length > 0) {
     data.furnaceCarIds.forEach((carId, idx) => {
+      if (!carId) return;
       const pfcDocRef = doc(collection(db, 'productionFurnaceCars'));
-      batch.set(pfcDocRef, {
+      const carPayload = sanitizeForFirestore({
         productionId,
         furnaceCarId: carId,
         carNumber: data.furnaceCarNumbers?.[idx] || '',
-        furnaceId: data.furnaceId || '',
+        ...(data.furnaceId ? { furnaceId: data.furnaceId } : {}),
         date: data.date,
         createdAt: new Date().toISOString(),
       });
+      safeBatchSet(batch, pfcDocRef, carPayload);
     });
   }
 
   // 4. Downtime recording if downtime occurred
   if (metrics.totalDowntimeMinutes > 0) {
     const downtimeDocRef = doc(collection(db, 'downtime'));
-    batch.set(downtimeDocRef, {
+    const dtPayload = sanitizeForFirestore({
       productionId,
       date: data.date,
       shiftId: data.shiftId,
       pressId: data.pressId,
-      furnaceId: data.furnaceId || '',
+      ...(data.furnaceId ? { furnaceId: data.furnaceId } : {}),
       mechanical: metrics.mechanicalFaults,
       electrical: metrics.electricalFaults,
       workshop: metrics.workshopFaults,
@@ -214,6 +220,7 @@ export async function createProductionRecord(
       notes: data.notes || '',
       createdAt: new Date().toISOString(),
     });
+    safeBatchSet(batch, downtimeDocRef, dtPayload);
   }
 
   try {
@@ -252,16 +259,16 @@ export async function updateProductionRecord(
     });
   }
 
-  const payload = {
+  const payload = sanitizeForFirestore({
     ...data,
     ...calculatedUpdates,
     updatedAt: new Date().toISOString(),
     serverUpdatedAt: serverTimestamp(),
-  };
+  });
 
   try {
     const docRef = doc(db, 'production', id);
-    await updateDoc(docRef, payload);
+    await safeUpdateDoc(docRef, payload);
     await logAuditAction('UPDATE', 'production', id, `تعديل سجل إنتاج رقم ${id}`);
   } catch (error) {
     handleFirestoreError(error, OperationType.UPDATE, `production/${id}`);

@@ -1,19 +1,24 @@
 /**
- * ASFOUR ERP - Global Branding Context & Real-time State
- * Provides live company logo, developer image, and upload/reset methods across the application.
+ * ASFOUR ERP - Global Branding Context & State
+ * 
+ * Provides static company logo and developer image assets across the application.
+ * Source of Truth:
+ * - Company Logo: `/branding/company-logo.png`
+ * - Developer Image: `/branding/developer.jpeg`
  */
 import React, { createContext, useContext, useState, useEffect, useCallback, useMemo } from 'react';
 import { BrandingSettings } from '../types';
 import { 
   DEFAULT_BRANDING, 
+  STATIC_COMPANY_LOGO_PATH,
+  STATIC_DEVELOPER_IMAGE_PATH,
   getBrandingSettings, 
-  subscribeBrandingSettings, 
-  uploadAndReplaceBrandingAsset, 
-  deleteBrandingAsset 
+  subscribeBrandingSettings,
+  ensureStaticBrandingConfig
 } from '../services/brandingService';
 
-export const ORIGINAL_FALLBACK_LOGO = '/branding/asfour-logo-original.png';
-export const ORIGINAL_FALLBACK_DEV = '/branding/developer-original.png';
+export const ORIGINAL_FALLBACK_LOGO = STATIC_COMPANY_LOGO_PATH;
+export const ORIGINAL_FALLBACK_DEV = STATIC_DEVELOPER_IMAGE_PATH;
 
 interface BrandingContextType {
   branding: BrandingSettings;
@@ -25,10 +30,6 @@ interface BrandingContextType {
   hasCustomLogo: boolean;
   hasCustomDeveloperImage: boolean;
   refreshBranding: () => Promise<void>;
-  uploadAndSaveLogo: (file: File, onProgress?: (percent: number) => void) => Promise<void>;
-  uploadAndSaveDeveloperImage: (file: File, onProgress?: (percent: number) => void) => Promise<void>;
-  deleteLogo: () => Promise<void>;
-  deleteDeveloperImage: () => Promise<void>;
 }
 
 const BrandingContext = createContext<BrandingContextType | undefined>(undefined);
@@ -36,12 +37,16 @@ const BrandingContext = createContext<BrandingContextType | undefined>(undefined
 export const BrandingProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [branding, setBranding] = useState<BrandingSettings>(DEFAULT_BRANDING);
   const [isLoading, setIsLoading] = useState<boolean>(true);
-  const [isSaving, setIsSaving] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
 
-  // Real-time Firestore subscription
+  // Sync static asset configuration to Firestore & real-time subscription
   useEffect(() => {
     setIsLoading(true);
+    // Ensure Firestore document exists with STATIC_ASSET mode
+    ensureStaticBrandingConfig().catch((err) => {
+      console.warn('Non-blocking static branding sync notice:', err);
+    });
+
     const unsubscribe = subscribeBrandingSettings(
       (settings) => {
         setBranding(settings);
@@ -68,97 +73,33 @@ export const BrandingProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     }
   }, []);
 
-  const uploadAndSaveLogo = useCallback(async (file: File, onProgress?: (percent: number) => void) => {
-    setIsSaving(true);
-    setError(null);
-    try {
-      await uploadAndReplaceBrandingAsset(file, 'company_logo', branding.companyLogoPath, onProgress);
-      await refreshBranding();
-    } catch (err: any) {
-      setError(err?.message || 'Failed to upload company logo');
-      throw err;
-    } finally {
-      setIsSaving(false);
-    }
-  }, [branding.companyLogoPath, refreshBranding]);
-
-  const uploadAndSaveDeveloperImage = useCallback(async (file: File, onProgress?: (percent: number) => void) => {
-    setIsSaving(true);
-    setError(null);
-    try {
-      await uploadAndReplaceBrandingAsset(file, 'developer', branding.developerImagePath, onProgress);
-      await refreshBranding();
-    } catch (err: any) {
-      setError(err?.message || 'Failed to upload developer image');
-      throw err;
-    } finally {
-      setIsSaving(false);
-    }
-  }, [branding.developerImagePath, refreshBranding]);
-
-  const deleteLogo = useCallback(async () => {
-    setIsSaving(true);
-    setError(null);
-    try {
-      await deleteBrandingAsset('company_logo', branding.companyLogoPath);
-      await refreshBranding();
-    } catch (err: any) {
-      setError(err?.message || 'Failed to delete company logo');
-      throw err;
-    } finally {
-      setIsSaving(false);
-    }
-  }, [branding.companyLogoPath, refreshBranding]);
-
-  const deleteDeveloperImage = useCallback(async () => {
-    setIsSaving(true);
-    setError(null);
-    try {
-      await deleteBrandingAsset('developer', branding.developerImagePath);
-      await refreshBranding();
-    } catch (err: any) {
-      setError(err?.message || 'Failed to delete developer image');
-      throw err;
-    } finally {
-      setIsSaving(false);
-    }
-  }, [branding.developerImagePath, refreshBranding]);
-
-  const companyLogoSrc = branding.companyLogoUrl || ORIGINAL_FALLBACK_LOGO;
-  const developerImageSrc = branding.developerImageUrl || ORIGINAL_FALLBACK_DEV;
-  const hasCustomLogo = Boolean(branding.companyLogoUrl);
-  const hasCustomDeveloperImage = Boolean(branding.developerImageUrl);
+  // Static assets are the single source of truth
+  const companyLogoSrc = STATIC_COMPANY_LOGO_PATH;
+  const developerImageSrc = STATIC_DEVELOPER_IMAGE_PATH;
+  const hasCustomLogo = true;
+  const hasCustomDeveloperImage = true;
 
   const value = useMemo(
     () => ({
       branding,
       isLoading,
-      isSaving,
+      isSaving: false,
       error,
       companyLogoSrc,
       developerImageSrc,
       hasCustomLogo,
       hasCustomDeveloperImage,
       refreshBranding,
-      uploadAndSaveLogo,
-      uploadAndSaveDeveloperImage,
-      deleteLogo,
-      deleteDeveloperImage,
     }),
     [
       branding,
       isLoading,
-      isSaving,
       error,
       companyLogoSrc,
       developerImageSrc,
       hasCustomLogo,
       hasCustomDeveloperImage,
       refreshBranding,
-      uploadAndSaveLogo,
-      uploadAndSaveDeveloperImage,
-      deleteLogo,
-      deleteDeveloperImage,
     ]
   );
 

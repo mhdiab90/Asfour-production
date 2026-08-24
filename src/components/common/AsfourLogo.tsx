@@ -4,7 +4,7 @@
  * Preserves original dimensions, aspect ratio, typography, colors, and background.
  * Supports multiple responsive variants: login, sidebar, header, dashboard, report-print, white, icon-only.
  */
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useBranding } from '../../context/BrandingContext';
 
 export type AsfourLogoVariant = 
@@ -28,7 +28,7 @@ interface AsfourLogoProps {
   customSrc?: string;
 }
 
-export const ORIGINAL_LOGO_SRC = '/branding/asfour-logo-original.png';
+export const ORIGINAL_LOGO_SRC = '/branding/company-logo.png';
 
 export const AsfourLogo: React.FC<AsfourLogoProps> = ({
   variant = 'full',
@@ -52,6 +52,10 @@ export const AsfourLogo: React.FC<AsfourLogoProps> = ({
   }
 
   const activeSrc = customSrc || brandingLogoSrc;
+
+  useEffect(() => {
+    setImageError(false);
+  }, [activeSrc]);
 
   // Dimensions helper
   const getDimensions = () => {

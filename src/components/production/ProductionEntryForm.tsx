@@ -306,7 +306,7 @@ export const ProductionEntryForm: React.FC<ProductionEntryFormProps> = ({ onNavi
     setIsSubmitting(true);
 
     try {
-      await createProductionRecord({
+      const newRecordData: any = {
         date,
         // Shift snapshots
         shiftId,
@@ -318,57 +318,71 @@ export const ProductionEntryForm: React.FC<ProductionEntryFormProps> = ({ onNavi
         pressName: currentPress?.name || 'مكبس',
         pressCode: currentPress?.code || '',
 
-        // Furnace snapshots
-        furnaceId: furnaceId || undefined,
-        furnaceName: currentFurnace?.name || undefined,
-        furnaceCode: currentFurnace?.code || undefined,
-
-        // Furnace Cars snapshots
-        furnaceCarIds: selectedCarsList.map((c) => c.id || ''),
-        furnaceCarNumbers: selectedCarsList.map((c) => c.carNumber || c.code),
-        carCodes: selectedCarsList.map((c) => c.code),
-        carCode: selectedCarsList.length > 0 ? selectedCarsList[0].code : undefined,
-
-        // Team / Workers snapshots
-        employeeId: selectedEmployeesList.length > 0 ? selectedEmployeesList[0].id : undefined,
-        employeeIds: selectedEmployeesList.map((e) => e.id || ''),
-        employeeNames: selectedEmployeesList.map((e) => e.name),
-        employeeCodes: selectedEmployeesList.map((e) => e.code),
-        productionEmployees: selectedEmployeesList.map((e) => ({
-          id: e.id || '',
-          name: e.name,
-          code: e.code,
-          departmentName: e.departmentName || 'الإنتاج',
-        })),
-
         // Product snapshots
         productId,
         productName: currentProduct?.name || currentProduct?.productName || 'منتج حراري',
         productCode: currentProduct?.code || currentProduct?.productCode || '',
-        productTypePrefix: currentProduct?.productTypePrefix,
-        productTypeName: currentProduct?.productTypeName,
-        productTypeId: currentProduct?.productTypeId,
-        aluminaPercentage,
-        pieceWeight,
-
-        // Customer snapshots
-        customerId: customerId || undefined,
-        customerName: currentCustomer?.name || currentCustomer?.company || undefined,
-        customerCode: currentCustomer?.code || undefined,
-        customerOrderNumber: customerOrderNumber || undefined,
+        aluminaPercentage: aluminaPercentage || 0,
+        pieceWeight: pieceWeight || 0,
 
         // Quantities & Calculations
         productionQuantity,
         wasteQuantity,
-        mechanicalFaults,
-        electricalFaults,
-        workshopFaults,
-        rawMaterialFaults,
-        furnaceFaults,
-        pressFaults,
-        otherFaults,
-        notes,
-      });
+        mechanicalFaults: mechanicalFaults || 0,
+        electricalFaults: electricalFaults || 0,
+        workshopFaults: workshopFaults || 0,
+        rawMaterialFaults: rawMaterialFaults || 0,
+        furnaceFaults: furnaceFaults || 0,
+        pressFaults: pressFaults || 0,
+        otherFaults: otherFaults || 0,
+        notes: notes || '',
+      };
+
+      // Optional Furnace snapshots
+      if (furnaceId && currentFurnace) {
+        newRecordData.furnaceId = furnaceId;
+        newRecordData.furnaceName = currentFurnace.name;
+        newRecordData.furnaceCode = currentFurnace.code;
+      }
+
+      // Optional Furnace Cars snapshots
+      if (selectedCarsList.length > 0) {
+        newRecordData.furnaceCarIds = selectedCarsList.map((c) => c.id || '').filter(Boolean);
+        newRecordData.furnaceCarNumbers = selectedCarsList.map((c) => c.carNumber || c.code);
+        newRecordData.carCodes = selectedCarsList.map((c) => c.code);
+        newRecordData.carCode = selectedCarsList[0].code;
+      }
+
+      // Optional Team / Workers snapshots
+      if (selectedEmployeesList.length > 0) {
+        newRecordData.employeeId = selectedEmployeesList[0].id;
+        newRecordData.employeeIds = selectedEmployeesList.map((e) => e.id || '').filter(Boolean);
+        newRecordData.employeeNames = selectedEmployeesList.map((e) => e.name);
+        newRecordData.employeeCodes = selectedEmployeesList.map((e) => e.code);
+        newRecordData.productionEmployees = selectedEmployeesList.map((e) => ({
+          id: e.id || '',
+          name: e.name,
+          code: e.code,
+          departmentName: e.departmentName || 'الإنتاج',
+        }));
+      }
+
+      // Optional Product metadata
+      if (currentProduct?.productTypePrefix) newRecordData.productTypePrefix = currentProduct.productTypePrefix;
+      if (currentProduct?.productTypeName) newRecordData.productTypeName = currentProduct.productTypeName;
+      if (currentProduct?.productTypeId) newRecordData.productTypeId = currentProduct.productTypeId;
+
+      // Optional Customer: If selected, write stable ID + name + code; If not selected, OMIT COMPLETELY
+      if (customerId && currentCustomer) {
+        newRecordData.customerId = customerId;
+        newRecordData.customerName = currentCustomer.name || currentCustomer.company || 'عميل';
+        newRecordData.customerCode = currentCustomer.code || '';
+      }
+      if (customerOrderNumber && customerOrderNumber.trim()) {
+        newRecordData.customerOrderNumber = customerOrderNumber.trim();
+      }
+
+      await createProductionRecord(newRecordData);
 
       setSuccessMessage('تم تسجيل وحفظ عملية الإنتاج بنجاح في قاعدة بيانات Firestore السحابية!');
       
