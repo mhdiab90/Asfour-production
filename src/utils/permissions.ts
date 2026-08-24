@@ -371,7 +371,7 @@ export function canAccessPage(user: AdminUser | null | undefined, page: Navigati
     case 'admin-panel':
       return perms['settings.view'] || perms['audit.view'];
     case 'branding':
-      return perms['settings.view'] || user?.role === 'SUPER_ADMIN' || user?.role === 'ADMIN';
+      return perms['settings.view'] || user.role === 'ADMIN';
     default:
       return true;
   }
