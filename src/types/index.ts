@@ -1089,6 +1089,7 @@ export interface BrandingSettings {
   companyLogoContentType?: string | null;
   companyLogoSize?: number | null;
   companyLogoUpdatedAt?: string | null;
+  companyLogoUpdatedByUid?: string | null;
 
   developerImageUrl: string | null;
   developerImagePath?: string | null;
@@ -1096,6 +1097,7 @@ export interface BrandingSettings {
   developerImageContentType?: string | null;
   developerImageSize?: number | null;
   developerImageUpdatedAt?: string | null;
+  developerImageUpdatedByUid?: string | null;
 
   updatedAt?: string;
   updatedByUid?: string;

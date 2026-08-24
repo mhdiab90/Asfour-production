@@ -2,7 +2,7 @@
  * ASFOUR ERP - Manual Branding & Asset Management View
  * Admin-only interface to upload untouched original Company Logo & Developer Image.
  * Stores assets in Firebase Cloud Storage & metadata in Firestore (`system_settings/branding`).
- * Zero AI regeneration, 100% exact fidelity with live responsive previews.
+ * Zero AI regeneration, 100% exact fidelity with live progress and responsive previews.
  */
 import React, { useState, useRef } from 'react';
 import { 
@@ -17,17 +17,23 @@ import {
   Eye, 
   Info,
   RefreshCw,
-  FileText
+  FileText,
+  FileCheck,
+  AlertTriangle,
+  ChevronDown,
+  ChevronUp,
+  X
 } from 'lucide-react';
 import { useBranding } from '../../context/BrandingContext';
 import { useLanguage } from '../../i18n/LanguageContext';
+import { useAuth } from '../../context/AuthContext';
 import { AsfourLogo } from '../common/AsfourLogo';
 import { DeveloperBadge } from '../common/DeveloperBadge';
+import { ALLOWED_IMAGE_TYPES, MAX_FILE_SIZE_BYTES } from '../../services/brandingService';
 
 export const BrandingView: React.FC = () => {
   const { 
     branding, 
-    isSaving, 
     isLoading,
     uploadAndSaveLogo, 
     uploadAndSaveDeveloperImage, 
@@ -40,143 +46,36 @@ export const BrandingView: React.FC = () => {
     developerImageSrc
   } = useBranding();
 
-  const { language, t } = useLanguage();
+  const { language } = useLanguage();
+  const { isSuperAdmin, currentUser } = useAuth();
 
-  // Local pending file states
+  // Independent Logo Upload State
   const [logoFile, setLogoFile] = useState<File | null>(null);
   const [logoPreviewUrl, setLogoPreviewUrl] = useState<string | null>(null);
-  const [logoDragActive, setLogoDragActive] = useState(false);
+  const [logoDragActive, setLogoDragActive] = useState<boolean>(false);
+  const [logoUploading, setLogoUploading] = useState<boolean>(false);
+  const [logoProgress, setLogoProgress] = useState<number>(0);
+  const [logoError, setLogoError] = useState<{ message: string; raw?: string; code?: string } | null>(null);
+  const [logoSuccess, setLogoSuccess] = useState<string | null>(null);
+  const [showLogoTechDetails, setShowLogoTechDetails] = useState<boolean>(false);
 
+  // Independent Developer Image Upload State
   const [devFile, setDevFile] = useState<File | null>(null);
   const [devPreviewUrl, setDevPreviewUrl] = useState<string | null>(null);
-  const [devDragActive, setDevDragActive] = useState(false);
+  const [devDragActive, setDevDragActive] = useState<boolean>(false);
+  const [devUploading, setDevUploading] = useState<boolean>(false);
+  const [devProgress, setDevProgress] = useState<number>(0);
+  const [devError, setDevError] = useState<{ message: string; raw?: string; code?: string } | null>(null);
+  const [devSuccess, setDevSuccess] = useState<string | null>(null);
+  const [showDevTechDetails, setShowDevTechDetails] = useState<boolean>(false);
 
-  const [statusMessage, setStatusMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+  // Preview Context Tab
   const [activePreviewTab, setActivePreviewTab] = useState<'sidebar' | 'header' | 'login' | 'print'>('sidebar');
 
   const logoInputRef = useRef<HTMLInputElement>(null);
   const devInputRef = useRef<HTMLInputElement>(null);
 
-  // Logo file selection handler
-  const handleLogoSelect = (file: File) => {
-    if (!file) return;
-    if (!file.type.startsWith('image/')) {
-      setStatusMessage({
-        type: 'error',
-        text: language === 'ar' ? 'يرجى اختيار ملف صورة صالح (PNG, JPEG, WEBP, SVG)' : 'Please select a valid image file (PNG, JPEG, WEBP, SVG)'
-      });
-      return;
-    }
-    setLogoFile(file);
-    const objectUrl = URL.createObjectURL(file);
-    setLogoPreviewUrl(objectUrl);
-    setStatusMessage(null);
-  };
-
-  // Developer file selection handler
-  const handleDevSelect = (file: File) => {
-    if (!file) return;
-    if (!file.type.startsWith('image/')) {
-      setStatusMessage({
-        type: 'error',
-        text: language === 'ar' ? 'يرجى اختيار ملف صورة صالح (PNG, JPEG, WEBP, SVG)' : 'Please select a valid image file (PNG, JPEG, WEBP, SVG)'
-      });
-      return;
-    }
-    setDevFile(file);
-    const objectUrl = URL.createObjectURL(file);
-    setDevPreviewUrl(objectUrl);
-    setStatusMessage(null);
-  };
-
-  // Save Logo
-  const handleUploadLogo = async () => {
-    if (!logoFile) return;
-    try {
-      await uploadAndSaveLogo(logoFile);
-      setLogoFile(null);
-      if (logoPreviewUrl) URL.revokeObjectURL(logoPreviewUrl);
-      setLogoPreviewUrl(null);
-      setStatusMessage({
-        type: 'success',
-        text: language === 'ar' ? 'تم رفع وحفظ شعار الشركة بنجاح في التخزين السحابي' : 'Company logo uploaded and saved successfully to Cloud Storage'
-      });
-    } catch (err: any) {
-      setStatusMessage({
-        type: 'error',
-        text: err?.message || (language === 'ar' ? 'فشل رفع الشعار' : 'Failed to upload company logo')
-      });
-    }
-  };
-
-  // Save Developer Image
-  const handleUploadDev = async () => {
-    if (!devFile) return;
-    try {
-      await uploadAndSaveDeveloperImage(devFile);
-      setDevFile(null);
-      if (devPreviewUrl) URL.revokeObjectURL(devPreviewUrl);
-      setDevPreviewUrl(null);
-      setStatusMessage({
-        type: 'success',
-        text: language === 'ar' ? 'تم رفع وحفظ صورة المطور بنجاح في التخزين السحابي' : 'Developer image uploaded and saved successfully to Cloud Storage'
-      });
-    } catch (err: any) {
-      setStatusMessage({
-        type: 'error',
-        text: err?.message || (language === 'ar' ? 'فشل رفع صورة المطور' : 'Failed to upload developer image')
-      });
-    }
-  };
-
-  // Reset Logo to Default
-  const handleResetLogo = async () => {
-    const confirmText = language === 'ar'
-      ? 'هل أنت متأكد من استعادة شعار الشركة الافتراضي الأصلي؟'
-      : 'Are you sure you want to reset to the original default company logo?';
-    if (!window.confirm(confirmText)) return;
-
-    try {
-      await deleteLogo();
-      setLogoFile(null);
-      if (logoPreviewUrl) URL.revokeObjectURL(logoPreviewUrl);
-      setLogoPreviewUrl(null);
-      setStatusMessage({
-        type: 'success',
-        text: language === 'ar' ? 'تمت استعادة الشعار الأصلي الافتراضي بنجاح' : 'Reset to original default company logo successfully'
-      });
-    } catch (err: any) {
-      setStatusMessage({
-        type: 'error',
-        text: err?.message || 'Error resetting logo'
-      });
-    }
-  };
-
-  // Reset Developer Image to Default
-  const handleResetDev = async () => {
-    const confirmText = language === 'ar'
-      ? 'هل أنت متأكد من استعادة صورة المطور الافتراضية الأصلية؟'
-      : 'Are you sure you want to reset to the original default developer image?';
-    if (!window.confirm(confirmText)) return;
-
-    try {
-      await deleteDeveloperImage();
-      setDevFile(null);
-      if (devPreviewUrl) URL.revokeObjectURL(devPreviewUrl);
-      setDevPreviewUrl(null);
-      setStatusMessage({
-        type: 'success',
-        text: language === 'ar' ? 'تمت استعادة صورة المطور الأصلية بنجاح' : 'Reset to original default developer image successfully'
-      });
-    } catch (err: any) {
-      setStatusMessage({
-        type: 'error',
-        text: err?.message || 'Error resetting developer image'
-      });
-    }
-  };
-
+  // Helpers
   const formatBytes = (bytes?: number | null) => {
     if (!bytes) return '-';
     if (bytes < 1024) return `${bytes} B`;
@@ -191,6 +90,216 @@ export const BrandingView: React.FC = () => {
       return d.toLocaleString(language === 'ar' ? 'ar-EG' : 'en-US');
     } catch {
       return dateStr;
+    }
+  };
+
+  // Logo file selection & pre-validation
+  const handleLogoSelect = (file: File) => {
+    if (!file) return;
+    setLogoError(null);
+    setLogoSuccess(null);
+
+    const type = file.type?.toLowerCase() || '';
+    if (!ALLOWED_IMAGE_TYPES.includes(type)) {
+      setLogoError({
+        message: language === 'ar' 
+          ? 'نوع الملف غير مدعوم (المسموح: PNG, JPG, JPEG, WEBP فقط).' 
+          : 'Unsupported file type (Allowed: PNG, JPG, JPEG, WEBP only).',
+        code: 'validation/invalid-type',
+      });
+      return;
+    }
+
+    if (file.size > MAX_FILE_SIZE_BYTES) {
+      setLogoError({
+        message: language === 'ar'
+          ? `حجم الصورة (${(file.size / (1024 * 1024)).toFixed(2)} ميجابايت) أكبر من الحد المسموح (5 ميجابايت).`
+          : `Image size exceeds the allowed limit of 5MB (${(file.size / (1024 * 1024)).toFixed(2)}MB).`,
+        code: 'validation/size-exceeded',
+      });
+      return;
+    }
+
+    setLogoFile(file);
+    const objectUrl = URL.createObjectURL(file);
+    setLogoPreviewUrl(objectUrl);
+  };
+
+  // Developer image selection & pre-validation
+  const handleDevSelect = (file: File) => {
+    if (!file) return;
+    setDevError(null);
+    setDevSuccess(null);
+
+    const type = file.type?.toLowerCase() || '';
+    if (!ALLOWED_IMAGE_TYPES.includes(type)) {
+      setDevError({
+        message: language === 'ar' 
+          ? 'نوع الملف غير مدعوم (المسموح: PNG, JPG, JPEG, WEBP فقط).' 
+          : 'Unsupported file type (Allowed: PNG, JPG, JPEG, WEBP only).',
+        code: 'validation/invalid-type',
+      });
+      return;
+    }
+
+    if (file.size > MAX_FILE_SIZE_BYTES) {
+      setDevError({
+        message: language === 'ar'
+          ? `حجم الصورة (${(file.size / (1024 * 1024)).toFixed(2)} ميجابايت) أكبر من الحد المسموح (5 ميجابايت).`
+          : `Image size exceeds the allowed limit of 5MB (${(file.size / (1024 * 1024)).toFixed(2)}MB).`,
+        code: 'validation/size-exceeded',
+      });
+      return;
+    }
+
+    setDevFile(file);
+    const objectUrl = URL.createObjectURL(file);
+    setDevPreviewUrl(objectUrl);
+  };
+
+  // Upload Logo handler
+  const handleUploadLogo = async () => {
+    if (!logoFile) return;
+
+    if (!isSuperAdmin && currentUser?.email !== 'ai.mhdiab90@gmail.com') {
+      setLogoError({
+        message: language === 'ar' ? 'غير مصرح برفع الصور (صلاحية المشرف العام مطلوبة)' : 'Not authorized to upload branding assets',
+        code: 'auth/unauthorized'
+      });
+      return;
+    }
+
+    setLogoUploading(true);
+    setLogoProgress(0);
+    setLogoError(null);
+    setLogoSuccess(null);
+
+    try {
+      await uploadAndSaveLogo(logoFile, (progress) => {
+        setLogoProgress(progress);
+      });
+
+      setLogoProgress(100);
+      setLogoSuccess(
+        language === 'ar' 
+          ? 'تم رفع شعار الشركة بنجاح وتثبيته في التخزين السحابي.' 
+          : 'Company logo uploaded successfully and saved to cloud storage.'
+      );
+
+      // Clean pending selection
+      setLogoFile(null);
+      if (logoPreviewUrl) URL.revokeObjectURL(logoPreviewUrl);
+      setLogoPreviewUrl(null);
+    } catch (err: any) {
+      const errMsg = err?.message || (language === 'ar' ? 'تعذر رفع الشعار. تحقق من الاتصال أو الصلاحيات.' : 'Failed to upload company logo.');
+      setLogoError({
+        message: errMsg,
+        raw: String(err),
+        code: err?.code || 'storage/upload-failed',
+      });
+    } finally {
+      setLogoUploading(false);
+    }
+  };
+
+  // Upload Developer Image handler
+  const handleUploadDev = async () => {
+    if (!devFile) return;
+
+    if (!isSuperAdmin && currentUser?.email !== 'ai.mhdiab90@gmail.com') {
+      setDevError({
+        message: language === 'ar' ? 'غير مصرح برفع الصور (صلاحية المشرف العام مطلوبة)' : 'Not authorized to upload branding assets',
+        code: 'auth/unauthorized'
+      });
+      return;
+    }
+
+    setDevUploading(true);
+    setDevProgress(0);
+    setDevError(null);
+    setDevSuccess(null);
+
+    try {
+      await uploadAndSaveDeveloperImage(devFile, (progress) => {
+        setDevProgress(progress);
+      });
+
+      setDevProgress(100);
+      setDevSuccess(
+        language === 'ar' 
+          ? 'تم رفع صورة المطور بنجاح وتثبيتها في التخزين السحابي.' 
+          : 'Developer image uploaded successfully and saved to cloud storage.'
+      );
+
+      // Clean pending selection
+      setDevFile(null);
+      if (devPreviewUrl) URL.revokeObjectURL(devPreviewUrl);
+      setDevPreviewUrl(null);
+    } catch (err: any) {
+      const errMsg = err?.message || (language === 'ar' ? 'تعذر رفع صورة المطور. تحقق من الاتصال أو الصلاحيات.' : 'Failed to upload developer image.');
+      setDevError({
+        message: errMsg,
+        raw: String(err),
+        code: err?.code || 'storage/upload-failed',
+      });
+    } finally {
+      setDevUploading(false);
+    }
+  };
+
+  // Reset / Delete Logo
+  const handleResetLogo = async () => {
+    const confirmText = language === 'ar'
+      ? 'هل أنت متأكد من حذف الصورة واستعادة الشعار الأصلي الافتراضي؟'
+      : 'Are you sure you want to delete this image and restore the default logo?';
+    if (!window.confirm(confirmText)) return;
+
+    setLogoError(null);
+    setLogoSuccess(null);
+
+    try {
+      await deleteLogo();
+      setLogoFile(null);
+      if (logoPreviewUrl) URL.revokeObjectURL(logoPreviewUrl);
+      setLogoPreviewUrl(null);
+      setLogoSuccess(
+        language === 'ar' 
+          ? 'تمت استعادة الشعار الأصلي الافتراضي بنجاح.' 
+          : 'Reset to original default company logo successfully.'
+      );
+    } catch (err: any) {
+      setLogoError({
+        message: err?.message || (language === 'ar' ? 'فشل حذف الشعار' : 'Failed to delete logo'),
+        raw: String(err),
+      });
+    }
+  };
+
+  // Reset / Delete Developer Image
+  const handleResetDev = async () => {
+    const confirmText = language === 'ar'
+      ? 'هل أنت متأكد من حذف الصورة واستعادة صورة المطور الافتراضية؟'
+      : 'Are you sure you want to delete this image and restore the default developer image?';
+    if (!window.confirm(confirmText)) return;
+
+    setDevError(null);
+    setDevSuccess(null);
+
+    try {
+      await deleteDeveloperImage();
+      setDevFile(null);
+      if (devPreviewUrl) URL.revokeObjectURL(devPreviewUrl);
+      setDevPreviewUrl(null);
+      setDevSuccess(
+        language === 'ar' 
+          ? 'تمت استعادة صورة المطور الأصلية بنجاح.' 
+          : 'Reset to original default developer image successfully.'
+      );
+    } catch (err: any) {
+      setDevError({
+        message: err?.message || (language === 'ar' ? 'فشل حذف صورة المطور' : 'Failed to delete developer image'),
+        raw: String(err),
+      });
     }
   };
 
@@ -213,8 +322,8 @@ export const BrandingView: React.FC = () => {
             </div>
             <p className="text-xs text-slate-500 mt-1 leading-relaxed max-w-2xl">
               {language === 'ar'
-                ? 'رفع وتحديث شعار شركة عصفور للتعدين والحراريات وصورة المطور بدون أي تعديل أو توليد اصطناعي، مع الحفاظ الكامل على دقة وجودة الملفات الأصلية.'
-                : 'Upload and update ASFOUR Company Logo and Developer Identity directly to Cloud Storage with 100% original file fidelity and zero AI distortion.'}
+                ? 'رفع وتحديث شعار شركة عصفور للتعدين والحراريات وصورة المطور مباشرة بدون أي تعديل أو توليد اصطناعي، مع الحفاظ الكامل على دقة وجودة الملفات الأصلية.'
+                : 'Upload and update ASFOUR Company Logo and Developer Identity directly to Cloud Storage with 100% original file fidelity.'}
             </p>
           </div>
         </div>
@@ -223,8 +332,8 @@ export const BrandingView: React.FC = () => {
           <button
             type="button"
             onClick={() => refreshBranding()}
-            disabled={isLoading || isSaving}
-            className="inline-flex items-center gap-2 px-3.5 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold transition cursor-pointer"
+            disabled={isLoading || logoUploading || devUploading}
+            className="inline-flex items-center gap-2 px-3.5 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold transition cursor-pointer disabled:opacity-50"
           >
             <RefreshCw className={`w-4 h-4 ${isLoading ? 'animate-spin' : ''}`} />
             <span>{language === 'ar' ? 'تحديث الحالة' : 'Refresh State'}</span>
@@ -232,25 +341,7 @@ export const BrandingView: React.FC = () => {
         </div>
       </div>
 
-      {/* Notification status message */}
-      {statusMessage && (
-        <div
-          className={`p-4 rounded-2xl flex items-center gap-3 border ${
-            statusMessage.type === 'success'
-              ? 'bg-emerald-50 border-emerald-200 text-emerald-800'
-              : 'bg-rose-50 border-rose-200 text-rose-800'
-          }`}
-        >
-          {statusMessage.type === 'success' ? (
-            <CheckCircle2 className="w-5 h-5 text-emerald-600 shrink-0" />
-          ) : (
-            <AlertCircle className="w-5 h-5 text-rose-600 shrink-0" />
-          )}
-          <p className="text-xs font-medium">{statusMessage.text}</p>
-        </div>
-      )}
-
-      {/* Main Upload Columns */}
+      {/* Main Upload Columns: 2 Independent Sections */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         
         {/* =====================================================================
@@ -258,6 +349,7 @@ export const BrandingView: React.FC = () => {
            ===================================================================== */}
         <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-6 flex flex-col justify-between">
           <div>
+            {/* Header */}
             <div className="flex items-center justify-between pb-4 border-b border-slate-100">
               <div className="flex items-center gap-2.5">
                 <span className="w-8 h-8 rounded-xl bg-orange-100 text-orange-600 font-bold flex items-center justify-center text-sm">
@@ -285,21 +377,80 @@ export const BrandingView: React.FC = () => {
               )}
             </div>
 
-            {/* Current Active Preview Box */}
-            <div className="mt-5 p-4 rounded-xl bg-slate-50 border border-slate-200 flex items-center justify-center min-h-[160px]">
+            {/* Logo Status Alerts */}
+            {logoSuccess && (
+              <div className="mt-4 p-3.5 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-800 flex items-start gap-2.5 text-xs">
+                <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />
+                <div className="flex-1">
+                  <p className="font-semibold">{logoSuccess}</p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setLogoSuccess(null)}
+                  className="text-emerald-500 hover:text-emerald-700 p-0.5"
+                >
+                  <X className="w-3.5 h-3.5" />
+                </button>
+              </div>
+            )}
+
+            {logoError && (
+              <div className="mt-4 p-3.5 rounded-xl bg-rose-50 border border-rose-200 text-rose-800 space-y-2 text-xs">
+                <div className="flex items-start gap-2.5">
+                  <AlertCircle className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
+                  <div className="flex-1">
+                    <p className="font-semibold">{logoError.message}</p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setLogoError(null)}
+                    className="text-rose-500 hover:text-rose-700 p-0.5"
+                  >
+                    <X className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+
+                {/* Technical Diagnostic for Super Admin */}
+                {logoError.code && (
+                  <div className="pt-1 border-t border-rose-200/60">
+                    <button
+                      type="button"
+                      onClick={() => setShowLogoTechDetails(!showLogoTechDetails)}
+                      className="text-[11px] font-mono text-rose-700 hover:underline flex items-center gap-1"
+                    >
+                      <span>{language === 'ar' ? 'التفاصيل التقنية للخطأ:' : 'Technical Error Details:'} ({logoError.code})</span>
+                      {showLogoTechDetails ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
+                    </button>
+                    {showLogoTechDetails && (
+                      <pre className="mt-1.5 p-2 rounded bg-rose-100/70 font-mono text-[10px] text-rose-950 overflow-x-auto whitespace-pre-wrap">
+                        {logoError.raw || logoError.message}
+                      </pre>
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Current Active or Pending Preview Box */}
+            <div className="mt-4 p-4 rounded-xl bg-slate-50 border border-slate-200 flex items-center justify-center min-h-[160px]">
               {logoPreviewUrl ? (
-                <div className="flex flex-col items-center gap-2">
-                  <span className="text-[10px] font-bold text-amber-700 bg-amber-100 px-2 py-0.5 rounded-full">
-                    {language === 'ar' ? 'معاينة الملف الجديد قبل الحفظ' : 'New File Preview (Pending Upload)'}
+                <div className="flex flex-col items-center gap-2 w-full">
+                  <span className="text-[10px] font-bold text-amber-700 bg-amber-100 px-2.5 py-0.5 rounded-full flex items-center gap-1">
+                    <FileCheck className="w-3 h-3" />
+                    {language === 'ar' ? 'معاينة الملف المختار (قبل الرفع)' : 'Selected File Preview (Pending Upload)'}
                   </span>
                   <img
                     src={logoPreviewUrl}
                     alt="Logo Preview"
                     className="max-h-28 max-w-full object-contain drop-shadow-sm"
                   />
-                  <span className="text-xs text-slate-600 font-mono">
-                    {logoFile?.name} ({formatBytes(logoFile?.size)})
-                  </span>
+                  <div className="flex items-center gap-3 text-[11px] text-slate-600 font-mono bg-white px-3 py-1 rounded-lg border border-slate-200 shadow-2xs">
+                    <span>{logoFile?.name}</span>
+                    <span className="text-slate-300">|</span>
+                    <span className="font-bold text-orange-600">{formatBytes(logoFile?.size)}</span>
+                    <span className="text-slate-300">|</span>
+                    <span className="text-slate-400">{logoFile?.type || 'image/png'}</span>
+                  </div>
                 </div>
               ) : (
                 <div className="flex flex-col items-center gap-2">
@@ -311,7 +462,7 @@ export const BrandingView: React.FC = () => {
                   <span className="text-xs text-slate-400">
                     {hasCustomLogo 
                       ? (branding.companyLogoFileName || 'Uploaded Custom Logo') 
-                      : (language === 'ar' ? 'الملف الأصلي: /branding/asfour-logo-original.png' : 'Original file: /branding/asfour-logo-original.png')}
+                      : (language === 'ar' ? 'الشعار الأصلي الافتراضي' : 'Default Asset')}
                   </span>
                 </div>
               )}
@@ -332,7 +483,7 @@ export const BrandingView: React.FC = () => {
                 }
               }}
               onClick={() => logoInputRef.current?.click()}
-              className={`mt-4 p-6 rounded-2xl border-2 border-dashed transition cursor-pointer flex flex-col items-center justify-center text-center ${
+              className={`mt-4 p-5 rounded-2xl border-2 border-dashed transition cursor-pointer flex flex-col items-center justify-center text-center ${
                 logoDragActive
                   ? 'border-orange-500 bg-orange-50/50'
                   : 'border-slate-300 hover:border-orange-400 hover:bg-slate-50/70'
@@ -341,7 +492,7 @@ export const BrandingView: React.FC = () => {
               <input
                 ref={logoInputRef}
                 type="file"
-                accept="image/png, image/jpeg, image/jpg, image/webp, image/svg+xml"
+                accept="image/png, image/jpeg, image/jpg, image/webp"
                 onChange={(e) => {
                   if (e.target.files && e.target.files[0]) {
                     handleLogoSelect(e.target.files[0]);
@@ -349,16 +500,38 @@ export const BrandingView: React.FC = () => {
                 }}
                 className="hidden"
               />
-              <Upload className="w-8 h-8 text-orange-500 mb-2" />
+              <Upload className="w-7 h-7 text-orange-500 mb-1.5" />
               <p className="text-xs font-bold text-slate-800">
                 {language === 'ar' ? 'انقر لاختيار ملف الشعار أو اسحبه وأفلته هنا' : 'Click to select logo file or drag & drop here'}
               </p>
-              <p className="text-[11px] text-slate-500 mt-1">
-                {language === 'ar' ? 'يدعم PNG, JPG, JPEG, WEBP, SVG حتى 10 ميجابايت' : 'Supports PNG, JPG, WEBP, SVG up to 10MB'}
+              <p className="text-[11px] text-slate-500 mt-0.5">
+                {language === 'ar' ? 'PNG, JPG, JPEG, WEBP حتى 5 ميجابايت' : 'PNG, JPG, JPEG, WEBP up to 5MB'}
               </p>
             </div>
 
-            {/* Metadata info */}
+            {/* Real Progress Bar during upload */}
+            {logoUploading && (
+              <div className="mt-4 p-3.5 rounded-xl bg-orange-50/70 border border-orange-200 space-y-2">
+                <div className="flex items-center justify-between text-xs font-bold text-orange-900">
+                  <span className="flex items-center gap-1.5">
+                    <RefreshCw className="w-3.5 h-3.5 animate-spin text-orange-600" />
+                    {language === 'ar' ? `جاري الرفع ${logoProgress}%` : `Uploading ${logoProgress}%`}
+                  </span>
+                  <span className="font-mono">{logoProgress}%</span>
+                </div>
+                <div className="w-full h-2 rounded-full bg-orange-200 overflow-hidden">
+                  <div 
+                    className="h-full bg-gradient-to-r from-orange-500 to-amber-500 transition-all duration-300 rounded-full"
+                    style={{ width: `${Math.max(logoProgress, 5)}%` }}
+                  />
+                </div>
+                <p className="text-[10px] text-orange-700 text-center">
+                  {language === 'ar' ? 'يتم الرفع المباشر إلى Firebase Cloud Storage...' : 'Uploading directly to Firebase Cloud Storage...'}
+                </p>
+              </div>
+            )}
+
+            {/* Saved Metadata Info */}
             {hasCustomLogo && (
               <div className="mt-4 p-3.5 rounded-xl bg-slate-50 border border-slate-200 text-xs text-slate-600 space-y-1">
                 <div className="flex justify-between">
@@ -384,11 +557,15 @@ export const BrandingView: React.FC = () => {
                 <button
                   type="button"
                   onClick={handleUploadLogo}
-                  disabled={isSaving}
+                  disabled={logoUploading}
                   className="flex-1 inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl bg-orange-600 hover:bg-orange-700 text-white text-xs font-bold shadow-md shadow-orange-600/20 transition cursor-pointer disabled:opacity-50"
                 >
                   <Upload className="w-4 h-4" />
-                  <span>{isSaving ? (language === 'ar' ? 'جارٍ الرفع والحفظ...' : 'Uploading...') : (language === 'ar' ? 'حفظ وتثبيت الشعار' : 'Save & Publish Logo')}</span>
+                  <span>
+                    {logoUploading 
+                      ? (language === 'ar' ? `جاري الرفع (${logoProgress}%)...` : `Uploading (${logoProgress}%)...`)
+                      : (language === 'ar' ? 'تأكيد وحفظ الشعار' : 'Confirm & Upload Logo')}
+                  </span>
                 </button>
                 <button
                   type="button"
@@ -396,10 +573,30 @@ export const BrandingView: React.FC = () => {
                     setLogoFile(null);
                     if (logoPreviewUrl) URL.revokeObjectURL(logoPreviewUrl);
                     setLogoPreviewUrl(null);
+                    setLogoError(null);
                   }}
-                  className="px-3.5 py-2.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold transition cursor-pointer"
+                  disabled={logoUploading}
+                  className="px-3.5 py-2.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold transition cursor-pointer disabled:opacity-50"
                 >
                   {language === 'ar' ? 'إلغاء' : 'Cancel'}
+                </button>
+              </div>
+            ) : logoError ? (
+              <div className="flex items-center gap-2 w-full">
+                <button
+                  type="button"
+                  onClick={() => logoInputRef.current?.click()}
+                  className="flex-1 inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl bg-orange-600 hover:bg-orange-700 text-white text-xs font-bold transition cursor-pointer"
+                >
+                  <RotateCcw className="w-4 h-4" />
+                  <span>{language === 'ar' ? 'إعادة المحاولة' : 'Retry Upload'}</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setLogoError(null)}
+                  className="px-3.5 py-2.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold transition cursor-pointer"
+                >
+                  {language === 'ar' ? 'إغلاق' : 'Dismiss'}
                 </button>
               </div>
             ) : (
@@ -417,11 +614,11 @@ export const BrandingView: React.FC = () => {
                   <button
                     type="button"
                     onClick={handleResetLogo}
-                    disabled={isSaving}
+                    disabled={logoUploading}
                     className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl text-rose-600 hover:bg-rose-50 text-xs font-semibold transition cursor-pointer"
                   >
-                    <RotateCcw className="w-3.5 h-3.5" />
-                    <span>{language === 'ar' ? 'استعادة الافتراضي' : 'Reset to Default'}</span>
+                    <Trash2 className="w-3.5 h-3.5" />
+                    <span>{language === 'ar' ? 'حذف واستعادة الافتراضي' : 'Reset to Default'}</span>
                   </button>
                 )}
               </>
@@ -434,6 +631,7 @@ export const BrandingView: React.FC = () => {
            ===================================================================== */}
         <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-6 flex flex-col justify-between">
           <div>
+            {/* Header */}
             <div className="flex items-center justify-between pb-4 border-b border-slate-100">
               <div className="flex items-center gap-2.5">
                 <span className="w-8 h-8 rounded-xl bg-indigo-100 text-indigo-600 font-bold flex items-center justify-center text-sm">
@@ -461,12 +659,67 @@ export const BrandingView: React.FC = () => {
               )}
             </div>
 
-            {/* Current Active Preview Box */}
-            <div className="mt-5 p-4 rounded-xl bg-slate-50 border border-slate-200 flex items-center justify-center min-h-[160px]">
+            {/* Developer Status Alerts */}
+            {devSuccess && (
+              <div className="mt-4 p-3.5 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-800 flex items-start gap-2.5 text-xs">
+                <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />
+                <div className="flex-1">
+                  <p className="font-semibold">{devSuccess}</p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setDevSuccess(null)}
+                  className="text-emerald-500 hover:text-emerald-700 p-0.5"
+                >
+                  <X className="w-3.5 h-3.5" />
+                </button>
+              </div>
+            )}
+
+            {devError && (
+              <div className="mt-4 p-3.5 rounded-xl bg-rose-50 border border-rose-200 text-rose-800 space-y-2 text-xs">
+                <div className="flex items-start gap-2.5">
+                  <AlertCircle className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
+                  <div className="flex-1">
+                    <p className="font-semibold">{devError.message}</p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setDevError(null)}
+                    className="text-rose-500 hover:text-rose-700 p-0.5"
+                  >
+                    <X className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+
+                {/* Technical Diagnostic for Super Admin */}
+                {devError.code && (
+                  <div className="pt-1 border-t border-rose-200/60">
+                    <button
+                      type="button"
+                      onClick={() => setShowDevTechDetails(!showDevTechDetails)}
+                      className="text-[11px] font-mono text-rose-700 hover:underline flex items-center gap-1"
+                    >
+                      <span>{language === 'ar' ? 'التفاصيل التقنية للخطأ:' : 'Technical Error Details:'} ({devError.code})</span>
+                      {showDevTechDetails ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
+                    </button>
+                    {showDevTechDetails && (
+                      <pre className="mt-1.5 p-2 rounded bg-rose-100/70 font-mono text-[10px] text-rose-950 overflow-x-auto whitespace-pre-wrap">
+                        {devError.raw || devError.message}
+                      </pre>
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Current Active or Pending Preview Box */}
+            <div className="mt-4 p-4 rounded-xl bg-slate-50 border border-slate-200 flex items-center justify-center min-h-[160px]">
               {devPreviewUrl ? (
-                <div className="flex flex-col items-center gap-2">
-                  <span className="text-[10px] font-bold text-indigo-700 bg-indigo-100 px-2 py-0.5 rounded-full">
-                    {language === 'ar' ? 'معاينة الصورة الجديدة قبل الحفظ' : 'New Image Preview (Pending Upload)'}
+                <div className="flex flex-col items-center gap-2 w-full">
+                  <span className="text-[10px] font-bold text-indigo-700 bg-indigo-100 px-2.5 py-0.5 rounded-full flex items-center gap-1">
+                    <FileCheck className="w-3 h-3" />
+                    {language === 'ar' ? 'معاينة الصورة المختارة (قبل الرفع)' : 'Selected Photo Preview (Pending Upload)'}
                   </span>
                   <div className="w-24 h-24 rounded-full overflow-hidden border-2 border-indigo-500 shadow-md">
                     <img
@@ -475,9 +728,13 @@ export const BrandingView: React.FC = () => {
                       className="w-full h-full object-cover"
                     />
                   </div>
-                  <span className="text-xs text-slate-600 font-mono">
-                    {devFile?.name} ({formatBytes(devFile?.size)})
-                  </span>
+                  <div className="flex items-center gap-3 text-[11px] text-slate-600 font-mono bg-white px-3 py-1 rounded-lg border border-slate-200 shadow-2xs">
+                    <span>{devFile?.name}</span>
+                    <span className="text-slate-300">|</span>
+                    <span className="font-bold text-indigo-600">{formatBytes(devFile?.size)}</span>
+                    <span className="text-slate-300">|</span>
+                    <span className="text-slate-400">{devFile?.type || 'image/jpeg'}</span>
+                  </div>
                 </div>
               ) : (
                 <div className="flex flex-col items-center gap-2">
@@ -491,7 +748,7 @@ export const BrandingView: React.FC = () => {
                   <span className="text-xs text-slate-400">
                     {hasCustomDeveloperImage 
                       ? (branding.developerImageFileName || 'Uploaded Developer Photo') 
-                      : (language === 'ar' ? 'الملف الأصلي: /branding/developer-original.png' : 'Original file: /branding/developer-original.png')}
+                      : (language === 'ar' ? 'صورة المطور الأصلية' : 'Default Asset')}
                   </span>
                 </div>
               )}
@@ -512,7 +769,7 @@ export const BrandingView: React.FC = () => {
                 }
               }}
               onClick={() => devInputRef.current?.click()}
-              className={`mt-4 p-6 rounded-2xl border-2 border-dashed transition cursor-pointer flex flex-col items-center justify-center text-center ${
+              className={`mt-4 p-5 rounded-2xl border-2 border-dashed transition cursor-pointer flex flex-col items-center justify-center text-center ${
                 devDragActive
                   ? 'border-indigo-500 bg-indigo-50/50'
                   : 'border-slate-300 hover:border-indigo-400 hover:bg-slate-50/70'
@@ -529,16 +786,38 @@ export const BrandingView: React.FC = () => {
                 }}
                 className="hidden"
               />
-              <Upload className="w-8 h-8 text-indigo-500 mb-2" />
+              <Upload className="w-7 h-7 text-indigo-500 mb-1.5" />
               <p className="text-xs font-bold text-slate-800">
                 {language === 'ar' ? 'انقر لاختيار صورة المطور أو اسحبها وأفلتها هنا' : 'Click to select developer photo or drag & drop here'}
               </p>
-              <p className="text-[11px] text-slate-500 mt-1">
-                {language === 'ar' ? 'يدعم PNG, JPG, JPEG, WEBP حتى 10 ميجابايت' : 'Supports PNG, JPG, WEBP up to 10MB'}
+              <p className="text-[11px] text-slate-500 mt-0.5">
+                {language === 'ar' ? 'PNG, JPG, JPEG, WEBP حتى 5 ميجابايت' : 'PNG, JPG, JPEG, WEBP up to 5MB'}
               </p>
             </div>
 
-            {/* Metadata info */}
+            {/* Real Progress Bar during upload */}
+            {devUploading && (
+              <div className="mt-4 p-3.5 rounded-xl bg-indigo-50/70 border border-indigo-200 space-y-2">
+                <div className="flex items-center justify-between text-xs font-bold text-indigo-900">
+                  <span className="flex items-center gap-1.5">
+                    <RefreshCw className="w-3.5 h-3.5 animate-spin text-indigo-600" />
+                    {language === 'ar' ? `جاري الرفع ${devProgress}%` : `Uploading ${devProgress}%`}
+                  </span>
+                  <span className="font-mono">{devProgress}%</span>
+                </div>
+                <div className="w-full h-2 rounded-full bg-indigo-200 overflow-hidden">
+                  <div 
+                    className="h-full bg-gradient-to-r from-indigo-500 to-purple-500 transition-all duration-300 rounded-full"
+                    style={{ width: `${Math.max(devProgress, 5)}%` }}
+                  />
+                </div>
+                <p className="text-[10px] text-indigo-700 text-center">
+                  {language === 'ar' ? 'يتم الرفع المباشر إلى Firebase Cloud Storage...' : 'Uploading directly to Firebase Cloud Storage...'}
+                </p>
+              </div>
+            )}
+
+            {/* Saved Metadata Info */}
             {hasCustomDeveloperImage && (
               <div className="mt-4 p-3.5 rounded-xl bg-slate-50 border border-slate-200 text-xs text-slate-600 space-y-1">
                 <div className="flex justify-between">
@@ -564,11 +843,15 @@ export const BrandingView: React.FC = () => {
                 <button
                   type="button"
                   onClick={handleUploadDev}
-                  disabled={isSaving}
+                  disabled={devUploading}
                   className="flex-1 inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold shadow-md shadow-indigo-600/20 transition cursor-pointer disabled:opacity-50"
                 >
                   <Upload className="w-4 h-4" />
-                  <span>{isSaving ? (language === 'ar' ? 'جارٍ الرفع والحفظ...' : 'Uploading...') : (language === 'ar' ? 'حفظ وتثبيت الصورة' : 'Save & Publish Photo')}</span>
+                  <span>
+                    {devUploading 
+                      ? (language === 'ar' ? `جاري الرفع (${devProgress}%)...` : `Uploading (${devProgress}%)...`)
+                      : (language === 'ar' ? 'تأكيد وحفظ الصورة' : 'Confirm & Upload Photo')}
+                  </span>
                 </button>
                 <button
                   type="button"
@@ -576,10 +859,30 @@ export const BrandingView: React.FC = () => {
                     setDevFile(null);
                     if (devPreviewUrl) URL.revokeObjectURL(devPreviewUrl);
                     setDevPreviewUrl(null);
+                    setDevError(null);
                   }}
-                  className="px-3.5 py-2.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold transition cursor-pointer"
+                  disabled={devUploading}
+                  className="px-3.5 py-2.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold transition cursor-pointer disabled:opacity-50"
                 >
                   {language === 'ar' ? 'إلغاء' : 'Cancel'}
+                </button>
+              </div>
+            ) : devError ? (
+              <div className="flex items-center gap-2 w-full">
+                <button
+                  type="button"
+                  onClick={() => devInputRef.current?.click()}
+                  className="flex-1 inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold transition cursor-pointer"
+                >
+                  <RotateCcw className="w-4 h-4" />
+                  <span>{language === 'ar' ? 'إعادة المحاولة' : 'Retry Upload'}</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setDevError(null)}
+                  className="px-3.5 py-2.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold transition cursor-pointer"
+                >
+                  {language === 'ar' ? 'إغلاق' : 'Dismiss'}
                 </button>
               </div>
             ) : (
@@ -597,11 +900,11 @@ export const BrandingView: React.FC = () => {
                   <button
                     type="button"
                     onClick={handleResetDev}
-                    disabled={isSaving}
+                    disabled={devUploading}
                     className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl text-rose-600 hover:bg-rose-50 text-xs font-semibold transition cursor-pointer"
                   >
-                    <RotateCcw className="w-3.5 h-3.5" />
-                    <span>{language === 'ar' ? 'استعادة الافتراضي' : 'Reset to Default'}</span>
+                    <Trash2 className="w-3.5 h-3.5" />
+                    <span>{language === 'ar' ? 'حذف واستعادة الافتراضي' : 'Reset to Default'}</span>
                   </button>
                 )}
               </>

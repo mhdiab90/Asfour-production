@@ -165,7 +165,7 @@ service cloud.firestore {
 
     // System Settings
     match /system_settings/{settingId} {
-      allow read: if isSignedIn();
+      allow read: if settingId == 'branding' || isSignedIn();
       allow write: if isAdmin();
     }
 

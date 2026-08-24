@@ -8,8 +8,7 @@ import {
   DEFAULT_BRANDING, 
   getBrandingSettings, 
   subscribeBrandingSettings, 
-  uploadBrandingFile, 
-  saveBrandingSettings, 
+  uploadAndReplaceBrandingAsset, 
   deleteBrandingAsset 
 } from '../services/brandingService';
 
@@ -26,8 +25,8 @@ interface BrandingContextType {
   hasCustomLogo: boolean;
   hasCustomDeveloperImage: boolean;
   refreshBranding: () => Promise<void>;
-  uploadAndSaveLogo: (file: File) => Promise<void>;
-  uploadAndSaveDeveloperImage: (file: File) => Promise<void>;
+  uploadAndSaveLogo: (file: File, onProgress?: (percent: number) => void) => Promise<void>;
+  uploadAndSaveDeveloperImage: (file: File, onProgress?: (percent: number) => void) => Promise<void>;
   deleteLogo: () => Promise<void>;
   deleteDeveloperImage: () => Promise<void>;
 }
@@ -69,19 +68,11 @@ export const BrandingProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     }
   }, []);
 
-  const uploadAndSaveLogo = useCallback(async (file: File) => {
+  const uploadAndSaveLogo = useCallback(async (file: File, onProgress?: (percent: number) => void) => {
     setIsSaving(true);
     setError(null);
     try {
-      const uploaded = await uploadBrandingFile(file, 'company_logo');
-      await saveBrandingSettings({
-        companyLogoUrl: uploaded.downloadUrl,
-        companyLogoPath: uploaded.storagePath,
-        companyLogoFileName: uploaded.fileName,
-        companyLogoContentType: uploaded.contentType,
-        companyLogoSize: uploaded.size,
-        companyLogoUpdatedAt: new Date().toISOString(),
-      });
+      await uploadAndReplaceBrandingAsset(file, 'company_logo', branding.companyLogoPath, onProgress);
       await refreshBranding();
     } catch (err: any) {
       setError(err?.message || 'Failed to upload company logo');
@@ -89,21 +80,13 @@ export const BrandingProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     } finally {
       setIsSaving(false);
     }
-  }, [refreshBranding]);
+  }, [branding.companyLogoPath, refreshBranding]);
 
-  const uploadAndSaveDeveloperImage = useCallback(async (file: File) => {
+  const uploadAndSaveDeveloperImage = useCallback(async (file: File, onProgress?: (percent: number) => void) => {
     setIsSaving(true);
     setError(null);
     try {
-      const uploaded = await uploadBrandingFile(file, 'developer');
-      await saveBrandingSettings({
-        developerImageUrl: uploaded.downloadUrl,
-        developerImagePath: uploaded.storagePath,
-        developerImageFileName: uploaded.fileName,
-        developerImageContentType: uploaded.contentType,
-        developerImageSize: uploaded.size,
-        developerImageUpdatedAt: new Date().toISOString(),
-      });
+      await uploadAndReplaceBrandingAsset(file, 'developer', branding.developerImagePath, onProgress);
       await refreshBranding();
     } catch (err: any) {
       setError(err?.message || 'Failed to upload developer image');
@@ -111,7 +94,7 @@ export const BrandingProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     } finally {
       setIsSaving(false);
     }
-  }, [refreshBranding]);
+  }, [branding.developerImagePath, refreshBranding]);
 
   const deleteLogo = useCallback(async () => {
     setIsSaving(true);
