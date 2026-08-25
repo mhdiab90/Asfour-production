@@ -58,7 +58,7 @@ export const ProductionEntryForm: React.FC<ProductionEntryFormProps> = ({ onNavi
   const [employees, setEmployees] = useState<Employee[]>([]);
   const [isLoadingData, setIsLoadingData] = useState<boolean>(true);
 
-  // Form selections & values
+  // Form selections & values - Starts completely empty for a clean new production record
   const [date, setDate] = useState<string>(new Date().toISOString().split('T')[0]);
   const [shiftId, setShiftId] = useState<string>('');
   const [pressId, setPressId] = useState<string>('');
@@ -69,13 +69,13 @@ export const ProductionEntryForm: React.FC<ProductionEntryFormProps> = ({ onNavi
   const [customerOrderNumber, setCustomerOrderNumber] = useState<string>('');
   const [productId, setProductId] = useState<string>('');
   const [aluminaPercentage, setAluminaPercentage] = useState<number>(0);
-  const [pieceWeight, setPieceWeight] = useState<number>(4.5);
+  const [pieceWeight, setPieceWeight] = useState<number>(0);
 
-  // Quantities
-  const [productionQuantity, setProductionQuantity] = useState<number>(500);
-  const [wasteQuantity, setWasteQuantity] = useState<number>(15);
+  // Quantities - Starts empty (0) for new entry
+  const [productionQuantity, setProductionQuantity] = useState<number>(0);
+  const [wasteQuantity, setWasteQuantity] = useState<number>(0);
 
-  // Faults / Downtime in minutes
+  // Faults / Downtime in minutes - Starts empty (0)
   const [mechanicalFaults, setMechanicalFaults] = useState<number>(0);
   const [electricalFaults, setElectricalFaults] = useState<number>(0);
   const [workshopFaults, setWorkshopFaults] = useState<number>(0);
@@ -89,7 +89,46 @@ export const ProductionEntryForm: React.FC<ProductionEntryFormProps> = ({ onNavi
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
-  // Load active master data on mount
+  /**
+   * Authoritative Form Reset Function
+   * Resets ALL production-entry state to a pristine, clean new record state.
+   * Clears: employees, furnace cars, press, furnace, customer, order, shift, product,
+   * alumina, piece weight, quantities, faults, notes, errors, and resets focus.
+   */
+  const resetProductionForm = (preserveDate: boolean = true) => {
+    if (!preserveDate) {
+      setDate(new Date().toISOString().split('T')[0]);
+    }
+    setShiftId('');
+    setPressId('');
+    setFurnaceId('');
+    setSelectedCarIds([]);
+    setSelectedEmployeeIds([]);
+    setCustomerId('');
+    setCustomerOrderNumber('');
+    setProductId('');
+    setAluminaPercentage(0);
+    setPieceWeight(0);
+    setProductionQuantity(0);
+    setWasteQuantity(0);
+    setMechanicalFaults(0);
+    setElectricalFaults(0);
+    setWorkshopFaults(0);
+    setRawMaterialFaults(0);
+    setFurnaceFaults(0);
+    setPressFaults(0);
+    setOtherFaults(0);
+    setNotes('');
+    setErrorMessage(null);
+
+    // Focus the first logical input for instant continuous entry
+    setTimeout(() => {
+      const firstInput = document.getElementById('production-date-input') || document.getElementById('shift-select-trigger');
+      firstInput?.focus();
+    }, 50);
+  };
+
+  // Load active master data on mount without auto-filling default selections
   useEffect(() => {
     async function loadAllMasterData() {
       setIsLoadingData(true);
@@ -120,15 +159,7 @@ export const ProductionEntryForm: React.FC<ProductionEntryFormProps> = ({ onNavi
         setCustomers(activeCustomers);
         setEmployees(activeEmployees);
 
-        // Initial default selections if empty
-        if (activeShifts.length > 0 && !shiftId) setShiftId(activeShifts[0].id || '');
-        if (activePresses.length > 0 && !pressId) setPressId(activePresses[0].id || '');
-        if (activeProducts.length > 0 && !productId) {
-          const firstProd = activeProducts[0];
-          setProductId(firstProd.id || '');
-          setAluminaPercentage(firstProd.aluminaPercentage ?? 0);
-          setPieceWeight(firstProd.pieceWeight || firstProd.pieceWeightKg || 4.5);
-        }
+        // DO NOT auto-select shift, press, or product - Keep form pristine & empty
       } catch (err) {
         console.error('Error loading master data:', err);
       } finally {
@@ -147,11 +178,12 @@ export const ProductionEntryForm: React.FC<ProductionEntryFormProps> = ({ onNavi
       if (prod) {
         setAluminaPercentage(prod.aluminaPercentage ?? 0);
         if (prod.pieceWeight || prod.pieceWeightKg) {
-          setPieceWeight(prod.pieceWeight || prod.pieceWeightKg || 4.5);
+          setPieceWeight(prod.pieceWeight || prod.pieceWeightKg || 0);
         }
       }
     } else {
       setAluminaPercentage(0);
+      setPieceWeight(0);
     }
   };
 
@@ -294,8 +326,12 @@ export const ProductionEntryForm: React.FC<ProductionEntryFormProps> = ({ onNavi
       setErrorMessage('يرجى اختيار المنتج الحراري.');
       return;
     }
-    if (productionQuantity <= 0) {
-      setErrorMessage('إجمالي كمية الإنتاج يجب أن تكون أكبر من الصفر.');
+    if (!productionQuantity || productionQuantity <= 0) {
+      setErrorMessage('إجمالي كمية الإنتاج المكبوسة يجب أن تكون أكبر من الصفر.');
+      return;
+    }
+    if (!pieceWeight || pieceWeight <= 0) {
+      setErrorMessage('يرجى تحديد وزن القطعة بالكيلوجرام.');
       return;
     }
     if (wasteQuantity > productionQuantity) {
@@ -327,7 +363,7 @@ export const ProductionEntryForm: React.FC<ProductionEntryFormProps> = ({ onNavi
 
         // Quantities & Calculations
         productionQuantity,
-        wasteQuantity,
+        wasteQuantity: wasteQuantity || 0,
         mechanicalFaults: mechanicalFaults || 0,
         electricalFaults: electricalFaults || 0,
         workshopFaults: workshopFaults || 0,
@@ -372,7 +408,7 @@ export const ProductionEntryForm: React.FC<ProductionEntryFormProps> = ({ onNavi
       if (currentProduct?.productTypeName) newRecordData.productTypeName = currentProduct.productTypeName;
       if (currentProduct?.productTypeId) newRecordData.productTypeId = currentProduct.productTypeId;
 
-      // Optional Customer: If selected, write stable ID + name + code; If not selected, OMIT COMPLETELY
+      // Optional Customer: If selected, write stable ID + name + code
       if (customerId && currentCustomer) {
         newRecordData.customerId = customerId;
         newRecordData.customerName = currentCustomer.name || currentCustomer.company || 'عميل';
@@ -386,19 +422,12 @@ export const ProductionEntryForm: React.FC<ProductionEntryFormProps> = ({ onNavi
 
       setSuccessMessage('تم تسجيل وحفظ عملية الإنتاج بنجاح في قاعدة بيانات Firestore السحابية!');
       
-      // Reset dynamic inputs for next entry
-      setWasteQuantity(0);
-      setMechanicalFaults(0);
-      setElectricalFaults(0);
-      setWorkshopFaults(0);
-      setRawMaterialFaults(0);
-      setFurnaceFaults(0);
-      setPressFaults(0);
-      setOtherFaults(0);
-      setNotes('');
+      // CRITICAL: Complete form reset after successful save - form starts completely empty
+      resetProductionForm(true);
 
       if (onSuccess) onSuccess();
     } catch (err: any) {
+      // Save failure preserves all entered data untouched
       setErrorMessage(err.message || 'حدث خطأ أثناء حفظ سجل الإنتاج.');
     } finally {
       setIsSubmitting(false);
@@ -408,7 +437,7 @@ export const ProductionEntryForm: React.FC<ProductionEntryFormProps> = ({ onNavi
   return (
     <div id="production-entry-container" className="space-y-6 max-w-5xl mx-auto">
       {/* Header card with quick actions */}
-      <div className="bg-white rounded-2xl p-5 border border-slate-200 shadow-xs flex items-center justify-between gap-4">
+      <div className="bg-white rounded-2xl p-5 border border-slate-200 shadow-xs flex flex-wrap items-center justify-between gap-4">
         <div>
           <h2 className="text-base font-black text-slate-900 flex items-center gap-2">
             <Factory className="w-5 h-5 text-red-600" />
@@ -419,14 +448,27 @@ export const ProductionEntryForm: React.FC<ProductionEntryFormProps> = ({ onNavi
           </p>
         </div>
 
-        <button
-          type="button"
-          id="btn-view-all-records"
-          onClick={() => onNavigate('production-records')}
-          className="px-4 py-2 text-xs font-bold text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-xl transition-colors cursor-pointer"
-        >
-          عرض كافة السجلات &larr;
-        </button>
+        <div className="flex items-center gap-2.5">
+          <button
+            type="button"
+            id="btn-new-production-record"
+            onClick={() => resetProductionForm(false)}
+            className="px-3.5 py-2 text-xs font-bold text-slate-700 bg-white hover:bg-slate-50 border border-slate-200 rounded-xl transition-colors cursor-pointer flex items-center gap-1.5 shadow-2xs"
+            title="تفريغ كافة الحقول لبدء تشغيلة جديدة"
+          >
+            <RotateCcw className="w-3.5 h-3.5 text-slate-500" />
+            <span>سجل إنتاج جديد (تفريغ الحقول)</span>
+          </button>
+
+          <button
+            type="button"
+            id="btn-view-all-records"
+            onClick={() => onNavigate('production-records')}
+            className="px-4 py-2 text-xs font-bold text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-xl transition-colors cursor-pointer"
+          >
+            عرض كافة السجلات &larr;
+          </button>
+        </div>
       </div>
 
       {/* Success Notification Banner */}
@@ -435,18 +477,22 @@ export const ProductionEntryForm: React.FC<ProductionEntryFormProps> = ({ onNavi
           <CheckCircle2 className="w-5 h-5 text-emerald-600 shrink-0 mt-0.5" />
           <div className="flex-1">
             <p className="font-bold text-sm text-emerald-900">{successMessage}</p>
-            <div className="mt-2 flex items-center gap-2">
+            <p className="text-emerald-700 text-xs mt-0.5">تم تفريغ الحقول بالكامل وجاهز لتسجيل التشغيلة التالية مباشرة.</p>
+            <div className="mt-2.5 flex items-center gap-2">
               <button
                 type="button"
                 onClick={() => onNavigate('production-records')}
-                className="px-3.5 py-1.5 bg-emerald-700 hover:bg-emerald-800 text-white font-bold rounded-lg text-xs transition-colors"
+                className="px-3.5 py-1.5 bg-emerald-700 hover:bg-emerald-800 text-white font-bold rounded-lg text-xs transition-colors cursor-pointer"
               >
                 انتقال إلى جدول السجلات
               </button>
               <button
                 type="button"
-                onClick={() => setSuccessMessage(null)}
-                className="px-3.5 py-1.5 bg-white text-emerald-800 border border-emerald-200 font-bold rounded-lg text-xs hover:bg-emerald-50 transition-colors"
+                onClick={() => {
+                  setSuccessMessage(null);
+                  resetProductionForm(true);
+                }}
+                className="px-3.5 py-1.5 bg-white text-emerald-800 border border-emerald-200 font-bold rounded-lg text-xs hover:bg-emerald-50 transition-colors cursor-pointer"
               >
                 تسجيل تشغيلة أخرى
               </button>
@@ -624,8 +670,9 @@ export const ProductionEntryForm: React.FC<ProductionEntryFormProps> = ({ onNavi
                   step="0.01"
                   required
                   min="0.01"
-                  value={pieceWeight}
-                  onChange={(e) => setPieceWeight(Number(e.target.value))}
+                  placeholder="0.00"
+                  value={pieceWeight || ''}
+                  onChange={(e) => setPieceWeight(Number(e.target.value) || 0)}
                   className="w-full bg-white border border-slate-300 rounded-xl px-3.5 py-2.5 text-xs font-bold text-slate-900 focus:outline-none focus:border-red-500 focus:ring-2 focus:ring-red-500/20"
                 />
                 <span className="absolute left-3 top-2.5 text-xs text-slate-400">كجم</span>
@@ -719,8 +766,9 @@ export const ProductionEntryForm: React.FC<ProductionEntryFormProps> = ({ onNavi
                 type="number"
                 required
                 min="1"
-                value={productionQuantity}
-                onChange={(e) => setProductionQuantity(Number(e.target.value))}
+                placeholder="0"
+                value={productionQuantity || ''}
+                onChange={(e) => setProductionQuantity(Number(e.target.value) || 0)}
                 className="w-full bg-slate-900 border border-slate-600 rounded-xl px-4 py-2.5 text-lg font-black text-white focus:outline-none focus:border-red-400"
               />
             </div>
@@ -735,8 +783,9 @@ export const ProductionEntryForm: React.FC<ProductionEntryFormProps> = ({ onNavi
                 type="number"
                 required
                 min="0"
-                value={wasteQuantity}
-                onChange={(e) => setWasteQuantity(Number(e.target.value))}
+                placeholder="0"
+                value={wasteQuantity === 0 ? '' : wasteQuantity}
+                onChange={(e) => setWasteQuantity(Number(e.target.value) || 0)}
                 className="w-full bg-slate-900 border border-slate-600 rounded-xl px-4 py-2.5 text-lg font-black text-rose-400 focus:outline-none focus:border-rose-400"
               />
             </div>

@@ -4,9 +4,10 @@
  * Supports instant search across both Code and Name with Arabic/English normalization.
  * Displays both identifier and human-readable name clearly.
  * Supports single-select and multi-select modes with keyboard accessibility.
+ * Prevents unintended form submission on Enter key.
  */
 import React, { useState, useRef, useEffect, useMemo } from 'react';
-import { Search, X, Check, ChevronDown, User, Box, Flame, Wrench, Clock, Building, Layers } from 'lucide-react';
+import { Search, X, Check, ChevronDown, User, Box, Flame, Wrench, Clock, Building, Layers, AlertCircle } from 'lucide-react';
 import { matchesSearch } from '../../utils/searchUtils';
 
 export interface ComboboxOption {
@@ -96,13 +97,17 @@ export const SearchableCombobox: React.FC<SearchableComboboxProps> = ({
     e.stopPropagation();
     onChange(null);
     setSearchQuery('');
+    setTimeout(() => {
+      inputRef.current?.focus();
+    }, 50);
   };
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (disabled) return;
 
-    if (!isOpen && (e.key === 'ArrowDown' || e.key === 'Enter' || e.key === ' ')) {
+    if (!isOpen && (e.key === 'ArrowDown' || e.key === 'ArrowUp' || e.key === ' ')) {
       e.preventDefault();
+      e.stopPropagation();
       setIsOpen(true);
       return;
     }
@@ -110,19 +115,31 @@ export const SearchableCombobox: React.FC<SearchableComboboxProps> = ({
     if (isOpen) {
       if (e.key === 'ArrowDown') {
         e.preventDefault();
+        e.stopPropagation();
         setHighlightedIndex((prev) => (prev < filteredOptions.length - 1 ? prev + 1 : 0));
       } else if (e.key === 'ArrowUp') {
         e.preventDefault();
+        e.stopPropagation();
         setHighlightedIndex((prev) => (prev > 0 ? prev - 1 : filteredOptions.length - 1));
       } else if (e.key === 'Enter') {
         e.preventDefault();
+        e.stopPropagation();
         if (filteredOptions[highlightedIndex]) {
           handleSelect(filteredOptions[highlightedIndex]);
         }
+      } else if (e.key === 'Tab') {
+        // Tab closes dropdown and lets user navigate to next field without submitting
+        setIsOpen(false);
       } else if (e.key === 'Escape') {
         e.preventDefault();
+        e.stopPropagation();
         setIsOpen(false);
       }
+    } else if (e.key === 'Enter') {
+      // Prevent form submit on Enter even when closed
+      e.preventDefault();
+      e.stopPropagation();
+      setIsOpen(true);
     }
   };
 
@@ -190,6 +207,7 @@ export const SearchableCombobox: React.FC<SearchableComboboxProps> = ({
               type="text"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
+              onKeyDown={handleKeyDown}
               placeholder={selectedOption ? `${selectedOption.code} — ${selectedOption.name}` : placeholder}
               className="w-full bg-transparent border-none outline-none text-sm text-slate-800 placeholder-slate-400 focus:ring-0 p-0"
               onClick={(e) => e.stopPropagation()}
@@ -222,7 +240,7 @@ export const SearchableCombobox: React.FC<SearchableComboboxProps> = ({
               id={id ? `${id}-clear-btn` : undefined}
               type="button"
               onClick={handleClear}
-              className="p-1 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors"
+              className="p-1 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors cursor-pointer"
               title="إلغاء الاختيار"
             >
               <X className="w-3.5 h-3.5" />
@@ -355,6 +373,9 @@ export const MultiSearchableCombobox: React.FC<MultiSearchableComboboxProps> = (
 }) => {
   const [isOpen, setIsOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
+  const [highlightedIndex, setHighlightedIndex] = useState(0);
+  const [duplicateMessage, setDuplicateMessage] = useState<string | null>(null);
+
   const containerRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
@@ -382,20 +403,50 @@ export const MultiSearchableCombobox: React.FC<MultiSearchableComboboxProps> = (
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
 
-  const handleToggleOption = (option: ComboboxOption) => {
-    const isSelected = selectedIds.includes(option.id);
-    let nextIds: string[];
-    let nextOptions: ComboboxOption[];
+  // Reset highlight on search query change
+  useEffect(() => {
+    setHighlightedIndex(0);
+    if (duplicateMessage) setDuplicateMessage(null);
+  }, [searchQuery]);
 
-    if (isSelected) {
-      nextIds = selectedIds.filter((id) => id !== option.id);
-      nextOptions = selectedOptions.filter((opt) => opt.id !== option.id);
-    } else {
-      nextIds = [...selectedIds, option.id];
-      nextOptions = [...selectedOptions, option];
+  // Auto clear duplicate warning after 3.5 seconds
+  useEffect(() => {
+    if (duplicateMessage) {
+      const timer = setTimeout(() => {
+        setDuplicateMessage(null);
+      }, 3500);
+      return () => clearTimeout(timer);
+    }
+  }, [duplicateMessage]);
+
+  const addOption = (option: ComboboxOption) => {
+    if (selectedIds.includes(option.id)) {
+      setDuplicateMessage('هذا البيان تم اختياره بالفعل. / This item has already been selected.');
+      return;
     }
 
+    const nextIds = [...selectedIds, option.id];
+    const nextOptions = [...selectedOptions, option];
     onChange(nextIds, nextOptions);
+    
+    // Clear search input, clear duplicate error, keep focus in input
+    setSearchQuery('');
+    setDuplicateMessage(null);
+    setTimeout(() => {
+      inputRef.current?.focus();
+    }, 30);
+  };
+
+  const handleToggleOption = (option: ComboboxOption) => {
+    const isSelected = selectedIds.includes(option.id);
+    if (isSelected) {
+      const nextIds = selectedIds.filter((id) => id !== option.id);
+      const nextOptions = selectedOptions.filter((opt) => opt.id !== option.id);
+      onChange(nextIds, nextOptions);
+      setDuplicateMessage(null);
+    } else {
+      addOption(option);
+    }
   };
 
   const handleRemove = (optionId: string, e: React.MouseEvent) => {
@@ -403,6 +454,47 @@ export const MultiSearchableCombobox: React.FC<MultiSearchableComboboxProps> = (
     const nextIds = selectedIds.filter((id) => id !== optionId);
     const nextOptions = selectedOptions.filter((opt) => opt.id !== optionId);
     onChange(nextIds, nextOptions);
+    setDuplicateMessage(null);
+    setTimeout(() => {
+      inputRef.current?.focus();
+    }, 30);
+  };
+
+  const handleKeyDown = (e: React.KeyboardEvent) => {
+    if (disabled) return;
+
+    if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      e.stopPropagation();
+      if (!isOpen) {
+        setIsOpen(true);
+      } else {
+        setHighlightedIndex((prev) => (prev < filteredOptions.length - 1 ? prev + 1 : 0));
+      }
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      e.stopPropagation();
+      if (!isOpen) {
+        setIsOpen(true);
+      } else {
+        setHighlightedIndex((prev) => (prev > 0 ? prev - 1 : filteredOptions.length - 1));
+      }
+    } else if (e.key === 'Enter') {
+      // CRITICAL: MUST NOT submit parent form!
+      e.preventDefault();
+      e.stopPropagation();
+
+      if (filteredOptions.length > 0 && filteredOptions[highlightedIndex]) {
+        addOption(filteredOptions[highlightedIndex]);
+      }
+    } else if (e.key === 'Tab') {
+      // Tab smoothly moves to next input without submitting form or losing chips
+      setIsOpen(false);
+    } else if (e.key === 'Escape') {
+      e.preventDefault();
+      e.stopPropagation();
+      setIsOpen(false);
+    }
   };
 
   return (
@@ -423,7 +515,7 @@ export const MultiSearchableCombobox: React.FC<MultiSearchableComboboxProps> = (
             <span
               key={opt.id}
               id={id ? `${id}-chip-${opt.code}` : undefined}
-              className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium bg-red-50 text-red-900 border border-red-200 shadow-2xs"
+              className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium bg-red-50 text-red-900 border border-red-200 shadow-2xs animate-in fade-in zoom-in-95 duration-100"
             >
               <span className="font-mono font-bold text-[11px] bg-red-100 text-red-800 px-1 py-0.5 rounded">
                 {opt.code}
@@ -433,7 +525,8 @@ export const MultiSearchableCombobox: React.FC<MultiSearchableComboboxProps> = (
                 <button
                   type="button"
                   onClick={(e) => handleRemove(opt.id, e)}
-                  className="p-0.5 hover:bg-red-200 text-red-600 rounded-full transition-colors"
+                  className="p-0.5 hover:bg-red-200 text-red-600 rounded-full transition-colors cursor-pointer"
+                  title={`حذف ${opt.name}`}
                 >
                   <X className="w-3 h-3" />
                 </button>
@@ -457,7 +550,7 @@ export const MultiSearchableCombobox: React.FC<MultiSearchableComboboxProps> = (
             ? 'bg-slate-100 border-slate-200 cursor-not-allowed opacity-75'
             : isOpen
             ? 'border-red-500 ring-2 ring-red-500/20 bg-white'
-            : error
+            : error || duplicateMessage
             ? 'border-red-400 bg-red-50/20'
             : 'border-slate-300 hover:border-slate-400'
         }`}
@@ -471,6 +564,7 @@ export const MultiSearchableCombobox: React.FC<MultiSearchableComboboxProps> = (
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
             onFocus={() => setIsOpen(true)}
+            onKeyDown={handleKeyDown}
             placeholder={placeholder}
             className="w-full bg-transparent border-none outline-none text-sm text-slate-800 placeholder-slate-400 focus:ring-0 p-0"
             disabled={disabled}
@@ -484,6 +578,14 @@ export const MultiSearchableCombobox: React.FC<MultiSearchableComboboxProps> = (
         />
       </div>
 
+      {/* Duplicate warning notification banner */}
+      {duplicateMessage && (
+        <div className="mt-1.5 flex items-center gap-1.5 text-xs text-amber-700 bg-amber-50 border border-amber-200 px-3 py-1.5 rounded-lg animate-in fade-in duration-100">
+          <AlertCircle className="w-3.5 h-3.5 shrink-0 text-amber-600" />
+          <span className="font-semibold">{duplicateMessage}</span>
+        </div>
+      )}
+
       {/* Dropdown Options */}
       {isOpen && !disabled && (
         <div
@@ -491,7 +593,7 @@ export const MultiSearchableCombobox: React.FC<MultiSearchableComboboxProps> = (
           className="absolute z-50 w-full mt-1.5 bg-white border border-slate-200 rounded-xl shadow-xl max-h-64 overflow-y-auto divide-y divide-slate-100 animate-in fade-in zoom-in-95 duration-100"
         >
           <div className="px-3 py-1.5 bg-slate-50 text-[11px] font-medium text-slate-500 flex items-center justify-between">
-            <span>انقر لإضافة أو إزالة ({filteredOptions.length} متاح)</span>
+            <span>انقر أو اضغط Enter للإضافة ({filteredOptions.length} متاح)</span>
             <span className="text-red-600 font-semibold">{selectedIds.length} تم اختيارهم</span>
           </div>
 
@@ -500,16 +602,22 @@ export const MultiSearchableCombobox: React.FC<MultiSearchableComboboxProps> = (
               لا توجد نتائج مطابقة لـ <span className="font-semibold text-slate-800">"{searchQuery}"</span>
             </div>
           ) : (
-            filteredOptions.map((opt) => {
+            filteredOptions.map((opt, index) => {
               const isSelected = selectedIds.includes(opt.id);
+              const isHighlighted = index === highlightedIndex;
 
               return (
                 <div
                   key={opt.id}
                   id={id ? `${id}-option-${opt.code}` : undefined}
                   onClick={() => handleToggleOption(opt)}
+                  onMouseEnter={() => setHighlightedIndex(index)}
                   className={`flex items-center justify-between px-3.5 py-2.5 cursor-pointer transition-colors ${
-                    isSelected ? 'bg-red-50/70 text-red-950 font-medium' : 'hover:bg-slate-50 text-slate-900'
+                    isSelected
+                      ? 'bg-red-50/70 text-red-950 font-medium'
+                      : isHighlighted
+                      ? 'bg-slate-100 text-slate-900'
+                      : 'hover:bg-slate-50 text-slate-900'
                   }`}
                 >
                   <div className="flex items-center gap-2.5 min-w-0 flex-1">
