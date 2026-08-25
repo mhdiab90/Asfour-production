@@ -48,6 +48,7 @@ import {
   logHistoricalImportExecution, 
   saveApprovedMappingBatch 
 } from './importMappingService';
+import { parseMultiCodeValue } from '../utils/multiCodeParser';
 
 /**
  * EXACT 21 Columns required in this exact order for Pressing Historical Import
@@ -514,16 +515,19 @@ export async function parseAndValidatePressingExcel(
     const employeeNames = productionEmployees.map(e => e.name);
     const employeeCodes = productionEmployees.map(e => e.code);
 
-    // 4. FURNACE CARS (Separators: - , * , / , ,)
+    // 4. FURNACE CARS (Separators: - , * , / , , ; | etc.)
     const furnaceCarsRaw = String(row['رقم العربات'] || row['العربات'] || row['رقم العربة'] || '').trim();
-    const rawCarParts = furnaceCarsRaw
-      ? furnaceCarsRaw.split(/[-*/,،\s]+/).map(s => s.trim()).filter(Boolean)
-      : [];
+    const parsedCarsResult = parseMultiCodeValue(furnaceCarsRaw, 'furnaceCars');
+    const rawCarParts = parsedCarsResult.tokens;
 
     const resolvedFurnaceCars: Array<{ id?: string; code: string; carNumber: string }> = [];
     const furnaceCarNumbers: string[] = [];
     const furnaceCarIds: string[] = [];
     const carCodes: string[] = [];
+
+    if (parsedCarsResult.isMulti) {
+      rowWarnings.push(`تم تقسيم البيان إلى ${parsedCarsResult.tokenCount} عربات منفصلة.`);
+    }
 
     for (const carCodeStr of rawCarParts) {
       const normCar = carCodeStr.toLowerCase();
@@ -560,8 +564,8 @@ export async function parseAndValidatePressingExcel(
           const top = carCandidates[0];
           proposedMatches.push({
             fieldDomain: 'furnaceCar',
-            fieldNameAr: 'عربة الفرن',
-            fieldNameEn: 'Furnace Car',
+            fieldNameAr: `عربة الفرن (${carCodeStr})`,
+            fieldNameEn: `Furnace Car (${carCodeStr})`,
             importedValue: carCodeStr,
             suggestedId: top.id,
             suggestedCode: top.code,
@@ -587,12 +591,12 @@ export async function parseAndValidatePressingExcel(
             rowWarnings.push(`مطابقة ذكية لعربة الفرن: "${carCodeStr}" -> "${top.name}" (${top.confidence}%)`);
           } else {
             unresolvedMismatchesCount++;
-            rowErrors.push(`عربة الفرن "${carCodeStr}" غير مسجلة في بيانات عربات الأفران`);
+            rowErrors.push(`العربة ${carCodeStr} غير مسجلة.`);
             if (rowStatus === 'NEW') rowStatus = 'UNKNOWN_FURNACE_CAR';
             unknownFurnaceCarsCount++;
           }
         } else {
-          rowErrors.push(`عربة الفرن "${carCodeStr}" غير مسجلة في بيانات عربات الأفران`);
+          rowErrors.push(`العربة ${carCodeStr} غير مسجلة.`);
           if (rowStatus === 'NEW') rowStatus = 'UNKNOWN_FURNACE_CAR';
           unknownFurnaceCarsCount++;
         }
@@ -995,6 +999,7 @@ export async function parseAndValidatePressingExcel(
       employeeCodes,
       
       furnaceCarsRaw,
+      furnaceCarTokens: rawCarParts,
       resolvedFurnaceCars,
       furnaceCarNumbers,
       furnaceCarIds,
@@ -1125,6 +1130,7 @@ export async function executePressingBatchImport(
         furnaceCarNumbers: row.furnaceCarNumbers || [],
         carCodes: row.carCodes || [],
         carCode: row.furnaceCarsRaw || undefined,
+        originalFurnaceCars: row.furnaceCarsRaw || undefined,
         
         // Customer & Order
         customerOrderNumber: row.customerOrder || undefined,

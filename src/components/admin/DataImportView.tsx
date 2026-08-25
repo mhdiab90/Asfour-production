@@ -68,12 +68,14 @@ import {
   ImportAuditEntry 
 } from '../../services/importMappingService';
 import { fetchMasterData } from '../../services/masterDataService';
+import { parseMultiCodeValue } from '../../utils/multiCodeParser';
 import { Badge } from '../common/Badge';
 import { Modal } from '../common/Modal';
 import { formatNumber, formatDecimal, formatDateTime } from '../../utils/formatters';
 import { useLanguage } from '../../i18n/LanguageContext';
 import { useAuth } from '../../context/AuthContext';
 import { InlineMasterDataAddModal } from './InlineMasterDataAddModal';
+import { BatchAddMasterDataModal, MissingEntityItem } from './BatchAddMasterDataModal';
 
 type FilterTab = 'ALL' | 'VALID' | 'MATCHES' | 'WARNINGS' | 'ERRORS' | 'DUPLICATES';
 
@@ -91,6 +93,7 @@ export const DataImportView: React.FC = () => {
   // Inline Master Data Quick Add Modal State
   const [addedMasterDataCount, setAddedMasterDataCount] = useState<number>(0);
   const [existingMasterDataList, setExistingMasterDataList] = useState<any[]>([]);
+  const [isBatchAddModalOpen, setIsBatchAddModalOpen] = useState<boolean>(false);
   const [inlineAddModalState, setInlineAddModalState] = useState<{
     isOpen: boolean;
     domain: string;
@@ -269,10 +272,11 @@ export const DataImportView: React.FC = () => {
     const domain = inlineAddModalState.domain;
     const targetRowIndex = inlineAddModalState.targetRowIndex;
     const importedVal = (inlineAddModalState.importedValue || '').trim();
+    const normVal = importedVal.toLowerCase();
 
     // Persist approved mapping in Firestore for audit & future imports
     if (importedVal) {
-      const mappingDomain = (domain === 'worker1' || domain === 'worker2' || domain === 'employee1' || domain === 'employee2') ? 'employee' : domain;
+      const mappingDomain = (domain === 'worker1' || domain === 'worker2' || domain === 'employee1' || domain === 'employee2') ? 'employee' : (domain === 'furnaceCar' || domain === 'car' ? 'furnace_car' : domain);
       saveApprovedMappingBatch([{
         domain: mappingDomain,
         originalValue: importedVal,
@@ -290,7 +294,7 @@ export const DataImportView: React.FC = () => {
 
       // Worker 1
       if (domain === 'employee' || domain === 'worker1' || domain === 'employee1') {
-        const isMatch = (row.worker1Name && row.worker1Name.trim() === importedVal) ||
+        const isMatch = (row.worker1Name && row.worker1Name.trim().toLowerCase() === normVal) ||
                         (row.worker1Code && row.worker1Code.trim() === createdItem.code) ||
                         (targetRowIndex !== undefined && row.rowIndex === targetRowIndex && !row.resolvedWorker1);
         if (isMatch) {
@@ -303,7 +307,7 @@ export const DataImportView: React.FC = () => {
 
       // Worker 2
       if (domain === 'employee' || domain === 'worker2' || domain === 'employee2') {
-        const isMatch = (row.worker2Name && row.worker2Name.trim() === importedVal) ||
+        const isMatch = (row.worker2Name && row.worker2Name.trim().toLowerCase() === normVal) ||
                         (row.worker2Code && row.worker2Code.trim() === createdItem.code) ||
                         (targetRowIndex !== undefined && row.rowIndex === targetRowIndex && row.worker2Name && !row.resolvedWorker2);
         if (isMatch) {
@@ -316,7 +320,7 @@ export const DataImportView: React.FC = () => {
 
       // Press
       if (domain === 'press') {
-        const isMatch = (row.pressRaw && row.pressRaw.trim() === importedVal) ||
+        const isMatch = (row.pressRaw && row.pressRaw.trim().toLowerCase() === normVal) ||
                         (targetRowIndex !== undefined && row.rowIndex === targetRowIndex && !row.resolvedPress);
         if (isMatch) {
           updatedRow.resolvedPress = { id: createdItem.id, name: createdItem.name, code: createdItem.code };
@@ -327,8 +331,8 @@ export const DataImportView: React.FC = () => {
 
       // Product
       if (domain === 'product') {
-        const isMatch = (row.productCodeRaw && row.productCodeRaw.trim() === importedVal) ||
-                        (row.productNameRaw && row.productNameRaw.trim() === importedVal) ||
+        const isMatch = (row.productCodeRaw && row.productCodeRaw.trim().toLowerCase() === normVal) ||
+                        (row.productNameRaw && row.productNameRaw.trim().toLowerCase() === normVal) ||
                         (row.productCodeRaw && row.productCodeRaw.trim() === createdItem.code) ||
                         (targetRowIndex !== undefined && row.rowIndex === targetRowIndex && !row.resolvedProduct);
         if (isMatch) {
@@ -345,16 +349,40 @@ export const DataImportView: React.FC = () => {
         }
       }
 
-      // Furnace Car
+      // Furnace Car (Multi-token aware)
       if (domain === 'furnaceCar' || domain === 'car') {
-        const isMatch = (row.furnaceCarsRaw && row.furnaceCarsRaw.includes(importedVal)) ||
+        const rowTokens = row.furnaceCarTokens || (row.furnaceCarsRaw ? parseMultiCodeValue(row.furnaceCarsRaw, 'furnaceCars').tokens : []);
+        const isMatch = rowTokens.some(t => t.toLowerCase() === normVal) ||
+                        (row.furnaceCarsRaw && row.furnaceCarsRaw.toLowerCase().includes(normVal)) ||
                         (targetRowIndex !== undefined && row.rowIndex === targetRowIndex);
         if (isMatch) {
           const currentCars = updatedRow.resolvedFurnaceCars || [];
-          if (!currentCars.some(c => c.id === createdItem.id)) {
-            updatedRow.resolvedFurnaceCars = [...currentCars, { id: createdItem.id, code: createdItem.code, carNumber: createdItem.name || createdItem.code }];
+          const carNumber = createdItem.carNumber || createdItem.name || createdItem.code || importedVal;
+          if (!currentCars.some(c => c.id === createdItem.id || (c.code && c.code.toLowerCase() === normVal) || (c.carNumber && c.carNumber.toLowerCase() === normVal))) {
+            updatedRow.resolvedFurnaceCars = [
+              ...currentCars, 
+              { id: createdItem.id, code: createdItem.code || importedVal, carNumber }
+            ];
           }
-          updatedRow.errors = updatedRow.errors.filter(e => !e.includes('عربة') && !e.includes('عربات'));
+          if (!updatedRow.furnaceCarIds?.includes(createdItem.id)) {
+            updatedRow.furnaceCarIds = [...(updatedRow.furnaceCarIds || []), createdItem.id];
+          }
+          if (!updatedRow.furnaceCarNumbers?.includes(carNumber)) {
+            updatedRow.furnaceCarNumbers = [...(updatedRow.furnaceCarNumbers || []), carNumber];
+          }
+          if (!updatedRow.carCodes?.includes(createdItem.code || importedVal)) {
+            updatedRow.carCodes = [...(updatedRow.carCodes || []), createdItem.code || importedVal];
+          }
+
+          // Remove specific error for this token
+          updatedRow.errors = updatedRow.errors.filter(e => {
+            if (e.includes(`العربة ${importedVal}`) || e.includes(`"${importedVal}"`) || e.includes(importedVal)) return false;
+            const remainingTokens = rowTokens.filter(t => !updatedRow.resolvedFurnaceCars?.some(rc => rc.code.toLowerCase() === t.toLowerCase() || rc.carNumber.toLowerCase() === t.toLowerCase()));
+            if (remainingTokens.length === 0 && (e.includes('عربة') || e.includes('عربات'))) {
+              return false;
+            }
+            return true;
+          });
           rowModified = true;
         }
       }
@@ -362,7 +390,7 @@ export const DataImportView: React.FC = () => {
       // Update proposed match item on row if present
       if (updatedRow.proposedMatches) {
         updatedRow.proposedMatches = updatedRow.proposedMatches.map(pm => {
-          if (pm.importedValue === importedVal || (targetRowIndex !== undefined && row.rowIndex === targetRowIndex && pm.fieldDomain === domain)) {
+          if (pm.importedValue.toLowerCase() === normVal || (targetRowIndex !== undefined && row.rowIndex === targetRowIndex && pm.fieldDomain === domain)) {
             return {
               ...pm,
               suggestedId: createdItem.id,
@@ -377,6 +405,215 @@ export const DataImportView: React.FC = () => {
       }
 
       // Re-evaluate status
+      if (rowModified) {
+        if (updatedRow.errors.length === 0) {
+          updatedRow.status = updatedRow.warnings.length > 0 ? 'WARNING' : 'VALID';
+        }
+      }
+
+      return updatedRow;
+    });
+
+    const validRows = updatedRows.filter(r => r.errors.length === 0 && r.warnings.length === 0 && !r.isDuplicate).length;
+    const warningRows = updatedRows.filter(r => r.warnings.length > 0 && r.errors.length === 0).length;
+    const errorRows = updatedRows.filter(r => r.errors.length > 0).length;
+
+    setPressingSummary({
+      ...pressingSummary,
+      rows: updatedRows,
+      validRows,
+      warningRows,
+      errorRows,
+    });
+  };
+
+  // Collect all unique unresolved missing entities across the entire file for Batch Add
+  const missingEntitiesForBatchAdd = useMemo<MissingEntityItem[]>(() => {
+    if (!pressingSummary) return [];
+
+    const itemsMap = new Map<string, MissingEntityItem>();
+
+    pressingSummary.rows.forEach(row => {
+      // 1. Furnace cars per parsed token
+      const carTokens = row.furnaceCarTokens || (row.furnaceCarsRaw ? parseMultiCodeValue(row.furnaceCarsRaw, 'furnaceCars').tokens : []);
+      carTokens.forEach(token => {
+        const norm = token.trim().toLowerCase();
+        if (!norm) return;
+        const isResolved = row.resolvedFurnaceCars?.some(c => 
+          (c.code && c.code.toLowerCase() === norm) || 
+          (c.carNumber && c.carNumber.toLowerCase() === norm)
+        );
+        const isMatchAccepted = row.proposedMatches?.some(m => m.fieldDomain === 'furnaceCar' && m.importedValue.toLowerCase() === norm && m.decision === 'ACCEPTED');
+        
+        if (!isResolved && !isMatchAccepted) {
+          const key = `furnaceCar#${norm}`;
+          if (!itemsMap.has(key)) {
+            itemsMap.set(key, {
+              id: key,
+              domain: 'furnaceCar',
+              token: token.trim(),
+              suggestedCode: `CAR-${token.trim().replace(/[^0-9A-Za-z]/g, '') || token.trim()}`,
+              suggestedName: `عربة فرن رقم ${token.trim()}`,
+              collectionName: 'furnaceCars',
+              selected: true,
+            });
+          }
+        }
+      });
+
+      // 2. Worker 1
+      if (row.worker1Name && !row.resolvedWorker1 && !row.proposedMatches?.some(m => (m.fieldDomain === 'worker1' || m.fieldDomain === 'employee1') && m.decision === 'ACCEPTED')) {
+        const norm = row.worker1Name.trim().toLowerCase();
+        const key = `employee#${norm}`;
+        if (!itemsMap.has(key)) {
+          itemsMap.set(key, {
+            id: key,
+            domain: 'employee',
+            token: row.worker1Name.trim(),
+            suggestedCode: row.worker1Code || `EMP-${Date.now().toString().slice(-4)}`,
+            suggestedName: row.worker1Name.trim(),
+            collectionName: 'employees',
+            selected: true,
+            extraProps: { jobTitle: 'مشغل مكبس', departmentName: 'قسم التشكيل والمكابس' },
+          });
+        }
+      }
+
+      // 3. Press
+      if (row.pressRaw && !row.resolvedPress && !row.proposedMatches?.some(m => m.fieldDomain === 'press' && m.decision === 'ACCEPTED')) {
+        const norm = row.pressRaw.trim().toLowerCase();
+        const key = `press#${norm}`;
+        if (!itemsMap.has(key)) {
+          itemsMap.set(key, {
+            id: key,
+            domain: 'press',
+            token: row.pressRaw.trim(),
+            suggestedCode: row.pressRaw.trim().replace(/\s+/g, '-').toUpperCase(),
+            suggestedName: row.pressRaw.trim(),
+            collectionName: 'presses',
+            selected: true,
+          });
+        }
+      }
+
+      // 4. Product
+      if (row.productCodeRaw && !row.resolvedProduct && !row.proposedMatches?.some(m => m.fieldDomain === 'product' && m.decision === 'ACCEPTED')) {
+        const norm = row.productCodeRaw.trim().toLowerCase();
+        const key = `product#${norm}`;
+        if (!itemsMap.has(key)) {
+          itemsMap.set(key, {
+            id: key,
+            domain: 'product',
+            token: row.productCodeRaw.trim(),
+            suggestedCode: row.productCodeRaw.trim(),
+            suggestedName: row.productNameRaw || row.productCodeRaw.trim(),
+            collectionName: 'products',
+            selected: true,
+            extraProps: { pieceWeight: row.pieceWeight || 4.5, aluminaPercentage: row.aluminaPercentage || 40 },
+          });
+        }
+      }
+    });
+
+    return Array.from(itemsMap.values());
+  }, [pressingSummary]);
+
+  // Callback when a batch of Master Data records is created via BatchAddMasterDataModal
+  const handleBatchMasterDataCreated = (createdItems: Array<{ domain: string; token: string; item: any }>) => {
+    if (!pressingSummary) return;
+
+    setAddedMasterDataCount(prev => prev + createdItems.length);
+    setExistingMasterDataList(prev => [...prev, ...createdItems.map(c => c.item)]);
+
+    const updatedRows = pressingSummary.rows.map(row => {
+      let rowModified = false;
+      const updatedRow = { ...row };
+
+      for (const { domain, token, item } of createdItems) {
+        const normToken = token.toLowerCase();
+
+        // Furnace Cars (Per token)
+        if (domain === 'furnaceCar') {
+          const rowTokens = row.furnaceCarTokens || (row.furnaceCarsRaw ? parseMultiCodeValue(row.furnaceCarsRaw, 'furnaceCars').tokens : []);
+          if (rowTokens.some(t => t.toLowerCase() === normToken) || (row.furnaceCarsRaw && row.furnaceCarsRaw.toLowerCase().includes(normToken))) {
+            const currentCars = updatedRow.resolvedFurnaceCars || [];
+            const carNumber = item.carNumber || item.name || item.code || token;
+            if (!currentCars.some(c => c.id === item.id || (c.code && c.code.toLowerCase() === normToken) || (c.carNumber && c.carNumber.toLowerCase() === normToken))) {
+              updatedRow.resolvedFurnaceCars = [
+                ...currentCars,
+                { id: item.id, code: item.code || token, carNumber }
+              ];
+            }
+            if (!updatedRow.furnaceCarIds?.includes(item.id)) {
+              updatedRow.furnaceCarIds = [...(updatedRow.furnaceCarIds || []), item.id];
+            }
+            if (!updatedRow.furnaceCarNumbers?.includes(carNumber)) {
+              updatedRow.furnaceCarNumbers = [...(updatedRow.furnaceCarNumbers || []), carNumber];
+            }
+            if (!updatedRow.carCodes?.includes(item.code || token)) {
+              updatedRow.carCodes = [...(updatedRow.carCodes || []), item.code || token];
+            }
+
+            // Remove errors for this token
+            updatedRow.errors = updatedRow.errors.filter(e => {
+              if (e.includes(`العربة ${token}`) || e.includes(`"${token}"`) || e.includes(token)) return false;
+              const remainingUnresolved = rowTokens.filter(t => !updatedRow.resolvedFurnaceCars?.some(rc => rc.code.toLowerCase() === t.toLowerCase() || rc.carNumber.toLowerCase() === t.toLowerCase()));
+              if (remainingUnresolved.length === 0 && (e.includes('عربة') || e.includes('عربات'))) {
+                return false;
+              }
+              return true;
+            });
+
+            // Update proposed match if any
+            if (updatedRow.proposedMatches) {
+              updatedRow.proposedMatches = updatedRow.proposedMatches.map(pm => {
+                if (pm.fieldDomain === 'furnaceCar' && pm.importedValue.toLowerCase() === normToken) {
+                  return {
+                    ...pm,
+                    suggestedId: item.id,
+                    suggestedName: item.name,
+                    suggestedCode: item.code,
+                    confidence: 100,
+                    decision: 'ACCEPTED' as const,
+                  };
+                }
+                return pm;
+              });
+            }
+            rowModified = true;
+          }
+        }
+
+        // Employee / Worker 1
+        if (domain === 'employee' || domain === 'worker1') {
+          if ((row.worker1Name && row.worker1Name.trim().toLowerCase() === normToken) || (row.worker1Code && row.worker1Code.trim() === item.code)) {
+            updatedRow.worker1Code = item.code || updatedRow.worker1Code;
+            updatedRow.resolvedWorker1 = { id: item.id, name: item.name, code: item.code };
+            updatedRow.errors = updatedRow.errors.filter(e => !e.includes('عامل 1'));
+            rowModified = true;
+          }
+        }
+
+        // Press
+        if (domain === 'press') {
+          if (row.pressRaw && row.pressRaw.trim().toLowerCase() === normToken) {
+            updatedRow.resolvedPress = { id: item.id, name: item.name, code: item.code };
+            updatedRow.errors = updatedRow.errors.filter(e => !e.includes('المكبس') && !e.includes('مكبس'));
+            rowModified = true;
+          }
+        }
+
+        // Product
+        if (domain === 'product') {
+          if ((row.productCodeRaw && row.productCodeRaw.trim().toLowerCase() === normToken) || (row.productNameRaw && row.productNameRaw.trim().toLowerCase() === normToken)) {
+            updatedRow.productCodeRaw = item.code || updatedRow.productCodeRaw;
+            updatedRow.resolvedProduct = { id: item.id, name: item.name, code: item.code, pieceWeight: item.pieceWeight || updatedRow.pieceWeight, aluminaPercentage: item.aluminaPercentage || updatedRow.aluminaPercentage };
+            updatedRow.errors = updatedRow.errors.filter(e => !e.includes('الصنف') && !e.includes('كود الصنف'));
+            rowModified = true;
+          }
+        }
+      }
+
       if (rowModified) {
         if (updatedRow.errors.length === 0) {
           updatedRow.status = updatedRow.warnings.length > 0 ? 'WARNING' : 'VALID';
@@ -449,8 +686,33 @@ export const DataImportView: React.FC = () => {
         updatedRow.resolvedProduct = { id: candidateToUse.id, name: candidateToUse.name, code: candidateToUse.code || '' };
         updatedRow.errors = updatedRow.errors.filter(e => !e.includes('الصنف') && !e.includes('كود الصنف'));
       } else if (prop.fieldDomain === 'furnaceCar') {
-        updatedRow.resolvedFurnaceCars = [{ id: candidateToUse.id, code: candidateToUse.code || '', carNumber: candidateToUse.name || candidateToUse.code || '' }];
-        updatedRow.errors = updatedRow.errors.filter(e => !e.includes('عربة') && !e.includes('عربات'));
+        const currentCars = updatedRow.resolvedFurnaceCars || [];
+        const carNumber = candidateToUse.name || candidateToUse.code || prop.importedValue;
+        if (!currentCars.some(c => c.id === candidateToUse.id || (c.code && c.code.toLowerCase() === prop.importedValue.toLowerCase()))) {
+          updatedRow.resolvedFurnaceCars = [
+            ...currentCars,
+            { id: candidateToUse.id, code: candidateToUse.code || prop.importedValue, carNumber }
+          ];
+        }
+        if (!updatedRow.furnaceCarIds?.includes(candidateToUse.id)) {
+          updatedRow.furnaceCarIds = [...(updatedRow.furnaceCarIds || []), candidateToUse.id];
+        }
+        if (!updatedRow.furnaceCarNumbers?.includes(carNumber)) {
+          updatedRow.furnaceCarNumbers = [...(updatedRow.furnaceCarNumbers || []), carNumber];
+        }
+        if (!updatedRow.carCodes?.includes(candidateToUse.code || prop.importedValue)) {
+          updatedRow.carCodes = [...(updatedRow.carCodes || []), candidateToUse.code || prop.importedValue];
+        }
+
+        const rowTokens = row.furnaceCarTokens || (row.furnaceCarsRaw ? parseMultiCodeValue(row.furnaceCarsRaw, 'furnaceCars').tokens : []);
+        updatedRow.errors = updatedRow.errors.filter(e => {
+          if (e.includes(`العربة ${prop.importedValue}`) || e.includes(`"${prop.importedValue}"`) || e.includes(prop.importedValue)) return false;
+          const remainingTokens = rowTokens.filter(t => !updatedRow.resolvedFurnaceCars?.some(rc => rc.code.toLowerCase() === t.toLowerCase() || rc.carNumber.toLowerCase() === t.toLowerCase()));
+          if (remainingTokens.length === 0 && (e.includes('عربة') || e.includes('عربات'))) {
+            return false;
+          }
+          return true;
+        });
       }
 
       // Re-evaluate row status
@@ -1019,7 +1281,7 @@ export const DataImportView: React.FC = () => {
                 </div>
               </div>
 
-              <div className="flex items-center gap-2">
+              <div className="flex flex-wrap items-center gap-2">
                 <button
                   type="button"
                   onClick={handleAcceptAllHighConfidence}
@@ -1028,6 +1290,21 @@ export const DataImportView: React.FC = () => {
                   <CheckCheck className="w-4 h-4" />
                   <span>{language === 'ar' ? 'اعتماد كافة التطابقات المؤكدة (≥ 90%)' : 'Accept High-Confidence Matches (≥ 90%)'}</span>
                 </button>
+
+                {canAddMasterData && missingEntitiesForBatchAdd.length > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => setIsBatchAddModalOpen(true)}
+                    className="flex items-center gap-1.5 px-4 py-2 bg-amber-600 hover:bg-amber-700 text-white text-xs font-bold rounded-xl shadow-xs transition-colors cursor-pointer"
+                  >
+                    <Plus className="w-4 h-4" />
+                    <span>
+                      {language === 'ar' 
+                        ? `إضافة كل البيانات المفقودة (${missingEntitiesForBatchAdd.length})` 
+                        : `Add All Missing Master Data (${missingEntitiesForBatchAdd.length})`}
+                    </span>
+                  </button>
+                )}
               </div>
             </div>
           )}
@@ -1354,16 +1631,31 @@ export const DataImportView: React.FC = () => {
                                   <span>{language === 'ar' ? `+ إضافة صنف (${row.productCodeRaw})` : `+ Add Product`}</span>
                                 </button>
                               )}
-                              {row.furnaceCarsRaw && (!row.resolvedFurnaceCars || row.resolvedFurnaceCars.length === 0) && !row.proposedMatches?.some(m => m.fieldDomain === 'furnaceCar' && m.decision === 'ACCEPTED') && (
-                                <button
-                                  type="button"
-                                  onClick={() => handleOpenInlineAdd('furnaceCar', row.furnaceCarsRaw, row.rowIndex)}
-                                  className="text-[9px] px-1.5 py-0.5 bg-amber-50 hover:bg-amber-100 text-amber-900 border border-amber-300 rounded font-bold flex items-center gap-0.5 cursor-pointer"
-                                >
-                                  <Plus className="w-2.5 h-2.5 text-amber-700" />
-                                  <span>{language === 'ar' ? `+ إضافة عربة (${row.furnaceCarsRaw})` : `+ Add Car`}</span>
-                                </button>
-                              )}
+                              {/* Unresolved Furnace Cars Quick Add per missing token */}
+                              {(() => {
+                                const tokens = row.furnaceCarTokens || (row.furnaceCarsRaw ? parseMultiCodeValue(row.furnaceCarsRaw, 'furnaceCars').tokens : []);
+                                const unresolvedTokens = tokens.filter(t => 
+                                  !row.resolvedFurnaceCars?.some(rc => (rc.code && rc.code.toLowerCase() === t.toLowerCase()) || (rc.carNumber && rc.carNumber.toLowerCase() === t.toLowerCase())) &&
+                                  !row.proposedMatches?.some(m => m.fieldDomain === 'furnaceCar' && m.importedValue.toLowerCase() === t.toLowerCase() && m.decision === 'ACCEPTED')
+                                );
+
+                                return (
+                                  <div className="flex flex-wrap gap-1">
+                                    {unresolvedTokens.map((token, uIdx) => (
+                                      <button
+                                        key={uIdx}
+                                        type="button"
+                                        onClick={() => handleOpenInlineAdd('furnaceCar', token, row.rowIndex, { carNumber: token, code: token })}
+                                        className="text-[9px] px-1.5 py-0.5 bg-amber-50 hover:bg-amber-100 text-amber-900 border border-amber-300 rounded font-bold flex items-center gap-0.5 cursor-pointer shadow-xs transition-colors"
+                                        title={language === 'ar' ? `إضافة العربة (${token})` : `Add Car (${token})`}
+                                      >
+                                        <Plus className="w-2.5 h-2.5 text-amber-700" />
+                                        <span>{language === 'ar' ? `+ إضافة عربة (${token})` : `+ Add Car (${token})`}</span>
+                                      </button>
+                                    ))}
+                                  </div>
+                                );
+                              })()}
                             </div>
                           )}
 
@@ -1387,9 +1679,44 @@ export const DataImportView: React.FC = () => {
                         {row.worker2Code && <div className="text-[10px] text-slate-500">{language === 'ar' ? 'كود' : 'Code'}: {row.worker2Code}</div>}
                       </td>
 
-                      {/* Furnace Cars */}
-                      <td className="p-2.5 whitespace-nowrap font-bold text-blue-700">
-                        {row.furnaceCarsRaw || '-'}
+                      {/* Furnace Cars (Multi-token chips + Original value) */}
+                      <td className="p-2.5 whitespace-nowrap">
+                        <div className="flex flex-col gap-1">
+                          {/* Individual parsed tokens as badges/chips */}
+                          <div className="flex flex-wrap items-center gap-1">
+                            {(() => {
+                              const tokens = row.furnaceCarTokens || (row.furnaceCarsRaw ? parseMultiCodeValue(row.furnaceCarsRaw, 'furnaceCars').tokens : []);
+                              if (tokens.length === 0) return <span className="text-slate-400 font-sans text-xs">-</span>;
+                              return tokens.map((token, tIdx) => {
+                                const norm = token.toLowerCase();
+                                const isResolved = row.resolvedFurnaceCars?.some(c => 
+                                  (c.code && c.code.toLowerCase() === norm) || 
+                                  (c.carNumber && c.carNumber.toLowerCase() === norm)
+                                );
+                                return (
+                                  <span
+                                    key={tIdx}
+                                    className={`inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-mono font-bold border shadow-2xs ${
+                                      isResolved
+                                        ? 'bg-emerald-50 text-emerald-800 border-emerald-300'
+                                        : 'bg-amber-50 text-amber-900 border-amber-300 ring-1 ring-amber-300/60'
+                                    }`}
+                                    title={isResolved ? (language === 'ar' ? `تمت مطابقة العربة (${token})` : `Matched car (${token})`) : (language === 'ar' ? `العربة (${token}) غير مسجلة` : `Unregistered car (${token})`)}
+                                  >
+                                    {token}
+                                    {isResolved ? ' ✓' : ' !'}
+                                  </span>
+                                );
+                              });
+                            })()}
+                          </div>
+                          {/* Original imported string for full auditability if multi */}
+                          {row.furnaceCarsRaw && (row.furnaceCarTokens?.length || 0) > 1 && (
+                            <span className="text-[9px] text-slate-400 font-mono tracking-tight" title={language === 'ar' ? 'القيمة الأصلية بالملف' : 'Original raw value'}>
+                              {language === 'ar' ? 'الأصل:' : 'Raw:'} {row.furnaceCarsRaw}
+                            </span>
+                          )}
+                        </div>
                       </td>
 
                       {/* Press */}

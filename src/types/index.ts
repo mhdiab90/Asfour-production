@@ -317,6 +317,7 @@ export interface ProductionRecord extends ProductionFaults {
   furnaceCarNumbers?: string[];
   carCode?: string;
   carCodes?: string[];
+  originalFurnaceCars?: string;
   
   // Customer & Order (Stable ID & Snapshots)
   customerOrderNumber?: string;
@@ -1017,6 +1018,7 @@ export interface PressingImportRow {
   
   // Furnace Cars
   furnaceCarsRaw: string;
+  furnaceCarTokens?: string[];
   resolvedFurnaceCars: Array<{ id?: string; code: string; carNumber: string }>;
   furnaceCarNumbers: string[];
   furnaceCarIds: string[];
