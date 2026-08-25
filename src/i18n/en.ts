@@ -428,4 +428,29 @@ export const en = {
   about_cloudflare_site: 'Live Cloudflare Portal',
   about_github_repo: 'Source Code Repository',
   about_developer_title: 'System Architect & Engineer',
+
+  // Granular Permissions & User Management
+  users_title: 'User Management & Granular Permissions',
+  users_subtitle: 'Advanced role-based access control for production stages, screens, and administrative operations',
+  users_add_user: 'Add New User',
+  users_edit_user: 'Edit User & Permissions',
+  users_role_super_admin: 'Super Admin',
+  users_role_supervisor: 'Production Supervisor',
+  users_role_quality_auditor: 'Quality Auditor',
+  users_role_data_entry: 'Data Entry Operator',
+  users_role_viewer: 'Viewer (Read-Only)',
+  users_role_custom: 'Custom Granular Permissions',
+  users_audit_reason: 'Change Reason (Mandatory for audit trail)',
+  users_allowed_stages: 'Authorized Production Stages',
+
+  // Historical Import
+  import_title: 'Historical Production Data Import',
+  import_subtitle: 'Import historical production records with smart AI-assisted fuzzy entity matching and complete audit rollback',
+  import_download_template: 'Download Official Excel Template',
+  import_pre_backup: 'Safety Check: Pre-import Backup Snapshot',
+  import_smart_matching: 'Smart Historical Entity Matching',
+  import_accept_matches: 'Accept High-Confidence Matches (≥ 90%)',
+  import_history_rollback: 'Import History & Rollback (Undo)',
+  import_confirm_rollback: 'Confirm Batch Rollback',
 };
+

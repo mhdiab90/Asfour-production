@@ -20,14 +20,33 @@ export type UserRole =
 
 export type ProductionScope = 'all' | 'shift' | 'own';
 
+export type DataScopeType = 
+  | 'ALL' 
+  | 'OWN_RECORDS' 
+  | 'OWN_DEPARTMENT' 
+  | 'OWN_SHIFT' 
+  | 'SELECTED_STAGES' 
+  | 'SELECTED_DEPARTMENTS' 
+  | 'SELECTED_USERS' 
+  | 'CUSTOM';
+
 export interface GranularPermissions {
+  // Schema version for future-proof migrations
+  permissionSchemaVersion?: number;
+
+  // Data Visibility / Scope
+  dataScope?: DataScopeType;
+  'production.scope'?: ProductionScope;
+  allowedStages?: string[];
+  allowedDepartments?: string[];
+  allowedUsers?: string[];
+
   // 1. Dashboard & Analytics
   'dashboard.view': boolean;
   'dashboard.export_kpi': boolean;
 
-  // 2. Production Operations
+  // 2. Production Entry & Direct Operations
   'production.view': boolean;
-  'production.scope': ProductionScope;
   'production.create': boolean;
   'production.edit': boolean;
   'production.delete': boolean;
@@ -37,7 +56,13 @@ export interface GranularPermissions {
   'production.reject': boolean;
   'production.correct': boolean;
 
-  // 3. Specific Production Stages
+  // 3. Approval Dedicated Rights
+  'approval.view': boolean;
+  'approval.approve': boolean;
+  'approval.reject': boolean;
+  'approval.batch_approve': boolean;
+
+  // 4. Specific Production Stages (8 Stages)
   'stage.pressing': boolean;
   'stage.rotary_furnace': boolean;
   'stage.chinese_mills': boolean;
@@ -47,8 +72,10 @@ export interface GranularPermissions {
   'stage.lightweight_foam': boolean;
   'stage.sorting': boolean;
 
-  // 4. Master Data
+  // 5. Master Data & Inline Add
   'masterdata.view': boolean;
+  'masterData.inlineAdd': boolean; // Dedicated permission to add new Master Data from dropdowns
+
   'employees.view': boolean;
   'employees.create': boolean;
   'employees.edit': boolean;
@@ -74,31 +101,51 @@ export interface GranularPermissions {
   'furnaces.edit': boolean;
   'furnaces.delete': boolean;
 
+  'furnaceCars.view': boolean;
+  'furnaceCars.create': boolean;
+  'furnaceCars.edit': boolean;
+  'furnaceCars.delete': boolean;
+
+  'shifts.view': boolean;
+  'shifts.create': boolean;
+  'shifts.edit': boolean;
+  'shifts.delete': boolean;
+
   'materials.view': boolean;
   'materials.create': boolean;
   'materials.edit': boolean;
   'materials.delete': boolean;
+
+  'inventory.view': boolean;
+  'inventory.manage': boolean;
 
   'machines.view': boolean;
   'machines.create': boolean;
   'machines.edit': boolean;
   'machines.delete': boolean;
 
-  // 5. Reports & Exports
+  // 6. Historical Import & Smart Matching
+  'excel.import': boolean;
+  'historical.import.view': boolean;
+  'historical.import.execute': boolean;
+  'historical.import.approve_matching': boolean;
+  'historical.import.undo': boolean;
+  'historical.import.backup_before': boolean;
+
+  // 7. Excel Export & Templates
+  'excel.export': boolean;
+  'excel.template_download': boolean;
+
+  // 8. Reports & Analytics
   'reports.view': boolean;
   'reports.export': boolean;
   'reports.custom_queries': boolean;
 
-  // 6. Excel Data Management
-  'excel.import': boolean;
-  'excel.export': boolean;
-  'excel.template_download': boolean;
-
-  // 7. AI Factory Assistant
+  // 9. AI Factory Assistant
   'ai.use': boolean;
   'ai.advanced_analysis': boolean;
 
-  // 8. User Management
+  // 10. User & Permission Management
   'users.view': boolean;
   'users.create': boolean;
   'users.edit': boolean;
@@ -107,8 +154,10 @@ export interface GranularPermissions {
   'users.reset_password': boolean;
   'users.change_role': boolean;
   'users.manage_permissions': boolean;
+  'permissions.view': boolean;
+  'permissions.edit': boolean;
 
-  // 9. Disaster Recovery & Backups
+  // 11. Disaster Recovery & Backups
   'backup.view': boolean;
   'backup.create': boolean;
   'backup.download': boolean;
@@ -116,15 +165,28 @@ export interface GranularPermissions {
   'restore.view': boolean;
   'restore.execute': boolean;
 
-  // 10. System Administration
+  // 12. System Health, Audit, Settings, Branding, Versions
   'system.view': boolean;
+  'system.health.view': boolean;
   'system.manage': boolean;
   'audit.view': boolean;
   'settings.view': boolean;
   'settings.edit': boolean;
+  'branding.view': boolean;
+  'branding.edit': boolean;
+  'versions.view': boolean;
+
+  // 13. Sensitive Field / Domain Restrictions
+  'fields.view_cost': boolean;
+  'fields.edit_downtime': boolean;
+  'fields.view_consumption': boolean;
+  'fields.view_tonnage': boolean;
 }
 
-export type PermissionKey = keyof GranularPermissions;
+export type PermissionKey = keyof Omit<
+  GranularPermissions, 
+  'permissionSchemaVersion' | 'dataScope' | 'production.scope' | 'allowedStages' | 'allowedDepartments' | 'allowedUsers'
+>;
 
 export interface PermissionCategoryGroup {
   id: string;
@@ -139,3 +201,18 @@ export interface PermissionCategoryGroup {
     descriptionEn: string;
   }[];
 }
+
+export interface PermissionAuditEntry {
+  id?: string;
+  userId: string;
+  employeeId?: string;
+  employeeName?: string;
+  userEmail?: string;
+  changedBy: string;
+  changedByName?: string;
+  timestamp: string;
+  oldPermissions: Record<string, any>;
+  newPermissions: Record<string, any>;
+  reason?: string;
+}
+

@@ -419,7 +419,11 @@ export interface AuditLog {
     | 'BULK_UPDATE_PRODUCT_INTELLIGENCE'
     | 'BACKUP_CREATE'
     | 'BACKUP_DELETE'
-    | 'RESTORE_EXECUTE';
+    | 'RESTORE_EXECUTE'
+    | 'HISTORICAL_IMPORT_COMPLETED'
+    | 'UNDO_HISTORICAL_IMPORT'
+    | 'PERMISSION_UPDATE';
+
   collection: string;
   documentId?: string;
   details: string;
@@ -1064,6 +1068,33 @@ export interface PressingImportRow {
   warnings: string[];
   isDuplicate: boolean;
   duplicateType?: 'FILE' | 'DATABASE';
+  
+  // Smart Fuzzy Matching Proposals & Human Review
+  proposedMatches?: Array<{
+    fieldDomain: string; // 'press' | 'employee1' | 'employee2' | 'product' | 'customer' | 'shift' | 'furnaceCar'
+    fieldNameAr: string;
+    fieldNameEn: string;
+    importedValue: string;
+    suggestedId?: string;
+    suggestedCode?: string;
+    suggestedName?: string;
+    confidence: number;
+    matchType: string;
+    reasonAr: string;
+    reasonEn: string;
+    decision: 'PENDING' | 'ACCEPTED' | 'REJECTED' | 'MANUAL';
+    manualId?: string;
+    manualName?: string;
+    candidates?: Array<{
+      id: string;
+      code: string;
+      name: string;
+      confidence: number;
+      matchType: string;
+      reasonAr: string;
+      reasonEn: string;
+    }>;
+  }>;
 }
 
 export interface PressingImportSummary {
@@ -1078,6 +1109,8 @@ export interface PressingImportSummary {
   unknownFurnaceCarsCount: number;
   shiftErrorsCount: number;
   faultMismatchesCount: number;
+  highConfidenceMatchesCount?: number;
+  unresolvedMismatchesCount?: number;
   rows: PressingImportRow[];
 }
 

@@ -45,6 +45,7 @@ import {
   subscribeUsers, 
   createSystemUser, 
   updateSystemUser, 
+  updateUserPermissions,
   toggleUserActive, 
   deleteSystemUser, 
   sendUserPasswordReset 
@@ -98,6 +99,7 @@ export const UserManagementView: React.FC<UserManagementViewProps> = ({ onNaviga
   const [editingUser, setEditingUser] = useState<AdminUser | null>(null);
   const [editRole, setEditRole] = useState<UserRole>('PRODUCTION_OPERATOR');
   const [editPermissions, setEditPermissions] = useState<GranularPermissions>(ROLE_PRESET_MAP.PRODUCTION_OPERATOR);
+  const [editPermissionReason, setEditPermissionReason] = useState<string>('');
   const [editEmployeeId, setEditEmployeeId] = useState<string>('');
   const [editStation, setEditStation] = useState<string>('');
   const [editActive, setEditActive] = useState<boolean>(true);
@@ -251,9 +253,22 @@ export const UserManagementView: React.FC<UserManagementViewProps> = ({ onNaviga
     setIsUpdating(true);
     try {
       await updateSystemUser(editingUser.uid, payload);
+      // Also log audit trail in permissionAuditLogs with reason
+      await updateUserPermissions(
+        editingUser.uid, 
+        editPermissions, 
+        editPermissionReason || 'تعديل الصلاحيات وبيانات المستخدم',
+        {
+          employeeId: selectedEmp?.id || editingUser.employeeId,
+          employeeName: selectedEmp?.name || editingUser.fullName || editingUser.employeeName,
+          email: editingUser.email
+        }
+      ).catch(err => console.warn('Could not record permission audit log:', err));
+
       setActionSuccessMessage(language === 'ar' ? `تم تحديث بيانات وصلاحيات المستخدم (${editingUser.email}) بنجاح.` : `User profile and permissions updated.`);
       setIsEditModalOpen(false);
       setEditingUser(null);
+      setEditPermissionReason('');
       setEditActiveTab('info');
     } catch (err: any) {
       setEditError(err.message || 'فشل تحديث بيانات المستخدم.');
@@ -311,6 +326,7 @@ export const UserManagementView: React.FC<UserManagementViewProps> = ({ onNaviga
     setEditingUser(user);
     setEditRole(user.role);
     setEditPermissions(resolveUserPermissions(user));
+    setEditPermissionReason('');
     setEditEmployeeId(user.employeeId || '');
     setEditStation(user.operatorStation || '');
     setEditActive(user.active !== false);
@@ -1044,6 +1060,8 @@ export const UserManagementView: React.FC<UserManagementViewProps> = ({ onNaviga
               onChange={setEditPermissions}
               selectedRolePreset={editRole}
               onRolePresetSelect={(r) => setEditRole(r)}
+              reason={editPermissionReason}
+              onReasonChange={setEditPermissionReason}
             />
           )}
 

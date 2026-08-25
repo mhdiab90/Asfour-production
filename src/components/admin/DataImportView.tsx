@@ -3,12 +3,13 @@
  * 
  * Specialized Historical Excel Importer:
  * - Full support for مرحلة التشكيل والمكابس (Pressing) with 21 strict columns.
+ * - Smart Fuzzy Matching with Human Review & Interactive Decision Matrix.
  * - Deep validation: Multi-worker resolution, multi-furnace car splitting,
  *   press & shift (1/2) resolution, smart vs manual product code intelligence,
  *   fault summation breakdown verification, in-file & database duplicate checks.
  * - Pre-import safety: One-click Firestore Backup generation.
  * - Granular preview with multi-status filtering & diagnostics.
- * - Safe chunked batch commits (400 per batch) and complete audit logging.
+ * - Safe chunked batch commits (400 per batch), approved mappings persistence, and batch rollback.
  */
 import React, { useState } from 'react';
 import { 
@@ -29,7 +30,13 @@ import {
   Info,
   Copy,
   SlidersHorizontal,
-  ChevronDown
+  ChevronDown,
+  Check,
+  X,
+  History,
+  RotateCcw,
+  CheckCheck,
+  Search
 } from 'lucide-react';
 import { 
   ProductionStageType, 
@@ -50,12 +57,20 @@ import {
 } from '../../services/historicalImportService';
 import { STAGE_DISPLAY_NAMES } from '../../services/stageRecordService';
 import { createDatabaseBackup } from '../../services/backupService';
+import { 
+  getHistoricalImportHistory, 
+  rollbackImportBatch, 
+  ImportAuditEntry 
+} from '../../services/importMappingService';
 import { Badge } from '../common/Badge';
-import { formatNumber, formatDecimal } from '../../utils/formatters';
+import { Modal } from '../common/Modal';
+import { formatNumber, formatDecimal, formatDateTime } from '../../utils/formatters';
+import { useLanguage } from '../../i18n/LanguageContext';
 
-type FilterTab = 'ALL' | 'VALID' | 'WARNINGS' | 'ERRORS' | 'DUPLICATES';
+type FilterTab = 'ALL' | 'VALID' | 'MATCHES' | 'WARNINGS' | 'ERRORS' | 'DUPLICATES';
 
 export const DataImportView: React.FC = () => {
+  const { language, isRtl } = useLanguage();
   const [selectedStage, setSelectedStage] = useState<ProductionStageType>('pressing');
   const [file, setFile] = useState<File | null>(null);
   const [isParsing, setIsParsing] = useState<boolean>(false);
@@ -85,6 +100,14 @@ export const DataImportView: React.FC = () => {
     skipped: number;
     importId: string;
   } | null>(null);
+
+  // Import History & Rollback State
+  const [isHistoryModalOpen, setIsHistoryModalOpen] = useState<boolean>(false);
+  const [importHistory, setImportHistory] = useState<ImportAuditEntry[]>([]);
+  const [isLoadingHistory, setIsLoadingHistory] = useState<boolean>(false);
+  const [rollbackTargetBatch, setRollbackTargetBatch] = useState<ImportAuditEntry | null>(null);
+  const [isRollingBack, setIsRollingBack] = useState<boolean>(false);
+  const [rollbackSuccessMsg, setRollbackSuccessMsg] = useState<string | null>(null);
 
   // Clear all parsed state when switching stage or uploading new file
   const resetFileState = () => {
@@ -123,6 +146,10 @@ export const DataImportView: React.FC = () => {
         const buffer = await uploadedFile.arrayBuffer();
         const summary = await parseAndValidatePressingExcel(buffer);
         setPressingSummary(summary);
+        const hasProposedMatches = summary.rows.some(r => r.proposedMatches && r.proposedMatches.length > 0);
+        if (hasProposedMatches) {
+          setActiveFilterTab('MATCHES');
+        }
       } else {
         const rows = await parseExcelFile(uploadedFile);
         setGenericRawRows(rows);
@@ -131,7 +158,7 @@ export const DataImportView: React.FC = () => {
       }
     } catch (err: any) {
       console.error('File parsing error:', err);
-      alert('فشل قراءة ملف الـ Excel: ' + (err.message || 'تأكد من تنسيق الأعطال والبيانات'));
+      alert(language === 'ar' ? 'فشل قراءة ملف الـ Excel: ' + (err.message || 'تأكد من تنسيق الأعطال والبيانات') : 'Failed to parse Excel file: ' + err.message);
     } finally {
       setIsParsing(false);
     }
@@ -140,7 +167,7 @@ export const DataImportView: React.FC = () => {
   // One-click Backup before Import
   const handleCreateSafetyBackup = async () => {
     setIsCreatingBackup(true);
-    setBackupStatusMessage('جاري توليد نسخة احتياطية وقائية وحفظها...');
+    setBackupStatusMessage(language === 'ar' ? 'جاري توليد نسخة احتياطية وقائية وحفظها...' : 'Generating safety backup snapshot...');
     try {
       const backup = await createDatabaseBackup(
         'PRE_IMPORT',
@@ -149,13 +176,180 @@ export const DataImportView: React.FC = () => {
         true
       );
       setBackupId(backup.backupId);
-      setBackupStatusMessage(`تم إنشاء النسخة الوقائية بنجاح (${backup.backupId}) وتنزيل الملف.`);
+      setBackupStatusMessage(language === 'ar' ? `تم إنشاء النسخة الوقائية بنجاح (${backup.backupId}) وتنزيل الملف.` : `Safety backup created (${backup.backupId}).`);
     } catch (err: any) {
       console.error('Backup creation error:', err);
-      setBackupStatusMessage('تعذر إنشاء النسخة الاحتياطية تلقائياً: ' + err.message);
+      setBackupStatusMessage((language === 'ar' ? 'تعذر إنشاء النسخة الاحتياطية تلقائياً: ' : 'Failed to create backup: ') + err.message);
     } finally {
       setIsCreatingBackup(false);
     }
+  };
+
+  // Accept a proposed match for a specific row and fieldDomain
+  const handleAcceptProposedMatch = (
+    rowIndex: number, 
+    matchIndex: number, 
+    chosenCandidate?: { id: string; name: string; code?: string; confidence: number }
+  ) => {
+    if (!pressingSummary) return;
+
+    const updatedRows = pressingSummary.rows.map((row) => {
+      if (row.rowIndex !== rowIndex || !row.proposedMatches) return row;
+
+      const prop = row.proposedMatches[matchIndex];
+      if (!prop) return row;
+
+      const candidateToUse = chosenCandidate || {
+        id: prop.suggestedId || '',
+        name: prop.suggestedName || '',
+        code: prop.suggestedCode || '',
+        confidence: prop.confidence
+      };
+
+      const updatedMatches = [...row.proposedMatches];
+      updatedMatches[matchIndex] = {
+        ...prop,
+        suggestedId: candidateToUse.id,
+        suggestedName: candidateToUse.name,
+        suggestedCode: candidateToUse.code,
+        confidence: candidateToUse.confidence,
+        decision: 'ACCEPTED',
+      };
+
+      const updatedRow = { ...row, proposedMatches: updatedMatches };
+
+      // Apply resolution to entity
+      if (prop.fieldDomain === 'employee1' || prop.fieldDomain === 'worker1') {
+        updatedRow.worker1Code = candidateToUse.code || updatedRow.worker1Code;
+        updatedRow.resolvedWorker1 = { id: candidateToUse.id, name: candidateToUse.name, code: candidateToUse.code || '' };
+        updatedRow.errors = updatedRow.errors.filter(e => !e.includes('عامل 1'));
+      } else if (prop.fieldDomain === 'employee2' || prop.fieldDomain === 'worker2') {
+        updatedRow.worker2Code = candidateToUse.code || updatedRow.worker2Code;
+        updatedRow.resolvedWorker2 = { id: candidateToUse.id, name: candidateToUse.name, code: candidateToUse.code || '' };
+        updatedRow.errors = updatedRow.errors.filter(e => !e.includes('عامل 2'));
+      } else if (prop.fieldDomain === 'press') {
+        updatedRow.resolvedPress = { id: candidateToUse.id, name: candidateToUse.name, code: candidateToUse.code || '' };
+        updatedRow.errors = updatedRow.errors.filter(e => !e.includes('المكبس') && !e.includes('مكبس'));
+      } else if (prop.fieldDomain === 'product') {
+        updatedRow.productCodeRaw = candidateToUse.code || updatedRow.productCodeRaw;
+        updatedRow.resolvedProduct = { id: candidateToUse.id, name: candidateToUse.name, code: candidateToUse.code || '' };
+        updatedRow.errors = updatedRow.errors.filter(e => !e.includes('الصنف') && !e.includes('كود الصنف'));
+      } else if (prop.fieldDomain === 'furnaceCar') {
+        updatedRow.resolvedFurnaceCars = [{ id: candidateToUse.id, code: candidateToUse.code || '', carNumber: candidateToUse.name || candidateToUse.code || '' }];
+        updatedRow.errors = updatedRow.errors.filter(e => !e.includes('عربة') && !e.includes('عربات'));
+      }
+
+      // Re-evaluate row status
+      if (updatedRow.errors.length === 0) {
+        updatedRow.status = updatedRow.warnings.length > 0 ? 'WARNING' : 'VALID';
+      }
+
+      return updatedRow;
+    });
+
+    // Recompute stats
+    const validRows = updatedRows.filter(r => r.errors.length === 0 && r.warnings.length === 0 && !r.isDuplicate).length;
+    const warningRows = updatedRows.filter(r => r.warnings.length > 0 && r.errors.length === 0).length;
+    const errorRows = updatedRows.filter(r => r.errors.length > 0).length;
+
+    setPressingSummary({
+      ...pressingSummary,
+      rows: updatedRows,
+      validRows,
+      warningRows,
+      errorRows,
+    });
+  };
+
+  // Reject a proposed match
+  const handleRejectProposedMatch = (rowIndex: number, matchIndex: number) => {
+    if (!pressingSummary) return;
+
+    const updatedRows = pressingSummary.rows.map((row) => {
+      if (row.rowIndex !== rowIndex || !row.proposedMatches) return row;
+
+      const prop = row.proposedMatches[matchIndex];
+      if (!prop) return row;
+
+      const updatedMatches = [...row.proposedMatches];
+      updatedMatches[matchIndex] = {
+        ...prop,
+        decision: 'REJECTED',
+      };
+
+      return { ...row, proposedMatches: updatedMatches };
+    });
+
+    setPressingSummary({
+      ...pressingSummary,
+      rows: updatedRows,
+    });
+  };
+
+  // Accept all high-confidence proposed matches (≥ 90%) in one click
+  const handleAcceptAllHighConfidence = () => {
+    if (!pressingSummary) return;
+
+    const updatedRows = pressingSummary.rows.map((row) => {
+      if (!row.proposedMatches || row.proposedMatches.length === 0) return row;
+
+      let updatedRow = { ...row };
+      const updatedMatches = row.proposedMatches.map((prop) => {
+        if (prop.confidence >= 90 && prop.decision !== 'REJECTED') {
+          const candidateToUse = {
+            id: prop.suggestedId || '',
+            name: prop.suggestedName || '',
+            code: prop.suggestedCode || '',
+            confidence: prop.confidence
+          };
+          
+          if (prop.fieldDomain === 'employee1' || prop.fieldDomain === 'worker1') {
+            updatedRow.worker1Code = candidateToUse.code || updatedRow.worker1Code;
+            updatedRow.resolvedWorker1 = { id: candidateToUse.id, name: candidateToUse.name, code: candidateToUse.code };
+            updatedRow.errors = updatedRow.errors.filter(e => !e.includes('عامل 1'));
+          } else if (prop.fieldDomain === 'employee2' || prop.fieldDomain === 'worker2') {
+            updatedRow.worker2Code = candidateToUse.code || updatedRow.worker2Code;
+            updatedRow.resolvedWorker2 = { id: candidateToUse.id, name: candidateToUse.name, code: candidateToUse.code };
+            updatedRow.errors = updatedRow.errors.filter(e => !e.includes('عامل 2'));
+          } else if (prop.fieldDomain === 'press') {
+            updatedRow.resolvedPress = { id: candidateToUse.id, name: candidateToUse.name, code: candidateToUse.code };
+            updatedRow.errors = updatedRow.errors.filter(e => !e.includes('المكبس') && !e.includes('مكبس'));
+          } else if (prop.fieldDomain === 'product') {
+            updatedRow.productCodeRaw = candidateToUse.code || updatedRow.productCodeRaw;
+            updatedRow.resolvedProduct = { id: candidateToUse.id, name: candidateToUse.name, code: candidateToUse.code };
+            updatedRow.errors = updatedRow.errors.filter(e => !e.includes('الصنف') && !e.includes('كود الصنف'));
+          } else if (prop.fieldDomain === 'furnaceCar') {
+            updatedRow.resolvedFurnaceCars = [{ id: candidateToUse.id, code: candidateToUse.code, carNumber: candidateToUse.name || candidateToUse.code }];
+            updatedRow.errors = updatedRow.errors.filter(e => !e.includes('عربة') && !e.includes('عربات'));
+          }
+
+          return {
+            ...prop,
+            decision: 'ACCEPTED' as const,
+          };
+        }
+        return prop;
+      });
+
+      updatedRow.proposedMatches = updatedMatches;
+      if (updatedRow.errors.length === 0) {
+        updatedRow.status = updatedRow.warnings.length > 0 ? 'WARNING' : 'VALID';
+      }
+      return updatedRow;
+    });
+
+    // Recompute stats
+    const validRows = updatedRows.filter(r => r.errors.length === 0 && r.warnings.length === 0 && !r.isDuplicate).length;
+    const warningRows = updatedRows.filter(r => r.warnings.length > 0 && r.errors.length === 0).length;
+    const errorRows = updatedRows.filter(r => r.errors.length > 0).length;
+
+    setPressingSummary({
+      ...pressingSummary,
+      rows: updatedRows,
+      validRows,
+      warningRows,
+      errorRows,
+    });
   };
 
   // Start Actual Import
@@ -164,7 +358,7 @@ export const DataImportView: React.FC = () => {
       if (!pressingSummary) return;
       const validAndWarningRows = pressingSummary.rows.filter(r => r.errors.length === 0);
       if (validAndWarningRows.length === 0) {
-        alert('لا توجد صفوف صالحة للاستيراد. يرجى تصحيح الأخطاء أولاً.');
+        alert(language === 'ar' ? 'لا توجد صفوف صالحة للاستيراد. يرجى تصحيح الأخطاء أولاً.' : 'No valid rows to import. Please resolve errors.');
         return;
       }
 
@@ -190,7 +384,7 @@ export const DataImportView: React.FC = () => {
         });
         setPressingSummary(null);
       } catch (err: any) {
-        alert('حدث خطأ أثناء تنفيذ الاستيراد: ' + (err.message || 'خطأ غير معروف'));
+        alert(language === 'ar' ? 'حدث خطأ أثناء تنفيذ الاستيراد: ' + (err.message || 'خطأ غير معروف') : 'Import error: ' + err.message);
       } finally {
         setIsImporting(false);
       }
@@ -216,10 +410,47 @@ export const DataImportView: React.FC = () => {
         setGenericRawRows([]);
         setGenericValidation(null);
       } catch (err: any) {
-        alert('حدث خطأ أثناء الاستيراد: ' + (err.message || 'خطأ غير معروف'));
+        alert(language === 'ar' ? 'حدث خطأ أثناء الاستيراد: ' + (err.message || 'خطأ غير معروف') : 'Import error: ' + err.message);
       } finally {
         setIsImporting(false);
       }
+    }
+  };
+
+  // Open Import History Modal
+  const openHistoryModal = async () => {
+    setIsHistoryModalOpen(true);
+    setIsLoadingHistory(true);
+    try {
+      const history = await getHistoricalImportHistory();
+      setImportHistory(history);
+    } catch (err) {
+      console.warn('Failed to load history:', err);
+    } finally {
+      setIsLoadingHistory(false);
+    }
+  };
+
+  // Handle Rollback Batch
+  const handleConfirmRollback = async () => {
+    if (!rollbackTargetBatch) return;
+    setIsRollingBack(true);
+    setRollbackSuccessMsg(null);
+    try {
+      const res = await rollbackImportBatch(rollbackTargetBatch.importBatchId, rollbackTargetBatch.stage);
+      setRollbackSuccessMsg(
+        language === 'ar'
+          ? `تم التراجع بنجاح وحذف ${res.deletedCount} سجل من دفعة (${rollbackTargetBatch.importBatchId}).`
+          : `Successfully rolled back ${res.deletedCount} records for batch (${rollbackTargetBatch.importBatchId}).`
+      );
+      // Refresh history list
+      const refreshed = await getHistoricalImportHistory();
+      setImportHistory(refreshed);
+      setRollbackTargetBatch(null);
+    } catch (err: any) {
+      alert(language === 'ar' ? 'فشل التراجع عن الدفعة: ' + err.message : 'Rollback failed: ' + err.message);
+    } finally {
+      setIsRollingBack(false);
     }
   };
 
@@ -229,6 +460,8 @@ export const DataImportView: React.FC = () => {
     switch (activeFilterTab) {
       case 'VALID':
         return pressingSummary.rows.filter(r => r.errors.length === 0 && r.warnings.length === 0 && !r.isDuplicate);
+      case 'MATCHES':
+        return pressingSummary.rows.filter(r => r.proposedMatches && r.proposedMatches.length > 0);
       case 'WARNINGS':
         return pressingSummary.rows.filter(r => r.warnings.length > 0 && r.errors.length === 0);
       case 'ERRORS':
@@ -243,23 +476,29 @@ export const DataImportView: React.FC = () => {
 
   const filteredPressingRows = getFilteredPressingRows();
 
+  // Count total proposed matches across all rows
+  const totalProposedMatchesCount = pressingSummary?.rows.reduce(
+    (acc, r) => acc + (r.proposedMatches?.length || 0), 
+    0
+  ) || 0;
+
   // Helper for Status Badge Rendering
   const renderStatusBadge = (row: PressingImportRow) => {
     if (row.errors.length > 0) {
       return (
         <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] font-bold bg-red-100 text-red-800 border border-red-200">
           <AlertCircle className="w-3 h-3 text-red-600" />
-          {row.status === 'UNKNOWN_EMPLOYEE' && 'عامل غير مسجل'}
-          {row.status === 'EMPLOYEE_MISMATCH' && 'تعارض كود العامل'}
-          {row.status === 'UNKNOWN_PRODUCT' && 'صنف غير مسجل'}
-          {row.status === 'PRODUCT_MISMATCH' && 'تعارض كود الصنف'}
-          {row.status === 'UNKNOWN_PRESS' && 'مكبس غير مسجل'}
-          {row.status === 'UNKNOWN_FURNACE_CAR' && 'عربة فرن غير مسجلة'}
-          {row.status === 'INVALID_SHIFT' && 'وردية غير صالحة'}
-          {row.status === 'INVALID_DATE' && 'تاريخ غير صالح'}
-          {row.status === 'INVALID_NUMBER' && 'أرقام غير صالحة'}
-          {row.status === 'DUPLICATE_IN_FILE' && 'تكرار في الملف'}
-          {row.status === 'INVALID_ROW' && 'خطأ بالبيانات'}
+          {row.status === 'UNKNOWN_EMPLOYEE' && (language === 'ar' ? 'عامل غير مسجل' : 'Unknown Employee')}
+          {row.status === 'EMPLOYEE_MISMATCH' && (language === 'ar' ? 'تعارض كود العامل' : 'Employee Code Mismatch')}
+          {row.status === 'UNKNOWN_PRODUCT' && (language === 'ar' ? 'صنف غير مسجل' : 'Unknown Product')}
+          {row.status === 'PRODUCT_MISMATCH' && (language === 'ar' ? 'تعارض كود الصنف' : 'Product Code Mismatch')}
+          {row.status === 'UNKNOWN_PRESS' && (language === 'ar' ? 'مكبس غير مسجل' : 'Unknown Press')}
+          {row.status === 'UNKNOWN_FURNACE_CAR' && (language === 'ar' ? 'عربة غير مسجلة' : 'Unknown Furnace Car')}
+          {row.status === 'INVALID_SHIFT' && (language === 'ar' ? 'وردية غير صالحة' : 'Invalid Shift')}
+          {row.status === 'INVALID_DATE' && (language === 'ar' ? 'تاريخ غير صالح' : 'Invalid Date')}
+          {row.status === 'INVALID_NUMBER' && (language === 'ar' ? 'أرقام غير صالحة' : 'Invalid Number')}
+          {row.status === 'DUPLICATE_IN_FILE' && (language === 'ar' ? 'تكرار في الملف' : 'Duplicate in File')}
+          {row.status === 'INVALID_ROW' && (language === 'ar' ? 'خطأ بالبيانات' : 'Invalid Row')}
         </span>
       );
     }
@@ -268,10 +507,10 @@ export const DataImportView: React.FC = () => {
       return (
         <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] font-bold bg-amber-100 text-amber-900 border border-amber-200">
           <AlertTriangle className="w-3 h-3 text-amber-600" />
-          {row.status === 'FAULT_TOTAL_MISMATCH' && 'فروق أعطال'}
-          {row.status === 'MISSING_PIECE_WEIGHT' && 'وزن مفقود'}
-          {row.status === 'DUPLICATE_IN_DATABASE' && 'مكرر في النظام'}
-          {row.status === 'WARNING' && 'تنبيه'}
+          {row.status === 'FAULT_TOTAL_MISMATCH' && (language === 'ar' ? 'فروق أعطال' : 'Fault Mismatch')}
+          {row.status === 'MISSING_PIECE_WEIGHT' && (language === 'ar' ? 'وزن مفقود' : 'Missing Weight')}
+          {row.status === 'DUPLICATE_IN_DATABASE' && (language === 'ar' ? 'مكرر في النظام' : 'Duplicate in Database')}
+          {row.status === 'WARNING' && (language === 'ar' ? 'تنبيه' : 'Warning')}
         </span>
       );
     }
@@ -279,45 +518,58 @@ export const DataImportView: React.FC = () => {
     return (
       <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] font-bold bg-emerald-100 text-emerald-800 border border-emerald-200">
         <CheckCircle2 className="w-3 h-3 text-emerald-600" />
-        جاهز
+        {language === 'ar' ? 'جاهز' : 'Valid'}
       </span>
     );
   };
 
   return (
-    <div className="space-y-6" dir="rtl">
+    <div className="space-y-6" dir={isRtl ? 'rtl' : 'ltr'}>
       {/* Header Bar */}
       <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-xs flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
           <h1 className="text-xl font-black text-slate-900 flex items-center gap-2">
             <FileSpreadsheet className="w-6 h-6 text-emerald-600" />
-            مركز استيراد بيانات الإنتاج التاريخي (Historical Production Import)
+            <span>{language === 'ar' ? 'مركز استيراد بيانات الإنتاج التاريخي' : 'Historical Production Data Import'}</span>
           </h1>
           <p className="text-xs text-slate-500 mt-1">
-            استيراد السجلات السابقة عبر ملفات Excel الرسمية مع المطابقة الذكية للبيانات الأساسية وتدقيق الأعطال
+            {language === 'ar' 
+              ? 'استيراد السجلات السابقة عبر ملفات Excel الرسمية مع المطابقة الذكية للبيانات الأساسية وتدقيق الأعطال'
+              : 'Import historical production records with smart AI-assisted fuzzy entity matching and complete audit rollback.'}
           </p>
         </div>
 
-        <button
-          type="button"
-          onClick={() => downloadStageExcelTemplate(selectedStage)}
-          className="flex items-center gap-1.5 px-4 py-2.5 text-xs font-bold bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl shadow-xs transition-colors cursor-pointer"
-        >
-          <Download className="w-4 h-4" />
-          تحميل قالب Excel الرسمي ({STAGE_DISPLAY_NAMES[selectedStage]})
-        </button>
+        <div className="flex items-center gap-2.5">
+          <button
+            type="button"
+            onClick={openHistoryModal}
+            className="flex items-center gap-1.5 px-3.5 py-2 text-xs font-bold text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-xl transition-colors cursor-pointer"
+          >
+            <History className="w-4 h-4 text-slate-600" />
+            <span>{language === 'ar' ? 'سجل العمليات والتراجع' : 'Import History & Rollback'}</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => downloadStageExcelTemplate(selectedStage)}
+            className="flex items-center gap-1.5 px-4 py-2 text-xs font-bold bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl shadow-xs transition-colors cursor-pointer"
+          >
+            <Download className="w-4 h-4" />
+            <span>{language === 'ar' ? `تحميل قالب Excel الرسمي (${STAGE_DISPLAY_NAMES[selectedStage]})` : `Download Template (${STAGE_DISPLAY_NAMES[selectedStage]})`}</span>
+          </button>
+        </div>
       </div>
 
       {/* Stage Selector Tabs */}
       <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-xs space-y-3">
         <div className="flex items-center justify-between">
           <label className="block text-xs font-bold text-slate-700">
-            اختر المرحلة الإنتاجية المراد استيراد بياناتها:
+            {language === 'ar' ? 'اختر المرحلة الإنتاجية المراد استيراد بياناتها:' : 'Select Production Stage:'}
           </label>
           {selectedStage === 'pressing' && (
             <span className="text-[11px] font-bold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded border border-emerald-200 flex items-center gap-1">
               <Sparkles className="w-3 h-3 text-emerald-600" />
-              تنسيق المكابس المتقدم (21 عمود معتمد)
+              {language === 'ar' ? 'تنسيق المكابس المتقدم (21 عمود معتمد + مطابقة ذكية)' : 'Advanced Pressing Format (21 Columns + Smart Fuzzy Matching)'}
             </span>
           )}
         </div>
@@ -348,10 +600,12 @@ export const DataImportView: React.FC = () => {
           </div>
           <div>
             <h3 className="text-xs font-black text-blue-950">
-              إجراء وقائي: أخذ نسخة احتياطية فورية قبل الاستيراد
+              {language === 'ar' ? 'إجراء وقائي: أخذ نسخة احتياطية فورية قبل الاستيراد' : 'Safety Check: Pre-import Backup Snapshot'}
             </h3>
             <p className="text-[11px] text-blue-800 mt-0.5">
-              يوصى بشدة بإنشاء نسخة احتياطية من قاعدة البيانات الحالية لضمان استرجاع البيانات بأمان في أي وقت.
+              {language === 'ar' 
+                ? 'يوصى بشدة بإنشاء نسخة احتياطية من قاعدة البيانات الحالية لضمان استرجاع البيانات بأمان في أي وقت.'
+                : 'Recommended to generate a backup snapshot of current Firestore documents before batch execution.'}
             </p>
           </div>
         </div>
@@ -360,7 +614,7 @@ export const DataImportView: React.FC = () => {
           {backupId ? (
             <span className="text-xs font-bold text-emerald-800 bg-emerald-100 border border-emerald-300 px-3 py-1.5 rounded-xl flex items-center gap-1.5">
               <CheckCircle2 className="w-4 h-4 text-emerald-600" />
-              النسخة الوقائية جاهزة ({backupId})
+              <span>{language === 'ar' ? `النسخة الوقائية جاهزة (${backupId})` : `Safety Backup Ready (${backupId})`}</span>
             </span>
           ) : (
             <button
@@ -372,12 +626,12 @@ export const DataImportView: React.FC = () => {
               {isCreatingBackup ? (
                 <>
                   <Loader2 className="w-4 h-4 animate-spin" />
-                  <span>جاري الحفظ...</span>
+                  <span>{language === 'ar' ? 'جاري الحفظ...' : 'Creating...'}</span>
                 </>
               ) : (
                 <>
                   <Database className="w-4 h-4" />
-                  <span>إنشاء نسخة احتياطية وقائية الآن</span>
+                  <span>{language === 'ar' ? 'إنشاء نسخة احتياطية وقائية الآن' : 'Create Safety Backup Now'}</span>
                 </>
               )}
             </button>
@@ -409,10 +663,14 @@ export const DataImportView: React.FC = () => {
           </div>
           <div>
             <h3 className="text-base font-bold text-slate-900">
-              اسحب وأفلت ملف Excel لمرحلة ({STAGE_DISPLAY_NAMES[selectedStage]}) هنا أو اضغط للاختيار
+              {language === 'ar' 
+                ? `اسحب وأفلت ملف Excel لمرحلة (${STAGE_DISPLAY_NAMES[selectedStage]}) هنا أو اضغط للاختيار`
+                : `Drop Excel file for (${STAGE_DISPLAY_NAMES[selectedStage]}) or click to browse`}
             </h3>
             <p className="text-xs text-slate-500 mt-1">
-              يدعم ملفات .xlsx و .csv. يتم معالجة الصفوف في دفعات سريعة من 400 سجل.
+              {language === 'ar' 
+                ? 'يدعم ملفات .xlsx و .csv. يتم تدقيق الأسماء والأكواد مع المطابقة الذكية في دفعات من 400 سجل.'
+                : 'Supports .xlsx & .csv. Automated entity validation and batch commit.'}
             </p>
           </div>
           {file && (
@@ -428,7 +686,9 @@ export const DataImportView: React.FC = () => {
         <div className="p-8 bg-white rounded-2xl border border-slate-200 text-center flex flex-col items-center gap-2">
           <Loader2 className="w-7 h-7 animate-spin text-emerald-600" />
           <span className="text-xs font-bold text-slate-600">
-            جاري قراءة وفحص أعمدة وبيانات ملف Excel والمطابقة مع البيانات الأساسية...
+            {language === 'ar' 
+              ? 'جاري قراءة وفحص أعمدة وبيانات ملف Excel والمطابقة الذكية مع البيانات الأساسية...'
+              : 'Reading and validating Excel sheet with smart fuzzy matching...'}
           </span>
         </div>
       )}
@@ -443,68 +703,105 @@ export const DataImportView: React.FC = () => {
             <div>
               <h2 className="text-base font-black text-slate-900 flex items-center gap-2">
                 <Database className="w-5 h-5 text-emerald-600" />
-                نتيجة الفحص الشامل لاستيراد المكابس (Pressing Import Dry-Run)
+                <span>{language === 'ar' ? 'نتيجة الفحص الشامل لاستيراد المكابس (Pressing Dry-Run)' : 'Pressing Import Dry-Run & Audit'}</span>
               </h2>
               <p className="text-xs text-slate-500 mt-0.5">
-                تم تدقيق {pressingSummary.totalRows} صف في الملف المرفوع وفق الأعمدة الـ 21 المعتمدة
+                {language === 'ar' 
+                  ? `تم تدقيق ${pressingSummary.totalRows} صف في الملف المرفوع وفق الأعمدة الـ 21 المعتمدة`
+                  : `Validated ${pressingSummary.totalRows} rows against 21 standard columns`}
               </p>
             </div>
 
             {/* Quick Metrics Grid */}
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
               <div className="p-2.5 bg-slate-50 rounded-xl border border-slate-200 text-center">
-                <span className="text-[11px] font-bold text-slate-500 block">إجمالي الصفوف</span>
+                <span className="text-[11px] font-bold text-slate-500 block">{language === 'ar' ? 'إجمالي الصفوف' : 'Total Rows'}</span>
                 <span className="text-base font-black text-slate-900">{pressingSummary.totalRows}</span>
               </div>
               <div className="p-2.5 bg-emerald-50 rounded-xl border border-emerald-200 text-center">
-                <span className="text-[11px] font-bold text-emerald-700 block">جاهز للاستيراد</span>
+                <span className="text-[11px] font-bold text-emerald-700 block">{language === 'ar' ? 'جاهز للاستيراد' : 'Valid'}</span>
                 <span className="text-base font-black text-emerald-600">{pressingSummary.validRows}</span>
               </div>
               <div className="p-2.5 bg-amber-50 rounded-xl border border-amber-200 text-center">
-                <span className="text-[11px] font-bold text-amber-800 block">تنبيهات وفروق</span>
+                <span className="text-[11px] font-bold text-amber-800 block">{language === 'ar' ? 'تنبيهات وفروق' : 'Warnings'}</span>
                 <span className="text-base font-black text-amber-600">{pressingSummary.warningRows}</span>
               </div>
               <div className="p-2.5 bg-red-50 rounded-xl border border-red-200 text-center">
-                <span className="text-[11px] font-bold text-red-800 block">أخطاء مانعة</span>
+                <span className="text-[11px] font-bold text-red-800 block">{language === 'ar' ? 'أخطاء مانعة' : 'Errors'}</span>
                 <span className="text-base font-black text-red-600">{pressingSummary.errorRows}</span>
               </div>
             </div>
           </div>
 
+          {/* Smart Match Banner if proposals exist */}
+          {totalProposedMatchesCount > 0 && (
+            <div className="bg-linear-to-r from-emerald-50 via-teal-50 to-indigo-50 border border-emerald-300/80 rounded-2xl p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-xl bg-emerald-600 text-white flex items-center justify-center shrink-0 shadow-xs">
+                  <Sparkles className="w-5 h-5" />
+                </div>
+                <div>
+                  <h4 className="text-xs font-black text-emerald-950 flex items-center gap-1.5">
+                    <span>{language === 'ar' ? 'المطابقة الذكية للبيانات والأسماء التاريخية' : 'Smart Historical Entity Matching'}</span>
+                    <span className="px-2 py-0.5 bg-emerald-200 text-emerald-900 rounded-full text-[10px] font-bold">
+                      {totalProposedMatchesCount} {language === 'ar' ? 'مطابقة مقترحة' : 'proposals'}
+                    </span>
+                  </h4>
+                  <p className="text-[11px] text-emerald-800 mt-0.5">
+                    {language === 'ar' 
+                      ? 'تم التعرف الذكي على عمال ومكابس وأصناف وعربات أفران متقاربة. يمكنك اعتماد المطابقات لتصحيح الصفوف تلقائياً.'
+                      : 'Fuzzy candidates found. Review and approve to automatically resolve unknown entity errors.'}
+                  </p>
+                </div>
+              </div>
+
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={handleAcceptAllHighConfidence}
+                  className="flex items-center gap-1.5 px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold rounded-xl shadow-xs transition-colors cursor-pointer"
+                >
+                  <CheckCheck className="w-4 h-4" />
+                  <span>{language === 'ar' ? 'اعتماد كافة التطابقات المؤكدة (≥ 90%)' : 'Accept High-Confidence Matches (≥ 90%)'}</span>
+                </button>
+              </div>
+            </div>
+          )}
+
           {/* Diagnostic Breakdown Cards */}
           <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2 pt-1">
             <div className="p-2 bg-slate-50 rounded-lg border border-slate-200 text-center">
-              <span className="text-[10px] font-bold text-slate-500 block">عمال غير مسجلين</span>
+              <span className="text-[10px] font-bold text-slate-500 block">{language === 'ar' ? 'عمال غير مسجلين' : 'Unknown Workers'}</span>
               <span className={`text-xs font-black ${pressingSummary.unknownEmployeesCount > 0 ? 'text-red-600' : 'text-slate-700'}`}>
                 {pressingSummary.unknownEmployeesCount}
               </span>
             </div>
             <div className="p-2 bg-slate-50 rounded-lg border border-slate-200 text-center">
-              <span className="text-[10px] font-bold text-slate-500 block">أصناف غير مسجلة</span>
+              <span className="text-[10px] font-bold text-slate-500 block">{language === 'ar' ? 'أصناف غير مسجلة' : 'Unknown Products'}</span>
               <span className={`text-xs font-black ${pressingSummary.unknownProductsCount > 0 ? 'text-red-600' : 'text-slate-700'}`}>
                 {pressingSummary.unknownProductsCount}
               </span>
             </div>
             <div className="p-2 bg-slate-50 rounded-lg border border-slate-200 text-center">
-              <span className="text-[10px] font-bold text-slate-500 block">مكابس غير مسجلة</span>
+              <span className="text-[10px] font-bold text-slate-500 block">{language === 'ar' ? 'مكابس غير مسجلة' : 'Unknown Presses'}</span>
               <span className={`text-xs font-black ${pressingSummary.unknownPressesCount > 0 ? 'text-red-600' : 'text-slate-700'}`}>
                 {pressingSummary.unknownPressesCount}
               </span>
             </div>
             <div className="p-2 bg-slate-50 rounded-lg border border-slate-200 text-center">
-              <span className="text-[10px] font-bold text-slate-500 block">عربات غير مسجلة</span>
+              <span className="text-[10px] font-bold text-slate-500 block">{language === 'ar' ? 'عربات غير مسجلة' : 'Unknown Cars'}</span>
               <span className={`text-xs font-black ${pressingSummary.unknownFurnaceCarsCount > 0 ? 'text-red-600' : 'text-slate-700'}`}>
                 {pressingSummary.unknownFurnaceCarsCount}
               </span>
             </div>
             <div className="p-2 bg-slate-50 rounded-lg border border-slate-200 text-center">
-              <span className="text-[10px] font-bold text-slate-500 block">أخطاء الوردية (1/2)</span>
+              <span className="text-[10px] font-bold text-slate-500 block">{language === 'ar' ? 'أخطاء الوردية' : 'Shift Errors'}</span>
               <span className={`text-xs font-black ${pressingSummary.shiftErrorsCount > 0 ? 'text-red-600' : 'text-slate-700'}`}>
                 {pressingSummary.shiftErrorsCount}
               </span>
             </div>
             <div className="p-2 bg-slate-50 rounded-lg border border-slate-200 text-center">
-              <span className="text-[10px] font-bold text-slate-500 block">فروق مجموع الأعطال</span>
+              <span className="text-[10px] font-bold text-slate-500 block">{language === 'ar' ? 'فروق مجموع الأعطال' : 'Fault Mismatches'}</span>
               <span className={`text-xs font-black ${pressingSummary.faultMismatchesCount > 0 ? 'text-amber-600' : 'text-slate-700'}`}>
                 {pressingSummary.faultMismatchesCount}
               </span>
@@ -522,8 +819,24 @@ export const DataImportView: React.FC = () => {
                   : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
               }`}
             >
-              كافة الصفوف ({pressingSummary.totalRows})
+              {language === 'ar' ? `كافة الصفوف (${pressingSummary.totalRows})` : `All Rows (${pressingSummary.totalRows})`}
             </button>
+
+            {totalProposedMatchesCount > 0 && (
+              <button
+                type="button"
+                onClick={() => setActiveFilterTab('MATCHES')}
+                className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer whitespace-nowrap flex items-center gap-1.5 ${
+                  activeFilterTab === 'MATCHES'
+                    ? 'bg-indigo-600 text-white shadow-xs'
+                    : 'bg-indigo-50 text-indigo-800 hover:bg-indigo-100'
+                }`}
+              >
+                <Sparkles className="w-3.5 h-3.5" />
+                <span>{language === 'ar' ? `مراجعة المطابقات الذكية (${totalProposedMatchesCount})` : `Smart Matches (${totalProposedMatchesCount})`}</span>
+              </button>
+            )}
+
             <button
               type="button"
               onClick={() => setActiveFilterTab('VALID')}
@@ -533,7 +846,7 @@ export const DataImportView: React.FC = () => {
                   : 'bg-emerald-50 text-emerald-700 hover:bg-emerald-100'
               }`}
             >
-              جاهزة وسليمة ({pressingSummary.validRows})
+              {language === 'ar' ? `جاهزة وسليمة (${pressingSummary.validRows})` : `Valid (${pressingSummary.validRows})`}
             </button>
             <button
               type="button"
@@ -544,7 +857,7 @@ export const DataImportView: React.FC = () => {
                   : 'bg-amber-50 text-amber-800 hover:bg-amber-100'
               }`}
             >
-              تنبيهات وفروق ({pressingSummary.warningRows})
+              {language === 'ar' ? `تنبيهات وفروق (${pressingSummary.warningRows})` : `Warnings (${pressingSummary.warningRows})`}
             </button>
             <button
               type="button"
@@ -555,7 +868,7 @@ export const DataImportView: React.FC = () => {
                   : 'bg-red-50 text-red-800 hover:bg-red-100'
               }`}
             >
-              أخطاء مانعة ({pressingSummary.errorRows})
+              {language === 'ar' ? `أخطاء مانعة (${pressingSummary.errorRows})` : `Errors (${pressingSummary.errorRows})`}
             </button>
             <button
               type="button"
@@ -566,43 +879,44 @@ export const DataImportView: React.FC = () => {
                   : 'bg-purple-50 text-purple-800 hover:bg-purple-100'
               }`}
             >
-              سجلات مكررة ({pressingSummary.duplicateRows})
+              {language === 'ar' ? `سجلات مكررة (${pressingSummary.duplicateRows})` : `Duplicates (${pressingSummary.duplicateRows})`}
             </button>
           </div>
 
           {/* Full Rich Preview Table */}
           <div className="space-y-2">
             <div className="flex items-center justify-between text-xs font-bold text-slate-700">
-              <span>معاينة الصفوف المفحوصة ({filteredPressingRows.length} صف معروض):</span>
-              <span className="text-[11px] text-slate-400 font-mono">21 عمود مطابق لقالب المكابس</span>
+              <span>{language === 'ar' ? `معاينة الصفوف المفحوصة (${filteredPressingRows.length} صف معروض):` : `Row Preview (${filteredPressingRows.length} rows):`}</span>
+              <span className="text-[11px] text-slate-400 font-mono">{language === 'ar' ? '21 عمود مطابق لقالب المكابس' : '21 Column Standard Matrix'}</span>
             </div>
 
             <div className="overflow-x-auto rounded-xl border border-slate-200 max-h-96">
               <table className="w-full text-right text-xs">
                 <thead className="bg-slate-50 text-slate-700 font-black sticky top-0 z-10 border-b border-slate-200 text-[11px]">
                   <tr>
-                    <th className="p-2.5 whitespace-nowrap">م</th>
-                    <th className="p-2.5 whitespace-nowrap">الحالة</th>
-                    <th className="p-2.5 whitespace-nowrap">التاريخ</th>
-                    <th className="p-2.5 whitespace-nowrap">عامل 1 (الاسم / السجل)</th>
-                    <th className="p-2.5 whitespace-nowrap">عامل 2 (الاسم / السجل)</th>
-                    <th className="p-2.5 whitespace-nowrap">رقم العربات</th>
-                    <th className="p-2.5 whitespace-nowrap">المكبس</th>
-                    <th className="p-2.5 whitespace-nowrap">طلب العميل</th>
-                    <th className="p-2.5 whitespace-nowrap">الوردية</th>
-                    <th className="p-2.5 whitespace-nowrap">كود الصنف</th>
-                    <th className="p-2.5 whitespace-nowrap">اسم الصنف</th>
-                    <th className="p-2.5 whitespace-nowrap">الألومينا %</th>
-                    <th className="p-2.5 whitespace-nowrap">وزن القطعة</th>
-                    <th className="p-2.5 whitespace-nowrap">الإنتاج</th>
-                    <th className="p-2.5 whitespace-nowrap">الهالك</th>
-                    <th className="p-2.5 whitespace-nowrap">ميكانيكا</th>
-                    <th className="p-2.5 whitespace-nowrap">كهرباء</th>
-                    <th className="p-2.5 whitespace-nowrap">ورشة</th>
-                    <th className="p-2.5 whitespace-nowrap">خامات</th>
-                    <th className="p-2.5 whitespace-nowrap">أخرى</th>
-                    <th className="p-2.5 whitespace-nowrap">إجمالي الأعطال (محسوب / ملف)</th>
-                    <th className="p-2.5 whitespace-nowrap min-w-[220px]">الملاحظات والأخطاء</th>
+                    <th className="p-2.5 whitespace-nowrap">#</th>
+                    <th className="p-2.5 whitespace-nowrap">{language === 'ar' ? 'الحالة' : 'Status'}</th>
+                    <th className="p-2.5 whitespace-nowrap">{language === 'ar' ? 'المطابقات الذكية والقرارات' : 'Smart Matches & Actions'}</th>
+                    <th className="p-2.5 whitespace-nowrap">{language === 'ar' ? 'التاريخ' : 'Date'}</th>
+                    <th className="p-2.5 whitespace-nowrap">{language === 'ar' ? 'عامل 1 (الاسم / السجل)' : 'Worker 1'}</th>
+                    <th className="p-2.5 whitespace-nowrap">{language === 'ar' ? 'عامل 2 (الاسم / السجل)' : 'Worker 2'}</th>
+                    <th className="p-2.5 whitespace-nowrap">{language === 'ar' ? 'رقم العربات' : 'Furnace Cars'}</th>
+                    <th className="p-2.5 whitespace-nowrap">{language === 'ar' ? 'المكبس' : 'Press'}</th>
+                    <th className="p-2.5 whitespace-nowrap">{language === 'ar' ? 'طلب العميل' : 'Customer Order'}</th>
+                    <th className="p-2.5 whitespace-nowrap">{language === 'ar' ? 'الوردية' : 'Shift'}</th>
+                    <th className="p-2.5 whitespace-nowrap">{language === 'ar' ? 'كود الصنف' : 'Product Code'}</th>
+                    <th className="p-2.5 whitespace-nowrap">{language === 'ar' ? 'اسم الصنف' : 'Product Name'}</th>
+                    <th className="p-2.5 whitespace-nowrap">{language === 'ar' ? 'الألومينا %' : 'Alumina %'}</th>
+                    <th className="p-2.5 whitespace-nowrap">{language === 'ar' ? 'وزن القطعة' : 'Piece Weight'}</th>
+                    <th className="p-2.5 whitespace-nowrap">{language === 'ar' ? 'الإنتاج' : 'Production'}</th>
+                    <th className="p-2.5 whitespace-nowrap">{language === 'ar' ? 'الهالك' : 'Waste'}</th>
+                    <th className="p-2.5 whitespace-nowrap">{language === 'ar' ? 'ميكانيكا' : 'Mechanical'}</th>
+                    <th className="p-2.5 whitespace-nowrap">{language === 'ar' ? 'كهرباء' : 'Electrical'}</th>
+                    <th className="p-2.5 whitespace-nowrap">{language === 'ar' ? 'ورشة' : 'Workshop'}</th>
+                    <th className="p-2.5 whitespace-nowrap">{language === 'ar' ? 'خامات' : 'Raw Material'}</th>
+                    <th className="p-2.5 whitespace-nowrap">{language === 'ar' ? 'أخرى' : 'Other'}</th>
+                    <th className="p-2.5 whitespace-nowrap">{language === 'ar' ? 'إجمالي الأعطال' : 'Total Faults'}</th>
+                    <th className="p-2.5 whitespace-nowrap min-w-[220px]">{language === 'ar' ? 'الملاحظات والأخطاء' : 'Notes & Errors'}</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100 font-mono text-[11px]">
@@ -619,18 +933,111 @@ export const DataImportView: React.FC = () => {
                     >
                       <td className="p-2.5 font-bold text-slate-500">{row.rowIndex}</td>
                       <td className="p-2.5">{renderStatusBadge(row)}</td>
+
+                      {/* Smart Fuzzy Match Decision Column */}
+                      <td className="p-2.5 font-sans min-w-[240px]">
+                        {row.proposedMatches && row.proposedMatches.length > 0 ? (
+                          <div className="space-y-2">
+                            {row.proposedMatches.map((prop, mIdx) => (
+                              <div 
+                                key={mIdx}
+                                className={`p-2 rounded-lg border text-[11px] ${
+                                  prop.decision === 'ACCEPTED'
+                                    ? 'bg-emerald-50 border-emerald-200 text-emerald-900'
+                                    : prop.decision === 'REJECTED'
+                                      ? 'bg-slate-100 border-slate-200 text-slate-500'
+                                      : 'bg-indigo-50/70 border-indigo-200 text-indigo-950'
+                                }`}
+                              >
+                                <div className="flex items-center justify-between gap-1 font-bold">
+                                  <span className="flex items-center gap-1">
+                                    <Sparkles className="w-3 h-3 text-indigo-600 shrink-0" />
+                                    {prop.fieldNameAr || prop.fieldDomain}
+                                  </span>
+                                  <span className={`px-1.5 py-0.2 rounded text-[10px] ${
+                                    prop.confidence >= 90 
+                                      ? 'bg-emerald-100 text-emerald-800' 
+                                      : 'bg-amber-100 text-amber-800'
+                                  }`}>
+                                    {prop.confidence}%
+                                  </span>
+                                </div>
+
+                                <div className="mt-1 text-[11px]">
+                                  <span className="text-slate-500">{language === 'ar' ? 'الملف: ' : 'Imported: '}</span>
+                                  <span className="font-bold">{prop.importedValue}</span>
+                                  <span className="text-indigo-600 mx-1">&rarr;</span>
+                                  <span className="font-black text-indigo-900">{prop.suggestedName}</span>
+                                </div>
+
+                                {/* Decision Actions */}
+                                <div className="flex items-center gap-1.5 mt-2 pt-1 border-t border-indigo-100">
+                                  {prop.decision === 'ACCEPTED' ? (
+                                    <span className="text-emerald-700 font-bold flex items-center gap-1 text-[10px]">
+                                      <Check className="w-3 h-3" />
+                                      {language === 'ar' ? 'تمت المطابقة' : 'Approved'}
+                                    </span>
+                                  ) : (
+                                    <>
+                                      <button
+                                        type="button"
+                                        onClick={() => handleAcceptProposedMatch(row.rowIndex, mIdx)}
+                                        className="px-2 py-0.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded font-bold text-[10px] cursor-pointer flex items-center gap-0.5"
+                                      >
+                                        <Check className="w-3 h-3" />
+                                        <span>{language === 'ar' ? 'اعتماد' : 'Accept'}</span>
+                                      </button>
+
+                                      {/* Candidates switcher if multiple */}
+                                      {prop.candidates && prop.candidates.length > 1 && (
+                                        <select
+                                          onChange={(e) => {
+                                            const cId = e.target.value;
+                                            const cand = prop.candidates?.find(c => c.id === cId);
+                                            if (cand) handleAcceptProposedMatch(row.rowIndex, mIdx, cand);
+                                          }}
+                                          className="text-[10px] bg-white border border-slate-300 rounded px-1 py-0.5"
+                                          defaultValue=""
+                                        >
+                                          <option value="" disabled>{language === 'ar' ? 'بدائل أخرى...' : 'Other candidates...'}</option>
+                                          {prop.candidates.map((c) => (
+                                            <option key={c.id} value={c.id}>
+                                              {c.name} ({c.confidence}%)
+                                            </option>
+                                          ))}
+                                        </select>
+                                      )}
+
+                                      <button
+                                        type="button"
+                                        onClick={() => handleRejectProposedMatch(row.rowIndex, mIdx)}
+                                        className="px-1.5 py-0.5 text-slate-500 hover:text-slate-800 text-[10px] cursor-pointer"
+                                      >
+                                        {language === 'ar' ? 'تخطي' : 'Skip'}
+                                      </button>
+                                    </>
+                                  )}
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        ) : (
+                          <span className="text-slate-400 font-sans text-[10px]">-</span>
+                        )}
+                      </td>
+
                       <td className="p-2.5 whitespace-nowrap text-slate-900 font-bold">{row.date || '-'}</td>
                       
                       {/* Worker 1 */}
                       <td className="p-2.5 whitespace-nowrap">
                         <div className="font-sans font-bold text-slate-900">{row.worker1Name || '-'}</div>
-                        <div className="text-[10px] text-slate-500">كود: {row.worker1Code || '-'}</div>
+                        <div className="text-[10px] text-slate-500">{language === 'ar' ? 'كود' : 'Code'}: {row.worker1Code || '-'}</div>
                       </td>
 
                       {/* Worker 2 */}
                       <td className="p-2.5 whitespace-nowrap">
                         <div className="font-sans font-bold text-slate-700">{row.worker2Name || '-'}</div>
-                        {row.worker2Code && <div className="text-[10px] text-slate-500">كود: {row.worker2Code}</div>}
+                        {row.worker2Code && <div className="text-[10px] text-slate-500">{language === 'ar' ? 'كود' : 'Code'}: {row.worker2Code}</div>}
                       </td>
 
                       {/* Furnace Cars */}
@@ -672,7 +1079,7 @@ export const DataImportView: React.FC = () => {
 
                       {/* Piece Weight */}
                       <td className="p-2.5 whitespace-nowrap text-center">
-                        {row.pieceWeight > 0 ? `${row.pieceWeight} كجم` : '-'}
+                        {row.pieceWeight > 0 ? `${row.pieceWeight} ${language === 'ar' ? 'كجم' : 'kg'}` : '-'}
                       </td>
 
                       {/* Production & Waste */}
@@ -692,10 +1099,10 @@ export const DataImportView: React.FC = () => {
 
                       {/* Calculated vs Excel Total Faults */}
                       <td className="p-2.5 whitespace-nowrap text-center font-bold">
-                        <span className="text-slate-900">{row.calculatedTotalFaults} د</span>
+                        <span className="text-slate-900">{row.calculatedTotalFaults} {language === 'ar' ? 'د' : 'm'}</span>
                         {row.excelTotalFaults !== undefined && (
                           <span className={`text-[10px] mr-1 ${row.excelTotalFaults === row.calculatedTotalFaults ? 'text-slate-400' : 'text-amber-700 font-bold'}`}>
-                            ({row.excelTotalFaults} د)
+                            ({row.excelTotalFaults} {language === 'ar' ? 'د' : 'm'})
                           </span>
                         )}
                       </td>
@@ -715,7 +1122,9 @@ export const DataImportView: React.FC = () => {
                             ))}
                           </div>
                         ) : (
-                          <span className="text-emerald-700 text-[11px] font-bold">بيانات مطابقة تماماً</span>
+                          <span className="text-emerald-700 text-[11px] font-bold">
+                            {language === 'ar' ? 'بيانات مطابقة تماماً' : 'Fully Validated'}
+                          </span>
                         )}
                       </td>
                     </tr>
@@ -731,7 +1140,11 @@ export const DataImportView: React.FC = () => {
               <div className="flex items-center justify-between text-xs font-bold text-slate-700">
                 <span className="flex items-center gap-2">
                   <Loader2 className="w-4 h-4 animate-spin text-emerald-600" />
-                  جاري استيراد الدفعة {currentBatchNum} من {totalBatchCount} إلى قاعدة بيانات الإنتاج (Firestore)...
+                  <span>
+                    {language === 'ar' 
+                      ? `جاري استيراد الدفعة ${currentBatchNum} من ${totalBatchCount} إلى قاعدة بيانات الإنتاج (Firestore)...`
+                      : `Importing chunk ${currentBatchNum} of ${totalBatchCount} to Firestore...`}
+                  </span>
                 </span>
                 <span>{importProgress}%</span>
               </div>
@@ -745,13 +1158,13 @@ export const DataImportView: React.FC = () => {
           ) : (
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pt-4 border-t border-slate-100">
               <div className="text-xs text-slate-600">
-                <span>سيتم استيراد: </span>
+                <span>{language === 'ar' ? 'سيتم استيراد: ' : 'Will import: '}</span>
                 <strong className="text-emerald-700 font-bold">
-                  {pressingSummary.validRows + pressingSummary.warningRows} سجل
+                  {pressingSummary.validRows + pressingSummary.warningRows} {language === 'ar' ? 'سجل' : 'records'}
                 </strong>
                 {pressingSummary.errorRows > 0 && (
                   <span className="text-red-600 mr-1">
-                    (سيتم تخطي {pressingSummary.errorRows} سجل خطأ تلقائياً)
+                    {language === 'ar' ? `(سيتم تخطي ${pressingSummary.errorRows} سجل خطأ تلقائياً)` : `(${pressingSummary.errorRows} invalid rows will be skipped)`}
                   </span>
                 )}
               </div>
@@ -762,7 +1175,7 @@ export const DataImportView: React.FC = () => {
                   onClick={() => setPressingSummary(null)}
                   className="px-4 py-2.5 text-xs font-bold text-slate-600 hover:bg-slate-100 rounded-xl cursor-pointer"
                 >
-                  إلغاء المعاينة
+                  {language === 'ar' ? 'إلغاء المعاينة' : 'Cancel'}
                 </button>
                 <button
                   type="button"
@@ -771,7 +1184,11 @@ export const DataImportView: React.FC = () => {
                   className="flex items-center gap-2 px-6 py-2.5 text-xs font-bold text-white bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 rounded-xl shadow-md transition-all cursor-pointer"
                 >
                   <CheckCircle2 className="w-4 h-4" />
-                  تنفيذ الاستيراد الفعلي ({pressingSummary.validRows + pressingSummary.warningRows} سجل)
+                  <span>
+                    {language === 'ar' 
+                      ? `تنفيذ الاستيراد الفعلي (${pressingSummary.validRows + pressingSummary.warningRows} سجل)`
+                      : `Execute Batch Import (${pressingSummary.validRows + pressingSummary.warningRows} records)`}
+                  </span>
                 </button>
               </div>
             </div>
@@ -788,20 +1205,20 @@ export const DataImportView: React.FC = () => {
             <div>
               <h2 className="text-base font-black text-slate-900 flex items-center gap-2">
                 <Database className="w-5 h-5 text-emerald-600" />
-                نتيجة الفحص الأولي لمرحلة {STAGE_DISPLAY_NAMES[selectedStage]}
+                <span>{language === 'ar' ? `نتيجة الفحص الأولي لمرحلة ${STAGE_DISPLAY_NAMES[selectedStage]}` : `Pre-validation result for ${STAGE_DISPLAY_NAMES[selectedStage]}`}</span>
               </h2>
               <p className="text-xs text-slate-500 mt-0.5">
-                تم فحص {genericRawRows.length} صف في الملف المرفوع
+                {language === 'ar' ? `تم فحص ${genericRawRows.length} صف في الملف المرفوع` : `Validated ${genericRawRows.length} rows`}
               </p>
             </div>
 
             <div className="flex items-center gap-4">
               <div className="text-center">
-                <span className="text-[11px] font-bold text-slate-500 block">صفوف جاهزة</span>
+                <span className="text-[11px] font-bold text-slate-500 block">{language === 'ar' ? 'صفوف جاهزة' : 'Valid Rows'}</span>
                 <span className="text-base font-black text-emerald-600">{genericValidation.validRows.length}</span>
               </div>
               <div className="text-center">
-                <span className="text-[11px] font-bold text-slate-500 block">أخطاء</span>
+                <span className="text-[11px] font-bold text-slate-500 block">{language === 'ar' ? 'أخطاء' : 'Errors'}</span>
                 <span className="text-base font-black text-red-600">{genericValidation.errors.length}</span>
               </div>
             </div>
@@ -811,7 +1228,7 @@ export const DataImportView: React.FC = () => {
           {isImporting ? (
             <div className="space-y-2 pt-2">
               <div className="flex items-center justify-between text-xs font-bold text-slate-700">
-                <span>جاري إرسال السجلات إلى Firestore...</span>
+                <span>{language === 'ar' ? 'جاري إرسال السجلات إلى Firestore...' : 'Writing batch to Firestore...'}</span>
                 <span>{importProgress}%</span>
               </div>
               <div className="w-full h-3 bg-slate-100 rounded-full overflow-hidden">
@@ -828,7 +1245,7 @@ export const DataImportView: React.FC = () => {
                 onClick={() => setGenericValidation(null)}
                 className="px-4 py-2 text-xs font-bold text-slate-600 hover:bg-slate-100 rounded-xl cursor-pointer"
               >
-                إلغاء
+                {language === 'ar' ? 'إلغاء' : 'Cancel'}
               </button>
               <button
                 type="button"
@@ -837,7 +1254,9 @@ export const DataImportView: React.FC = () => {
                 className="flex items-center gap-2 px-6 py-2.5 text-xs font-bold text-white bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 rounded-xl shadow-md transition-all cursor-pointer"
               >
                 <CheckCircle2 className="w-4 h-4" />
-                تنفيذ الاستيراد ({genericValidation.validRows.length} سجل)
+                <span>
+                  {language === 'ar' ? `تنفيذ الاستيراد (${genericValidation.validRows.length} سجل)` : `Execute Import (${genericValidation.validRows.length} records)`}
+                </span>
               </button>
             </div>
           )}
@@ -852,39 +1271,170 @@ export const DataImportView: React.FC = () => {
           </div>
           <div>
             <h2 className="text-lg font-black text-emerald-950">
-              تم الانتهاء من عملية الاستيراد التاريخي لمرحلة ({STAGE_DISPLAY_NAMES[selectedStage]}) بنجاح!
+              {language === 'ar' 
+                ? `تم الانتهاء من عملية الاستيراد التاريخي لمرحلة (${STAGE_DISPLAY_NAMES[selectedStage]}) بنجاح!`
+                : `Historical import completed for (${STAGE_DISPLAY_NAMES[selectedStage]})!`}
             </h2>
             <p className="text-xs text-emerald-800 font-mono mt-1">
-              رقم العملية الموثقة: {importResult.importId} {backupId ? `| رقم النسخة الوقائية: ${backupId}` : ''}
+              {language === 'ar' ? 'رقم العملية الموثقة' : 'Import Batch ID'}: {importResult.importId} {backupId ? `| ${language === 'ar' ? 'النسخة الوقائية' : 'Backup ID'}: ${backupId}` : ''}
             </p>
           </div>
 
           <div className="flex flex-wrap items-center justify-center gap-6 text-xs font-bold text-emerald-900 bg-white/70 p-4 rounded-xl border border-emerald-200 max-w-xl mx-auto">
             <div>
-              <span className="text-slate-500 block text-[11px]">إجمالي السجلات</span>
+              <span className="text-slate-500 block text-[11px]">{language === 'ar' ? 'إجمالي السجلات' : 'Total'}</span>
               <span className="text-base font-black text-slate-800">{importResult.total}</span>
             </div>
             <div>
-              <span className="text-emerald-700 block text-[11px]">تم استيرادها بنجاح</span>
+              <span className="text-emerald-700 block text-[11px]">{language === 'ar' ? 'تم استيرادها بنجاح' : 'Imported'}</span>
               <span className="text-base font-black text-emerald-600">{importResult.imported}</span>
             </div>
             <div>
-              <span className="text-amber-700 block text-[11px]">تم تخطيها</span>
+              <span className="text-amber-700 block text-[11px]">{language === 'ar' ? 'تم تخطيها' : 'Skipped'}</span>
               <span className="text-base font-black text-amber-600">{importResult.skipped}</span>
             </div>
             {importResult.failed > 0 && (
               <div>
-                <span className="text-red-700 block text-[11px]">فشلت</span>
+                <span className="text-red-700 block text-[11px]">{language === 'ar' ? 'فشلت' : 'Failed'}</span>
                 <span className="text-base font-black text-red-600">{importResult.failed}</span>
               </div>
             )}
           </div>
 
           <p className="text-[11px] text-emerald-700 font-sans">
-            السجلات المستوردة متاحة الآن فورياً في سجلات الإنتاج، لوحة المتابعة، التقارير التحليلية، ومساعد الذكاء الاصطناعي.
+            {language === 'ar' 
+              ? 'السجلات المستوردة متاحة الآن فورياً في سجلات الإنتاج، لوحة المتابعة، التقارير التحليلية، ومساعد الذكاء الاصطناعي.'
+              : 'Imported records are immediately available in Dashboard, Production Logs, Reports, and AI.'}
           </p>
         </div>
       )}
+
+      {/* ========================================================================= */}
+      {/* MODAL: Historical Import Audit History & Rollback                         */}
+      {/* ========================================================================= */}
+      <Modal
+        isOpen={isHistoryModalOpen}
+        onClose={() => setIsHistoryModalOpen(false)}
+        title={language === 'ar' ? 'سجل عمليات الاستيراد التاريخي والتراجع' : 'Import Audit Trail & Rollback (Undo)'}
+        subtitle={language === 'ar' ? 'توثيق كافة دفعات الاستيراد السابقة مع إمكانية التراجع الآمن عن أي دفعة' : 'Complete audit of previous imports with safe batch rollback'}
+        maxWidth="2xl"
+      >
+        <div className="space-y-4 text-xs" dir={isRtl ? 'rtl' : 'ltr'}>
+          {rollbackSuccessMsg && (
+            <div className="p-3 bg-emerald-50 border border-emerald-200 text-emerald-800 rounded-xl flex items-center gap-2 font-bold">
+              <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+              <span>{rollbackSuccessMsg}</span>
+            </div>
+          )}
+
+          {isLoadingHistory ? (
+            <div className="p-8 text-center text-slate-500 flex flex-col items-center gap-2">
+              <Loader2 className="w-6 h-6 animate-spin text-emerald-600" />
+              <span>{language === 'ar' ? 'جاري تحميل سجلات الاستيراد...' : 'Loading import history...'}</span>
+            </div>
+          ) : importHistory.length === 0 ? (
+            <div className="p-8 text-center bg-slate-50 rounded-xl border border-slate-200 text-slate-500">
+              <FileSpreadsheet className="w-8 h-8 text-slate-400 mx-auto mb-2" />
+              <p className="font-bold">{language === 'ar' ? 'لا توجد عمليات استيراد سابقة مسجلة حتى الآن.' : 'No historical import operations recorded yet.'}</p>
+            </div>
+          ) : (
+            <div className="divide-y divide-slate-100 max-h-96 overflow-y-auto rounded-xl border border-slate-200">
+              {importHistory.map((entry) => (
+                <div key={entry.importBatchId} className="p-3.5 hover:bg-slate-50 flex items-center justify-between gap-3">
+                  <div className="space-y-1">
+                    <div className="flex items-center gap-2">
+                      <span className="font-bold text-slate-900 font-mono text-[11px]">{entry.importBatchId}</span>
+                      <span className="px-2 py-0.5 bg-slate-100 text-slate-700 rounded text-[10px] font-bold">
+                        {STAGE_DISPLAY_NAMES[entry.stage as ProductionStageType] || entry.stage}
+                      </span>
+                    </div>
+                    <div className="text-[11px] text-slate-500 flex items-center gap-3">
+                      <span>الملف: <strong className="text-slate-700">{entry.fileName}</strong></span>
+                      <span>بواسطة: <strong className="text-slate-700">{entry.performedByName || entry.performedBy}</strong></span>
+                      <span>التاريخ: <strong className="text-slate-700">{entry.performedAt ? formatDateTime(entry.performedAt) : '-'}</strong></span>
+                    </div>
+                    <div className="text-[10px] text-emerald-700 font-bold">
+                      تم استيراد {entry.importedCount} سجل | {entry.approvedMappingsCount || 0} مطابقة ذكية معتمدة
+                    </div>
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={() => setRollbackTargetBatch(entry)}
+                    className="px-3 py-1.5 bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 rounded-lg text-xs font-bold transition-colors cursor-pointer flex items-center gap-1 shrink-0"
+                  >
+                    <RotateCcw className="w-3.5 h-3.5" />
+                    <span>{language === 'ar' ? 'تراجع عن الدفعة' : 'Rollback'}</span>
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+
+          <div className="flex items-center justify-end pt-3 border-t border-slate-200">
+            <button
+              type="button"
+              onClick={() => setIsHistoryModalOpen(false)}
+              className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold rounded-lg cursor-pointer"
+            >
+              {language === 'ar' ? 'إغلاق' : 'Close'}
+            </button>
+          </div>
+        </div>
+      </Modal>
+
+      {/* ========================================================================= */}
+      {/* MODAL: Confirm Rollback Batch                                             */}
+      {/* ========================================================================= */}
+      <Modal
+        isOpen={!!rollbackTargetBatch}
+        onClose={() => setRollbackTargetBatch(null)}
+        title={language === 'ar' ? 'تأكيد التراجع عن دفعة الاستيراد (Rollback Import)' : 'Confirm Batch Rollback'}
+        subtitle={rollbackTargetBatch ? `${language === 'ar' ? 'الدفعة' : 'Batch'}: ${rollbackTargetBatch.importBatchId}` : ''}
+        maxWidth="sm"
+      >
+        <div className="space-y-4 text-xs" dir={isRtl ? 'rtl' : 'ltr'}>
+          <p className="text-slate-700 leading-relaxed">
+            {language === 'ar'
+              ? `هل أنت متأكد من رغبتك في التراجع عن استيراد ملف (${rollbackTargetBatch?.fileName})؟ سيتم حذف جميع السجلات (${rollbackTargetBatch?.importedCount} سجل) التي أُنشئت في هذه الدفعة من قاعدة البيانات نهائياً.`
+              : `Are you sure you want to rollback batch ${rollbackTargetBatch?.importBatchId}? All ${rollbackTargetBatch?.importedCount} imported records will be safely removed.`}
+          </p>
+
+          <div className="p-3 bg-rose-50 rounded-xl border border-rose-200 text-rose-800 text-[11px] font-bold">
+            {language === 'ar' 
+              ? 'تنبيه: لا يمكن التراجع عن عملية الحذف هذه، لكن سيتم توثيق إجراء التراجع في سجل المراجعة (Audit Log).'
+              : 'This action is irreversible and will be logged in the audit trail.'}
+          </div>
+
+          <div className="flex items-center justify-end gap-2.5 pt-2">
+            <button
+              type="button"
+              onClick={() => setRollbackTargetBatch(null)}
+              className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold rounded-lg cursor-pointer"
+            >
+              {language === 'ar' ? 'إلغاء' : 'Cancel'}
+            </button>
+            <button
+              type="button"
+              disabled={isRollingBack}
+              onClick={handleConfirmRollback}
+              className="px-4 py-2 bg-rose-600 hover:bg-rose-700 text-white text-xs font-bold rounded-lg flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
+            >
+              {isRollingBack ? (
+                <>
+                  <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                  <span>{language === 'ar' ? 'جاري الحذف والتراجع...' : 'Rolling back...'}</span>
+                </>
+              ) : (
+                <>
+                  <RotateCcw className="w-3.5 h-3.5" />
+                  <span>{language === 'ar' ? 'تأكيد التراجع والحذف' : 'Confirm Rollback'}</span>
+                </>
+              )}
+            </button>
+          </div>
+        </div>
+      </Modal>
     </div>
   );
 };

@@ -41,6 +41,13 @@ import { logAuditAction } from './auditService';
 import { safeBatchSet } from '../utils/firestoreSanitizer';
 import { calculateProductionMetrics } from './productionService';
 import { toWesternDigits } from '../utils/formatters';
+import { findBestFuzzyCandidates, ProposedMatchCandidate } from '../utils/fuzzyMatching';
+import { 
+  loadApprovedMappings, 
+  getDomainApprovedMappings, 
+  logHistoricalImportExecution, 
+  saveApprovedMappingBatch 
+} from './importMappingService';
 
 /**
  * EXACT 21 Columns required in this exact order for Pressing Historical Import
@@ -246,7 +253,8 @@ export async function parseAndValidatePressingExcel(
     presses, 
     furnaceCars, 
     productTypes,
-    existingProdSnap
+    existingProdSnap,
+    approvedMappings
   ] = await Promise.all([
     fetchMasterData<Employee>('employees'),
     fetchMasterData<Product>('products'),
@@ -256,6 +264,7 @@ export async function parseAndValidatePressingExcel(
     fetchMasterData<FurnaceCar>('furnaceCars'),
     fetchProductTypes(),
     getDocs(collection(db, 'production')).catch(() => ({ docs: [] } as any)),
+    loadApprovedMappings().catch(() => ({} as Record<string, Record<string, string>>)),
   ]);
 
   // Build In-Database index for duplicate detection
@@ -288,12 +297,15 @@ export async function parseAndValidatePressingExcel(
   let unknownFurnaceCarsCount = 0;
   let shiftErrorsCount = 0;
   let faultMismatchesCount = 0;
+  let highConfidenceMatchesCount = 0;
+  let unresolvedMismatchesCount = 0;
 
   for (let idx = 0; idx < rawRows.length; idx++) {
     const row = rawRows[idx];
     const rowIndex = idx + 2; // 1-based + 1 header row
     const rowErrors: string[] = [];
     const rowWarnings: string[] = [];
+    const proposedMatches: NonNullable<PressingImportRow['proposedMatches']> = [];
     let rowStatus: PressingImportStatus = 'NEW';
     let isDuplicate = false;
     let duplicateType: 'FILE' | 'DATABASE' | undefined = undefined;
@@ -323,9 +335,9 @@ export async function parseAndValidatePressingExcel(
       if (rowStatus === 'NEW') rowStatus = 'UNKNOWN_EMPLOYEE';
       unknownEmployeesCount++;
     } else {
-      // Find employee by name or code
+      // Find employee by name, code or approved mapping
       const normW1Name = normalizeArabicText(w1NameRaw);
-      const matchedEmp = employees.find(e => {
+      let matchedEmp = employees.find(e => {
         const eCode = toWesternDigits(String(e.code || '')).trim();
         const eNormName = normalizeArabicText(e.name);
         if (w1CodeRaw && eCode && eCode.toLowerCase() === w1CodeRaw.toLowerCase()) return true;
@@ -333,10 +345,63 @@ export async function parseAndValidatePressingExcel(
         return false;
       });
 
+      // Check approved mapping memory
+      if (!matchedEmp && normW1Name && approvedMappings['employee']?.[normW1Name]) {
+        const mappedId = approvedMappings['employee'][normW1Name];
+        matchedEmp = employees.find(e => e.id === mappedId);
+      }
+
       if (!matchedEmp) {
-        rowErrors.push(`عامل 1 (${w1NameRaw || w1CodeRaw}) غير مسجل بقاعدة بيانات الموظفين`);
-        if (rowStatus === 'NEW') rowStatus = 'UNKNOWN_EMPLOYEE';
-        unknownEmployeesCount++;
+        // Run Fuzzy Candidate Detection
+        const fuzzyCandidates = findBestFuzzyCandidates(w1NameRaw || w1CodeRaw, employees, {
+          extractCode: (e) => e.code,
+          extractName: (e) => e.name,
+          minConfidence: 65,
+          maxResults: 4,
+        });
+
+        if (fuzzyCandidates.length > 0) {
+          const top = fuzzyCandidates[0];
+          proposedMatches.push({
+            fieldDomain: 'employee1',
+            fieldNameAr: 'عامل 1',
+            fieldNameEn: 'Worker 1',
+            importedValue: w1NameRaw || w1CodeRaw,
+            suggestedId: top.id,
+            suggestedCode: top.code,
+            suggestedName: top.name,
+            confidence: top.confidence,
+            matchType: top.matchType,
+            reasonAr: top.reasonAr,
+            reasonEn: top.reasonEn,
+            decision: top.confidence >= 90 ? 'ACCEPTED' : 'PENDING',
+            candidates: fuzzyCandidates,
+          });
+
+          if (top.confidence >= 90) {
+            highConfidenceMatchesCount++;
+            const candidateEmp = employees.find(e => e.id === top.id);
+            if (candidateEmp) {
+              resolvedWorker1 = {
+                id: candidateEmp.id || `emp-${candidateEmp.code}`,
+                name: candidateEmp.name,
+                code: candidateEmp.code || w1CodeRaw,
+                departmentName: candidateEmp.departmentName || 'قسم الكبس والتشكيل',
+              };
+              rowWarnings.push(`تمت المطابقة الذكية لعامل 1: "${w1NameRaw}" -> "${candidateEmp.name}" (دقة ${top.confidence}%)`);
+            }
+          } else {
+            unresolvedMismatchesCount++;
+            rowErrors.push(`عامل 1 (${w1NameRaw || w1CodeRaw}) غير مسجل بقاعدة بيانات الموظفين - يتطلب مراجعة بشرية`);
+            if (rowStatus === 'NEW') rowStatus = 'UNKNOWN_EMPLOYEE';
+            unknownEmployeesCount++;
+          }
+        } else {
+          unresolvedMismatchesCount++;
+          rowErrors.push(`عامل 1 (${w1NameRaw || w1CodeRaw}) غير مسجل بقاعدة بيانات الموظفين`);
+          if (rowStatus === 'NEW') rowStatus = 'UNKNOWN_EMPLOYEE';
+          unknownEmployeesCount++;
+        }
       } else {
         // Verify code match if both provided
         const empCode = toWesternDigits(String(matchedEmp.code || '')).trim();
@@ -362,7 +427,7 @@ export async function parseAndValidatePressingExcel(
 
     if (w2NameRaw || w2CodeRaw) {
       const normW2Name = normalizeArabicText(w2NameRaw);
-      const matchedEmp2 = employees.find(e => {
+      let matchedEmp2 = employees.find(e => {
         const eCode = toWesternDigits(String(e.code || '')).trim();
         const eNormName = normalizeArabicText(e.name);
         if (w2CodeRaw && eCode && eCode.toLowerCase() === w2CodeRaw.toLowerCase()) return true;
@@ -370,10 +435,60 @@ export async function parseAndValidatePressingExcel(
         return false;
       });
 
+      if (!matchedEmp2 && normW2Name && approvedMappings['employee']?.[normW2Name]) {
+        const mappedId = approvedMappings['employee'][normW2Name];
+        matchedEmp2 = employees.find(e => e.id === mappedId);
+      }
+
       if (!matchedEmp2) {
-        rowErrors.push(`عامل 2 (${w2NameRaw || w2CodeRaw}) غير مسجل بقاعدة بيانات الموظفين`);
-        if (rowStatus === 'NEW') rowStatus = 'UNKNOWN_EMPLOYEE';
-        unknownEmployeesCount++;
+        const fuzzyCandidates = findBestFuzzyCandidates(w2NameRaw || w2CodeRaw, employees, {
+          extractCode: (e) => e.code,
+          extractName: (e) => e.name,
+          minConfidence: 65,
+          maxResults: 4,
+        });
+
+        if (fuzzyCandidates.length > 0) {
+          const top = fuzzyCandidates[0];
+          proposedMatches.push({
+            fieldDomain: 'employee2',
+            fieldNameAr: 'عامل 2',
+            fieldNameEn: 'Worker 2',
+            importedValue: w2NameRaw || w2CodeRaw,
+            suggestedId: top.id,
+            suggestedCode: top.code,
+            suggestedName: top.name,
+            confidence: top.confidence,
+            matchType: top.matchType,
+            reasonAr: top.reasonAr,
+            reasonEn: top.reasonEn,
+            decision: top.confidence >= 90 ? 'ACCEPTED' : 'PENDING',
+            candidates: fuzzyCandidates,
+          });
+
+          if (top.confidence >= 90) {
+            highConfidenceMatchesCount++;
+            const candidateEmp = employees.find(e => e.id === top.id);
+            if (candidateEmp) {
+              resolvedWorker2 = {
+                id: candidateEmp.id || `emp-${candidateEmp.code}`,
+                name: candidateEmp.name,
+                code: candidateEmp.code || w2CodeRaw,
+                departmentName: candidateEmp.departmentName || 'قسم الكبس والتشكيل',
+              };
+              rowWarnings.push(`تمت المطابقة الذكية لعامل 2: "${w2NameRaw}" -> "${candidateEmp.name}" (دقة ${top.confidence}%)`);
+            }
+          } else {
+            unresolvedMismatchesCount++;
+            rowErrors.push(`عامل 2 (${w2NameRaw || w2CodeRaw}) غير مسجل بقاعدة بيانات الموظفين`);
+            if (rowStatus === 'NEW') rowStatus = 'UNKNOWN_EMPLOYEE';
+            unknownEmployeesCount++;
+          }
+        } else {
+          rowErrors.push(`عامل 2 (${w2NameRaw || w2CodeRaw}) غير مسجل بقاعدة بيانات الموظفين`);
+          if (rowStatus === 'NEW') rowStatus = 'UNKNOWN_EMPLOYEE';
+          unknownEmployeesCount++;
+        }
       } else {
         const emp2Code = toWesternDigits(String(matchedEmp2.code || '')).trim();
         if (w2CodeRaw && emp2Code && w2CodeRaw.toLowerCase() !== emp2Code.toLowerCase()) {
@@ -412,12 +527,17 @@ export async function parseAndValidatePressingExcel(
 
     for (const carCodeStr of rawCarParts) {
       const normCar = carCodeStr.toLowerCase();
-      const matchedCar = furnaceCars.find(c => 
+      let matchedCar = furnaceCars.find(c => 
         (c.carNumber && c.carNumber.toLowerCase() === normCar) ||
         (c.code && c.code.toLowerCase() === normCar) ||
         (c.carCodeNormalized && c.carCodeNormalized === normCar) ||
         (c.carNumberNormalized && c.carNumberNormalized === normCar)
       );
+
+      if (!matchedCar && approvedMappings['furnace_car']?.[normCar]) {
+        const mappedId = approvedMappings['furnace_car'][normCar];
+        matchedCar = furnaceCars.find(c => c.id === mappedId);
+      }
 
       if (matchedCar) {
         resolvedFurnaceCars.push({
@@ -429,9 +549,53 @@ export async function parseAndValidatePressingExcel(
         if (matchedCar.id) furnaceCarIds.push(matchedCar.id);
         carCodes.push(matchedCar.code || carCodeStr);
       } else {
-        rowErrors.push(`عربة الفرن "${carCodeStr}" غير مسجلة في بيانات عربات الأفران`);
-        if (rowStatus === 'NEW') rowStatus = 'UNKNOWN_FURNACE_CAR';
-        unknownFurnaceCarsCount++;
+        const carCandidates = findBestFuzzyCandidates(carCodeStr, furnaceCars, {
+          extractCode: (c) => c.code || c.carNumber,
+          extractName: (c) => c.carNumber || c.code,
+          minConfidence: 70,
+          maxResults: 3,
+        });
+
+        if (carCandidates.length > 0) {
+          const top = carCandidates[0];
+          proposedMatches.push({
+            fieldDomain: 'furnaceCar',
+            fieldNameAr: 'عربة الفرن',
+            fieldNameEn: 'Furnace Car',
+            importedValue: carCodeStr,
+            suggestedId: top.id,
+            suggestedCode: top.code,
+            suggestedName: top.name,
+            confidence: top.confidence,
+            matchType: top.matchType,
+            reasonAr: top.reasonAr,
+            reasonEn: top.reasonEn,
+            decision: top.confidence >= 90 ? 'ACCEPTED' : 'PENDING',
+            candidates: carCandidates,
+          });
+
+          if (top.confidence >= 90) {
+            highConfidenceMatchesCount++;
+            resolvedFurnaceCars.push({
+              id: top.id,
+              code: top.code,
+              carNumber: top.name,
+            });
+            furnaceCarNumbers.push(top.name);
+            if (top.id) furnaceCarIds.push(top.id);
+            carCodes.push(top.code);
+            rowWarnings.push(`مطابقة ذكية لعربة الفرن: "${carCodeStr}" -> "${top.name}" (${top.confidence}%)`);
+          } else {
+            unresolvedMismatchesCount++;
+            rowErrors.push(`عربة الفرن "${carCodeStr}" غير مسجلة في بيانات عربات الأفران`);
+            if (rowStatus === 'NEW') rowStatus = 'UNKNOWN_FURNACE_CAR';
+            unknownFurnaceCarsCount++;
+          }
+        } else {
+          rowErrors.push(`عربة الفرن "${carCodeStr}" غير مسجلة في بيانات عربات الأفران`);
+          if (rowStatus === 'NEW') rowStatus = 'UNKNOWN_FURNACE_CAR';
+          unknownFurnaceCarsCount++;
+        }
       }
     }
 
@@ -445,13 +609,18 @@ export async function parseAndValidatePressingExcel(
       unknownPressesCount++;
     } else {
       const normPress = normalizeArabicText(pressRaw);
-      const matchedPress = presses.find(p => {
+      let matchedPress = presses.find(p => {
         const pNormName = normalizeArabicText(p.name);
         const pCode = String(p.code || '').trim().toLowerCase();
         if (pCode && pCode === pressRaw.toLowerCase()) return true;
         if (pNormName && pNormName === normPress) return true;
         return false;
       });
+
+      if (!matchedPress && normPress && approvedMappings['press']?.[normPress]) {
+        const mappedId = approvedMappings['press'][normPress];
+        matchedPress = presses.find(p => p.id === mappedId);
+      }
 
       if (matchedPress) {
         resolvedPress = {
@@ -460,9 +629,50 @@ export async function parseAndValidatePressingExcel(
           code: matchedPress.code || pressRaw,
         };
       } else {
-        rowErrors.push(`المكبس "${pressRaw}" غير مسجل في بيانات المكابس الأساسية`);
-        if (rowStatus === 'NEW') rowStatus = 'UNKNOWN_PRESS';
-        unknownPressesCount++;
+        const pressCandidates = findBestFuzzyCandidates(pressRaw, presses, {
+          extractCode: (p) => p.code,
+          extractName: (p) => p.name,
+          minConfidence: 65,
+          maxResults: 3,
+        });
+
+        if (pressCandidates.length > 0) {
+          const top = pressCandidates[0];
+          proposedMatches.push({
+            fieldDomain: 'press',
+            fieldNameAr: 'المكبس',
+            fieldNameEn: 'Press Machine',
+            importedValue: pressRaw,
+            suggestedId: top.id,
+            suggestedCode: top.code,
+            suggestedName: top.name,
+            confidence: top.confidence,
+            matchType: top.matchType,
+            reasonAr: top.reasonAr,
+            reasonEn: top.reasonEn,
+            decision: top.confidence >= 90 ? 'ACCEPTED' : 'PENDING',
+            candidates: pressCandidates,
+          });
+
+          if (top.confidence >= 90) {
+            highConfidenceMatchesCount++;
+            resolvedPress = {
+              id: top.id,
+              name: top.name,
+              code: top.code,
+            };
+            rowWarnings.push(`مطابقة ذكية للمكبس: "${pressRaw}" -> "${top.name}" (${top.confidence}%)`);
+          } else {
+            unresolvedMismatchesCount++;
+            rowErrors.push(`المكبس "${pressRaw}" غير مسجل في بيانات المكابس الأساسية`);
+            if (rowStatus === 'NEW') rowStatus = 'UNKNOWN_PRESS';
+            unknownPressesCount++;
+          }
+        } else {
+          rowErrors.push(`المكبس "${pressRaw}" غير مسجل في بيانات المكابس الأساسية`);
+          if (rowStatus === 'NEW') rowStatus = 'UNKNOWN_PRESS';
+          unknownPressesCount++;
+        }
       }
     }
 
@@ -540,7 +750,7 @@ export async function parseAndValidatePressingExcel(
       unknownProductsCount++;
     } else {
       const normProdName = normalizeArabicText(prodNameRaw);
-      const matchedProduct = products.find(p => {
+      let matchedProduct = products.find(p => {
         const pCode = String(p.code || p.productCode || '').trim().toLowerCase();
         const pNormName = normalizeArabicText(p.name);
         if (prodCodeRaw && pCode && pCode === prodCodeRaw.toLowerCase()) return true;
@@ -548,10 +758,66 @@ export async function parseAndValidatePressingExcel(
         return false;
       });
 
+      // Check approved mapping memory
       if (!matchedProduct) {
-        rowErrors.push(`الصنف (${prodCodeRaw || prodNameRaw}) غير موجود في دليل المنتجات الأساسية`);
-        if (rowStatus === 'NEW') rowStatus = 'UNKNOWN_PRODUCT';
-        unknownProductsCount++;
+        const keyToLook = normProdName || prodCodeRaw.toLowerCase();
+        if (approvedMappings['product']?.[keyToLook]) {
+          const mappedId = approvedMappings['product'][keyToLook];
+          matchedProduct = products.find(p => p.id === mappedId);
+        }
+      }
+
+      if (!matchedProduct) {
+        // Run Fuzzy Matching for Product
+        const prodCandidates = findBestFuzzyCandidates(prodNameRaw || prodCodeRaw, products, {
+          extractCode: (p) => p.code || p.productCode,
+          extractName: (p) => p.name || p.productName,
+          minConfidence: 65,
+          maxResults: 4,
+        });
+
+        if (prodCandidates.length > 0) {
+          const top = prodCandidates[0];
+          proposedMatches.push({
+            fieldDomain: 'product',
+            fieldNameAr: 'الصنف / المنتج',
+            fieldNameEn: 'Product / Item',
+            importedValue: prodNameRaw || prodCodeRaw,
+            suggestedId: top.id,
+            suggestedCode: top.code,
+            suggestedName: top.name,
+            confidence: top.confidence,
+            matchType: top.matchType,
+            reasonAr: top.reasonAr,
+            reasonEn: top.reasonEn,
+            decision: top.confidence >= 90 ? 'ACCEPTED' : 'PENDING',
+            candidates: prodCandidates,
+          });
+
+          if (top.confidence >= 90) {
+            highConfidenceMatchesCount++;
+            const candidateProd = products.find(p => p.id === top.id);
+            if (candidateProd) {
+              resolvedProduct = {
+                id: candidateProd.id || `prod-${candidateProd.code}`,
+                name: candidateProd.name || prodNameRaw,
+                code: candidateProd.code || prodCodeRaw,
+                pieceWeight: candidateProd.pieceWeight,
+                aluminaPercentage: candidateProd.aluminaPercentage,
+              };
+              rowWarnings.push(`مطابقة ذكية للصنف: "${prodNameRaw || prodCodeRaw}" -> "${candidateProd.name}" (${top.confidence}%)`);
+            }
+          } else {
+            unresolvedMismatchesCount++;
+            rowErrors.push(`الصنف (${prodCodeRaw || prodNameRaw}) غير موجود في دليل المنتجات الأساسية`);
+            if (rowStatus === 'NEW') rowStatus = 'UNKNOWN_PRODUCT';
+            unknownProductsCount++;
+          }
+        } else {
+          rowErrors.push(`الصنف (${prodCodeRaw || prodNameRaw}) غير موجود في دليل المنتجات الأساسية`);
+          if (rowStatus === 'NEW') rowStatus = 'UNKNOWN_PRODUCT';
+          unknownProductsCount++;
+        }
       } else {
         // Check Product Code vs Name conflict
         const masterProdCode = String(matchedProduct.code || matchedProduct.productCode || '').trim();
@@ -773,6 +1039,7 @@ export async function parseAndValidatePressingExcel(
       warnings: rowWarnings,
       isDuplicate,
       duplicateType,
+      proposedMatches,
     });
   }
 
@@ -788,6 +1055,8 @@ export async function parseAndValidatePressingExcel(
     unknownFurnaceCarsCount,
     shiftErrorsCount,
     faultMismatchesCount,
+    highConfidenceMatchesCount,
+    unresolvedMismatchesCount,
     rows: parsedRows,
   };
 }
@@ -907,6 +1176,7 @@ export async function executePressingBatchImport(
         sourceType: 'HISTORICAL_IMPORT',
         isHistoricalImport: true,
         importId: sessionImportId,
+        importBatchId: sessionImportId,
         importedAt: new Date().toISOString(),
         importedByUid: currentUser?.uid || 'SUPER_ADMIN',
         importedByName: currentUser?.email || 'مشرف الاستيراد التاريخي',
@@ -931,7 +1201,53 @@ export async function executePressingBatchImport(
     }
   }
 
-  // Record Audit Trail
+  // Save any approved mappings across the imported rows
+  const mappingsToPersist: Array<{
+    domain: string;
+    originalValue: string;
+    mappedEntityId: string;
+    mappedEntityName: string;
+    mappedEntityCode?: string;
+    confidence: number;
+    matchType: string;
+  }> = [];
+
+  rowsToImport.forEach(r => {
+    (r.proposedMatches || []).forEach(p => {
+      if ((p.decision === 'ACCEPTED' || p.confidence >= 90) && p.suggestedId) {
+        mappingsToPersist.push({
+          domain: p.fieldDomain === 'employee1' || p.fieldDomain === 'employee2' ? 'employee' : p.fieldDomain,
+          originalValue: p.importedValue,
+          mappedEntityId: p.suggestedId,
+          mappedEntityName: p.suggestedName || '',
+          mappedEntityCode: p.suggestedCode || '',
+          confidence: p.confidence,
+          matchType: p.matchType,
+        });
+      }
+    });
+  });
+
+  if (mappingsToPersist.length > 0) {
+    await saveApprovedMappingBatch(mappingsToPersist).catch(err => console.warn('Could not persist mapping batch:', err));
+  }
+
+  // Record Audit Trail in both collections
+  await logHistoricalImportExecution({
+    importBatchId: sessionImportId,
+    stage: 'pressing',
+    fileName: 'Pressing Historical Excel',
+    totalRows: rowsToImport.length,
+    importedCount,
+    failedCount,
+    skippedCount,
+    approvedMappingsCount: mappingsToPersist.length,
+    performedBy: currentUser?.uid || 'SUPER_ADMIN',
+    performedByName: currentUser?.email || 'مشرف الاستيراد التاريخي',
+    performedAt: new Date().toISOString(),
+    backupId: backupId || undefined,
+  });
+
   await logAuditAction(
     'BULK_IMPORT',
     'production',

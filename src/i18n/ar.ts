@@ -428,4 +428,29 @@ export const ar = {
   about_cloudflare_site: 'البوابة السحابية المباشرة',
   about_github_repo: 'مستودع الكود المصدري',
   about_developer_title: 'المطور وهندسة المنظومة',
+
+  // Granular Permissions & User Management
+  users_title: 'إدارة المستخدمين والصلاحيات الدقيقة',
+  users_subtitle: 'التحكم المتقدم في صلاحيات الوصول لجميع مراحل الإنتاج والشاشات والإجراءات الإدارية',
+  users_add_user: 'إضافة مستخدم جديد',
+  users_edit_user: 'تعديل المستخدم والصلاحيات',
+  users_role_super_admin: 'مدير نظام عام (Super Admin)',
+  users_role_supervisor: 'مشرف قطاع إنتاج (Supervisor)',
+  users_role_quality_auditor: 'مدقق جودة وتحكم (Quality Auditor)',
+  users_role_data_entry: 'مدخل بيانات ميداني (Data Entry)',
+  users_role_viewer: 'مشاهد ومراقب فقط (Viewer)',
+  users_role_custom: 'صلاحيات مخصصة (Custom)',
+  users_audit_reason: 'سبب التعديل (إلزامي للتوثيق والتدقيق)',
+  users_allowed_stages: 'المراحل الإنتاجية المصرح بها',
+
+  // Historical Import
+  import_title: 'مركز استيراد بيانات الإنتاج التاريخي',
+  import_subtitle: 'استيراد السجلات السابقة عبر ملفات Excel الرسمية مع المطابقة الذكية للبيانات الأساسية',
+  import_download_template: 'تحميل قالب Excel الرسمي',
+  import_pre_backup: 'إجراء وقائي: أخذ نسخة احتياطية فورية قبل الاستيراد',
+  import_smart_matching: 'المطابقة الذكية للبيانات والأسماء التاريخية',
+  import_accept_matches: 'اعتماد كافة التطابقات المؤكدة (≥ 90%)',
+  import_history_rollback: 'سجل عمليات الاستيراد والتراجع',
+  import_confirm_rollback: 'تأكيد التراجع عن دفعة الاستيراد',
 };
+

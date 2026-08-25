@@ -210,6 +210,78 @@ export async function updateSystemUser(uid: string, payload: UpdateUserPayload):
 }
 
 /**
+ * Update granular permissions for a user with audit logging and history tracking.
+ */
+export async function updateUserPermissions(
+  uid: string,
+  permissions: any,
+  reason?: string,
+  userMetadata?: { employeeId?: string; employeeName?: string; email?: string }
+): Promise<void> {
+  try {
+    const docRef = doc(db, 'adminUsers', uid);
+    const snap = await getDoc(docRef);
+    const oldUserData = snap.exists() ? snap.data() : {};
+    const oldPermissions = oldUserData.permissions || {};
+
+    const sanitizedPermissions: Record<string, any> = {};
+    if (permissions && typeof permissions === 'object') {
+      Object.entries(permissions).forEach(([k, v]) => {
+        if (v !== undefined && v !== null) {
+          if (Array.isArray(v)) {
+            sanitizedPermissions[k] = v.filter(x => typeof x === 'string' && x.trim().length > 0);
+          } else if (typeof v === 'boolean' || typeof v === 'string' || typeof v === 'number') {
+            sanitizedPermissions[k] = v;
+          }
+        }
+      });
+    }
+    sanitizedPermissions.permissionSchemaVersion = 2;
+
+    const nowIso = new Date().toISOString();
+    const currentUid = auth.currentUser?.uid || 'SUPER_ADMIN';
+    const currentEmail = auth.currentUser?.email || 'المشرف العام';
+
+    await updateDoc(docRef, {
+      permissions: sanitizedPermissions,
+      updatedAt: nowIso,
+      serverUpdatedAt: serverTimestamp(),
+    });
+
+    // Write to permissionAuditLogs
+    try {
+      const auditLogRef = doc(collection(db, 'permissionAuditLogs'));
+      await setDoc(auditLogRef, {
+        id: auditLogRef.id,
+        userId: uid,
+        employeeId: userMetadata?.employeeId || oldUserData.employeeId || '',
+        employeeName: userMetadata?.employeeName || oldUserData.employeeName || oldUserData.fullName || '',
+        userEmail: userMetadata?.email || oldUserData.email || '',
+        changedBy: currentUid,
+        changedByName: currentEmail,
+        timestamp: nowIso,
+        oldPermissions: oldPermissions,
+        newPermissions: sanitizedPermissions,
+        reason: reason || 'تحديث الصلاحيات التفصيلية للمستخدم',
+        serverCreatedAt: serverTimestamp(),
+      });
+    } catch (auditErr) {
+      console.warn('Could not write to permissionAuditLogs collection:', auditErr);
+    }
+
+    await logAuditAction(
+      'UPDATE_USER',
+      'adminUsers',
+      uid,
+      `تحديث الصلاحيات التفصيلية للمستخدم: ${userMetadata?.email || oldUserData.email || uid} - السبب: ${reason || 'تعديل الصلاحيات المخصصة'}`
+    );
+  } catch (error) {
+    handleFirestoreError(error, OperationType.UPDATE, `adminUsers/${uid}`);
+    throw error;
+  }
+}
+
+/**
  * Toggle Active / Inactive status for a user.
  */
 export async function toggleUserActive(uid: string, currentActive: boolean, userEmail?: string): Promise<void> {
