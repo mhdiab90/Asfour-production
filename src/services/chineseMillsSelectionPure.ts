@@ -82,6 +82,51 @@ export function getRowSelection(row: ChineseMillsImportRow): 'INCLUDED' | 'EXCLU
   return row.rowSelection ?? 'INCLUDED';
 }
 
+/**
+ * Global Ready-to-Import Override task, §10: whether "Mark as Ready to
+ * Import" can succeed for this row AT ALL, regardless of its current
+ * validationStatus. Two independent reasons a row can never be forced
+ * ready, neither guessed - both read directly off the SAME existing guards
+ * isChineseMillsRowWritable already enforces:
+ *  - A non-overridable structural error (§10 of the Approve Invalid Records
+ *    task, reused verbatim here - never a second overridability model).
+ *  - An unresolved smart-match/Actual-Rate/Customer-Code decision still
+ *    PENDING - these require the user to pick a SPECIFIC answer, which a
+ *    blanket "mark ready" action must never silently decide FOR them.
+ */
+export function canMarkReadyToImport(row: ChineseMillsImportRow): boolean {
+  if (row.errors.length > 0 && isNonOverridableBlockingCondition(row)) return false;
+  if ((row.proposedMatches || []).some((m) => m.decision === 'PENDING')) return false;
+  if (row.actualRateDecision === 'PENDING') return false;
+  if (row.customerCodeUpdateProposal?.decision === 'PENDING') return false;
+  return true;
+}
+
+/**
+ * The field patch "Mark as Ready to Import" applies to a row that already
+ * passed canMarkReadyToImport - caller must check that first (this function
+ * does not re-check it). Deliberately reuses the EXISTING mechanisms that
+ * already drive isChineseMillsRowWritable rather than inventing a parallel
+ * writability path: rowSelection -> INCLUDED (undoes EXCLUDED/SKIPPED/
+ * PENDING - §8/§9, "Reinclude and Mark Ready"), approved -> true only when
+ * the row actually has overridable errors to override (§16 - a clean row
+ * never gets a meaningless approved flag), warningsAccepted -> true only
+ * when there is an actual unaccepted warning to accept (§17 - never
+ * touches/hides the warning itself). validationStatus (status/errors/
+ * warnings) is never part of this patch - §11's core rule.
+ */
+export function computeMarkReadyPatch(row: ChineseMillsImportRow): Partial<ChineseMillsImportRow> {
+  const patch: Partial<ChineseMillsImportRow> = { rowSelection: 'INCLUDED', exclusionReason: undefined };
+  if (row.errors.length > 0) patch.approved = true;
+  if (row.warnings.length > 0 && !row.warningsAccepted) patch.warningsAccepted = true;
+  return patch;
+}
+
+/** READY_TO_IMPORT (for display/counters) - an explicit "Mark as Ready to Import" decision was recorded for this row, independent of whether it is currently selected/writable (e.g. a later edit could have invalidated it again). */
+export function matchesReadyToImport(row: ChineseMillsImportRow): boolean {
+  return row.readyToImport === true;
+}
+
 /** VALID: no blocking errors AND no warnings at all (stricter than "writable" - a row with an accepted warning is writable but not "clean valid"). */
 export function matchesValid(row: ChineseMillsImportRow): boolean {
   return row.errors.length === 0 && row.warnings.length === 0;
@@ -180,11 +225,13 @@ export interface ChineseMillsSelectionCounts {
   approved: number;
   /** Has a blocking error that approval can never override (§10) - always excluded from Will Import regardless of approval. */
   blocking: number;
+  /** Global Ready-to-Import Override task §19: rows with an explicit "Mark as Ready to Import" decision recorded (row.readyToImport) - distinct from the pre-existing `ready` above (matchesReady - "would be writable if included", never requires the explicit decision). */
+  markedReadyToImport: number;
 }
 
 /** §3/§11 - the top-of-screen counts, computed ONLY from actual row state - never invented/estimated. */
 export function computeSelectionCounts(rows: ChineseMillsImportRow[]): ChineseMillsSelectionCounts {
-  let valid = 0, ready = 0, corrected = 0, invalidNeedsReview = 0, warning = 0, selected = 0, excluded = 0, skipped = 0, willImport = 0, approved = 0, blocking = 0;
+  let valid = 0, ready = 0, corrected = 0, invalidNeedsReview = 0, warning = 0, selected = 0, excluded = 0, skipped = 0, willImport = 0, approved = 0, blocking = 0, markedReadyToImport = 0;
   for (const row of rows) {
     if (matchesValid(row)) valid++;
     if (matchesReady(row)) ready++;
@@ -193,13 +240,14 @@ export function computeSelectionCounts(rows: ChineseMillsImportRow[]): ChineseMi
     if (row.warnings.length > 0) warning++;
     if (matchesApproved(row)) approved++;
     if (row.errors.length > 0 && isNonOverridableBlockingCondition(row)) blocking++;
+    if (matchesReadyToImport(row)) markedReadyToImport++;
     const sel = getRowSelection(row);
     if (sel === 'INCLUDED') selected++;
     if (sel === 'EXCLUDED') excluded++;
     if (sel === 'EXCLUDED' && row.exclusionReason === 'SKIPPED_ROW') skipped++;
     if (isChineseMillsRowWritable(row)) willImport++;
   }
-  return { total: rows.length, valid, ready, corrected, invalidNeedsReview, warning, selected, excluded, skipped, willImport, approved, blocking };
+  return { total: rows.length, valid, ready, corrected, invalidNeedsReview, warning, selected, excluded, skipped, willImport, approved, blocking, markedReadyToImport };
 }
 
 /**

@@ -68,6 +68,8 @@ import {
   matchesInvalidNeedsReview,
   matchesApproved,
   isNonOverridableBlockingCondition,
+  canMarkReadyToImport,
+  computeMarkReadyPatch,
   BulkSelectionMode,
 } from '../../services/chineseMillsSelectionPure';
 import { ChineseMillsDraft, SaveDraftOutcome, saveDraft, getDraft, deleteDraft, logDraftOpened } from '../../services/chineseMillsDraftStorage';
@@ -207,6 +209,8 @@ export const ChineseMillsImportPanel: React.FC = () => {
   const [showCancelEntireConfirm, setShowCancelEntireConfirm] = useState(false);
   /** Approve Invalid Records task §6: holds the CURRENT review window's approvable scope for the confirmation dialog - never approved until the user explicitly confirms. */
   const [approveAllConfirm, setApproveAllConfirm] = useState<{ scopeRowIndexes: Set<number>; count: number } | null>(null);
+  /** Global Ready-to-Import Override task §7: holds the CURRENT review window's scope for the "Mark All as Ready" confirmation dialog. */
+  const [markAllReadyConfirm, setMarkAllReadyConfirm] = useState<{ scopeRowIndexes: Set<number>; count: number } | null>(null);
   const [importResult, setImportResult] = useState<{ total: number; imported: number; failed: number; skipped: number; pending: number; excluded: number; cancelled: number; importId: string } | null>(null);
   /** §7: checked at BATCH BOUNDARIES only (see executeChineseMillsBatchImport's shouldCancel param) - a ref, not state, so the running import loop reads the latest value synchronously without needing to be re-created on every render. */
   const cancelImportRef = useRef(false);
@@ -420,7 +424,11 @@ export const ChineseMillsImportPanel: React.FC = () => {
       if (target.approved) {
         history.push({ timestamp: new Date().toISOString(), actor: adminUser?.email || 'admin', action: 'ROW_APPROVAL_REVOKED', summary: t('إلغاء الاعتماد تلقائيًا - تم إعادة فحص السجل.', 'Approval automatically revoked - row was revalidated.', language) });
       }
-      const withHistory: ChineseMillsImportRow = { ...revalidated, approved: false, approvedBy: undefined, approvedAt: undefined, approvalMethod: undefined, resolutionHistory: history };
+      // Same rule for a Ready-to-Import decision - it was made against the row's PREVIOUS state too.
+      if (target.readyToImport) {
+        history.push({ timestamp: new Date().toISOString(), actor: adminUser?.email || 'admin', action: 'ROW_READY_TO_IMPORT_REVOKED', summary: t('إلغاء الجاهزية تلقائيًا - تم إعادة فحص السجل.', 'Ready-to-Import decision automatically removed - row was revalidated.', language) });
+      }
+      const withHistory: ChineseMillsImportRow = { ...revalidated, approved: false, approvedBy: undefined, approvedAt: undefined, approvalMethod: undefined, readyToImport: false, readyToImportBy: undefined, readyToImportAt: undefined, readyToImportMethod: undefined, preReadyToImportState: undefined, resolutionHistory: history };
       return rows.map((r) => (r.rowIndex === rowIndex ? withHistory : r));
     });
   };
@@ -440,9 +448,12 @@ export const ChineseMillsImportPanel: React.FC = () => {
           if (before?.approved) {
             history.push({ timestamp: new Date().toISOString(), actor: adminUser?.email || 'admin', action: 'ROW_APPROVAL_REVOKED', summary: t('إلغاء الاعتماد تلقائيًا - تم إعادة فحص السجل.', 'Approval automatically revoked - row was revalidated.', language) });
           }
+          if (before?.readyToImport) {
+            history.push({ timestamp: new Date().toISOString(), actor: adminUser?.email || 'admin', action: 'ROW_READY_TO_IMPORT_REVOKED', summary: t('إلغاء الجاهزية تلقائيًا - تم إعادة فحص السجل.', 'Ready-to-Import decision automatically removed - row was revalidated.', language) });
+          }
           return [
             revalidated.rowIndex,
-            { ...revalidated, approved: false, approvedBy: undefined, approvedAt: undefined, approvalMethod: undefined, resolutionHistory: history } as ChineseMillsImportRow,
+            { ...revalidated, approved: false, approvedBy: undefined, approvedAt: undefined, approvalMethod: undefined, readyToImport: false, readyToImportBy: undefined, readyToImportAt: undefined, readyToImportMethod: undefined, preReadyToImportState: undefined, resolutionHistory: history } as ChineseMillsImportRow,
           ] as const;
         })
       );
@@ -613,6 +624,151 @@ export const ChineseMillsImportPanel: React.FC = () => {
       undefined,
       `[BULK_APPROVAL] استيراد الطواحين الصينية - اعتماد جماعي لنطاق المراجعة الحالي - عدد السجلات المعتمدة: ${approvedCount} - المستخدم: ${actor}`
     ).catch(() => {});
+  };
+
+  /**
+   * Global Ready-to-Import Override task §4/§11/§18: an explicit "I want
+   * this record in the final import" decision, LAYERED on top of the
+   * existing writability mechanism rather than a second one - reuses
+   * computeMarkReadyPatch (pure) to flip rowSelection/approved/
+   * warningsAccepted exactly the way the existing Re-include/Approve/Accept-
+   * Warning actions already would, never touches status/errors/warnings
+   * (§11). Snapshots the row's PRIOR decision (preReadyToImportState) so
+   * Undo (§15) restores it exactly. §10: refuses with the exact required
+   * message for a non-overridable row, without mutating it.
+   */
+  const handleMarkRowReady = (rowIndex: number) => {
+    const row = summary?.rows.find((r) => r.rowIndex === rowIndex);
+    if (!row) return;
+    if (!canMarkReadyToImport(row)) {
+      setFeedback({ type: 'error', message: t('لا يمكن تحويل السجل إلى جاهز للرفع بسبب خطأ أساسي غير قابل للتجاوز.', 'This record cannot be marked Ready to Import because it has a non-overridable validation error.', language) });
+      return;
+    }
+    const actor = adminUser?.email || 'admin';
+    const now = new Date().toISOString();
+    const previousDecision = getSelection(row);
+    updateRows((rows) =>
+      rows.map((r) => {
+        if (r.rowIndex !== rowIndex) return r;
+        const patch = computeMarkReadyPatch(r);
+        if (patch.warningsAccepted && !canOverrideWarnings) delete patch.warningsAccepted;
+        return {
+          ...r,
+          ...patch,
+          readyToImport: true,
+          readyToImportBy: actor,
+          readyToImportAt: now,
+          readyToImportMethod: 'INDIVIDUAL' as const,
+          preReadyToImportState: { rowSelection: r.rowSelection, exclusionReason: r.exclusionReason, approved: r.approved, approvedBy: r.approvedBy, approvedAt: r.approvedAt, approvalMethod: r.approvalMethod, warningsAccepted: r.warningsAccepted },
+          resolutionHistory: [
+            ...(r.resolutionHistory || []),
+            { timestamp: now, actor, action: 'ROW_READY_TO_IMPORT', summary: t(`تحويل إلى جاهز للرفع (فردي) - حالة التحقق الأصلية محفوظة: ${r.status}`, `Marked Ready to Import (individual) - original validation status preserved: ${r.status}`, language) },
+          ],
+        };
+      })
+    );
+    logAuditAction(
+      'UPDATE',
+      'stage_chinese_mills',
+      undefined,
+      `[ROW_READY_TO_IMPORT] استيراد الطواحين الصينية - صف #${rowIndex} - الحالة الأصلية: ${row.status} - القرار السابق: ${previousDecision}${row.exclusionReason ? ` (${row.exclusionReason})` : ''} - القرار الجديد: READY_TO_IMPORT - طريقة الحل: فردي - المستخدم: ${actor}`
+    ).catch(() => {});
+  };
+
+  /** §15: Remove Ready-to-Import Decision - restores the row's exact PRIOR decision (never a guessed default) from preReadyToImportState, before execution only. */
+  const handleUndoReady = (rowIndex: number) => {
+    const actor = adminUser?.email || 'admin';
+    const now = new Date().toISOString();
+    updateRows((rows) =>
+      rows.map((r) => {
+        if (r.rowIndex !== rowIndex || !r.readyToImport) return r;
+        const prior = r.preReadyToImportState || {};
+        return {
+          ...r,
+          rowSelection: prior.rowSelection,
+          exclusionReason: prior.exclusionReason,
+          approved: prior.approved,
+          approvedBy: prior.approvedBy,
+          approvedAt: prior.approvedAt,
+          approvalMethod: prior.approvalMethod,
+          warningsAccepted: prior.warningsAccepted,
+          readyToImport: false,
+          readyToImportBy: undefined,
+          readyToImportAt: undefined,
+          readyToImportMethod: undefined,
+          preReadyToImportState: undefined,
+          resolutionHistory: [
+            ...(r.resolutionHistory || []),
+            { timestamp: now, actor, action: 'ROW_READY_TO_IMPORT_REVOKED', summary: t('إلغاء الجاهزية - عاد السجل إلى قراره السابق.', 'Ready-to-Import decision removed - row returned to its previous decision.', language) },
+          ],
+        };
+      })
+    );
+    logAuditAction('UPDATE', 'stage_chinese_mills', undefined, `[ROW_READY_TO_IMPORT_REVOKED] استيراد الطواحين الصينية - صف #${rowIndex} - المستخدم: ${actor}`).catch(() => {});
+  };
+
+  /**
+   * §5-7/§20-21: shared engine behind BOTH "Mark Selected as Ready"
+   * (method='BULK_SELECTED' - only rows in scope that are ALREADY selected,
+   * i.e. getSelection(r)==='INCLUDED', per the task's own "Select then
+   * Convert" example) and "Mark All as Ready" (method='BULK_ALL' - every
+   * row in scope regardless of current selection, reincluding
+   * EXCLUDED/SKIPPED ones - §8/§9). Scoped to EXACTLY scopeRowIndexes,
+   * never the whole dataset, never dependent on scroll/rendered DOM (same
+   * pattern as handleScopedBulkSelection/handleApproveAllInWindow). §7: a
+   * non-overridable row in scope is left untouched and explicitly reported
+   * by row number, never silently skipped.
+   */
+  const applyBulkMarkReady = (scopeRowIndexes: Set<number>, method: 'BULK_SELECTED' | 'BULK_ALL') => {
+    const actor = adminUser?.email || 'admin';
+    const now = new Date().toISOString();
+    const inScope = (summary?.rows || []).filter((r) => scopeRowIndexes.has(r.rowIndex) && (method === 'BULK_ALL' || getSelection(r) === 'INCLUDED'));
+    const eligibleIndexes = new Set(inScope.filter(canMarkReadyToImport).map((r) => r.rowIndex));
+    const blockedRows = inScope.filter((r) => !canMarkReadyToImport(r));
+    updateRows((rows) =>
+      rows.map((r) => {
+        if (!eligibleIndexes.has(r.rowIndex)) return r;
+        const patch = computeMarkReadyPatch(r);
+        if (patch.warningsAccepted && !canOverrideWarnings) delete patch.warningsAccepted;
+        return {
+          ...r,
+          ...patch,
+          readyToImport: true,
+          readyToImportBy: actor,
+          readyToImportAt: now,
+          readyToImportMethod: method,
+          preReadyToImportState: { rowSelection: r.rowSelection, exclusionReason: r.exclusionReason, approved: r.approved, approvedBy: r.approvedBy, approvedAt: r.approvedAt, approvalMethod: r.approvalMethod, warningsAccepted: r.warningsAccepted },
+          resolutionHistory: [
+            ...(r.resolutionHistory || []),
+            { timestamp: now, actor, action: 'ROW_READY_TO_IMPORT', summary: t(`تحويل جماعي (${method === 'BULK_ALL' ? 'الكل' : 'المحدد'}) إلى جاهز للرفع - حالة التحقق الأصلية محفوظة: ${r.status}`, `Bulk (${method === 'BULK_ALL' ? 'All' : 'Selected'}) marked Ready to Import - original validation status preserved: ${r.status}`, language) },
+          ],
+        };
+      })
+    );
+    const blockedRowNumbers = blockedRows.slice(0, 20).map((r) => r.rowIndex).join(', ') + (blockedRows.length > 20 ? '…' : '');
+    setFeedback({
+      type: blockedRows.length > 0 ? 'error' : 'success',
+      message:
+        blockedRows.length === 0
+          ? t(`تم تحويل ${eligibleIndexes.size} سجل إلى جاهز للرفع.`, `${eligibleIndexes.size} record(s) marked Ready to Import.`, language)
+          : t(
+              `تم تحويل ${eligibleIndexes.size} سجل إلى جاهز للرفع. تعذر تحويل ${blockedRows.length} سجل بسبب خطأ أساسي غير قابل للتجاوز - أرقام الصفوف: ${blockedRowNumbers}`,
+              `${eligibleIndexes.size} record(s) marked Ready to Import. ${blockedRows.length} record(s) could not be converted due to a non-overridable validation error - row #s: ${blockedRowNumbers}`,
+              language
+            ),
+    });
+    logAuditAction(
+      'BULK_IMPORT',
+      'stage_chinese_mills',
+      undefined,
+      `[BULK_READY_TO_IMPORT] استيراد الطواحين الصينية - نطاق: ${method} - المحول: ${eligibleIndexes.size} - تعذر: ${blockedRows.length} - المستخدم: ${actor}`
+    ).catch(() => {});
+  };
+
+  const handleMarkSelectedReady = (scopeRowIndexes: Set<number>) => applyBulkMarkReady(scopeRowIndexes, 'BULK_SELECTED');
+  const handleMarkAllReadyInWindow = (scopeRowIndexes: Set<number>) => {
+    applyBulkMarkReady(scopeRowIndexes, 'BULK_ALL');
+    setMarkAllReadyConfirm(null);
   };
 
   /**
@@ -931,6 +1087,9 @@ export const ChineseMillsImportPanel: React.FC = () => {
         if (r.approved) {
           history.push({ timestamp: new Date().toISOString(), actor: adminUser?.email || 'admin', action: 'ROW_APPROVAL_REVOKED', summary: t('إلغاء الاعتماد تلقائيًا - تم تعديل السجل.', 'Approval automatically revoked - row was edited.', language) });
         }
+        if (r.readyToImport) {
+          history.push({ timestamp: new Date().toISOString(), actor: adminUser?.email || 'admin', action: 'ROW_READY_TO_IMPORT_REVOKED', summary: t('إلغاء الجاهزية تلقائيًا - تم تعديل السجل.', 'Ready-to-Import decision automatically removed - row was edited.', language) });
+        }
         return {
           ...r,
           ...resolved,
@@ -941,6 +1100,11 @@ export const ChineseMillsImportPanel: React.FC = () => {
           approvedBy: undefined,
           approvedAt: undefined,
           approvalMethod: undefined,
+          readyToImport: false,
+          readyToImportBy: undefined,
+          readyToImportAt: undefined,
+          readyToImportMethod: undefined,
+          preReadyToImportState: undefined,
           resolutionHistory: history,
         };
       })
@@ -1140,6 +1304,18 @@ export const ChineseMillsImportPanel: React.FC = () => {
     const source = reviewWindow.mode === 'ALL' ? allWindowInvalidRows : reviewWindow.mode === 'INVALID' ? reviewWindowRows : [];
     return source.filter((r) => r.errors.length > 0 && !isNonOverridableBlockingCondition(r));
   }, [reviewWindow, allWindowInvalidRows, reviewWindowRows]);
+
+  /**
+   * Global Ready-to-Import Override task §5-7/§20-21: "Mark All"/"Mark
+   * Selected as Ready" scope - unlike Approve All (errors-only),
+   * Mark-as-Ready applies to EVERY review state (§1), so this is simply
+   * reviewWindowRows itself (the SAME set Select All/Deselect All already
+   * operate on for every window mode, ALL included) filtered by
+   * canMarkReadyToImport - never the whole dataset, never dependent on
+   * scroll/rendered DOM.
+   */
+  const reviewWindowMarkReadyEligibleRows = useMemo(() => reviewWindowRows.filter(canMarkReadyToImport), [reviewWindowRows]);
+  const reviewWindowSelectedMarkReadyEligibleRows = useMemo(() => reviewWindowRows.filter((r) => getSelection(r) === 'INCLUDED' && canMarkReadyToImport(r)), [reviewWindowRows]);
 
   const millOptions: ComboboxOption[] = mills.map((m) => ({ id: m.id || '', code: m.code || '', name: m.name || '' }));
   const customerOptions: ComboboxOption[] = customers.map((c) => ({ id: c.id || '', code: c.code || '', name: c.name || '' }));
@@ -1394,6 +1570,13 @@ export const ChineseMillsImportPanel: React.FC = () => {
                         <span className="text-[10px] text-slate-500">{t(`اعتماد ${row.approvalMethod === 'BULK' ? 'جماعي' : 'فردي'} بواسطة ${row.approvedBy || ''}`, `${row.approvalMethod === 'BULK' ? 'Bulk' : 'Individual'} approval by ${row.approvedBy || ''}`, language)}</span>
                       </div>
                     )}
+                    {/* Global Ready-to-Import Override task §14: Decision shown separately from the original error - the row still visibly shows WHY it was originally blocking. */}
+                    {row.readyToImport && (
+                      <div className="mb-1 flex items-center gap-1">
+                        <span className="text-[10px] font-black px-1.5 py-0.5 rounded border bg-emerald-100 text-emerald-800 border-emerald-300">{t('جاهز للرفع', 'READY TO IMPORT', language)}</span>
+                        <span className="text-[10px] text-slate-500">{t(`القرار السابق: ${row.preReadyToImportState?.rowSelection || 'PENDING'}`, `Previous decision: ${row.preReadyToImportState?.rowSelection || 'PENDING'}`, language)}</span>
+                      </div>
+                    )}
                     {row.errors.map((e, i) => <div key={i}>• {e}</div>)}
                   </td>
                   <td className="py-1.5 px-1 text-slate-500 font-mono">{lastModified ? new Date(lastModified).toLocaleString() : '-'}</td>
@@ -1417,6 +1600,22 @@ export const ChineseMillsImportPanel: React.FC = () => {
                             className="px-1.5 py-1 bg-sky-50 text-sky-700 rounded cursor-pointer font-bold disabled:opacity-40 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-400"
                           >
                             {t('اعتماد', 'Approve', language)}
+                          </button>
+                        )
+                      )}
+                      {/* §1/§4/§10: universal Mark as Ready to Import, reachable regardless of BLOCKING/EXCLUDED/SKIPPED state (§8/§9 - reincludes as part of the same action). */}
+                      {canManageImport && (
+                        row.readyToImport ? (
+                          <button type="button" onClick={() => handleUndoReady(row.rowIndex)} className="px-1.5 py-1 bg-amber-50 text-amber-700 rounded cursor-pointer font-bold">{t('إلغاء الجاهزية', 'Undo Ready', language)}</button>
+                        ) : (
+                          <button
+                            type="button"
+                            disabled={!canMarkReadyToImport(row)}
+                            onClick={() => handleMarkRowReady(row.rowIndex)}
+                            title={!canMarkReadyToImport(row) ? t('لا يمكن تحويل السجل إلى جاهز للرفع بسبب خطأ أساسي غير قابل للتجاوز.', 'This record cannot be marked Ready to Import because it has a non-overridable validation error.', language) : undefined}
+                            className="px-1.5 py-1 bg-emerald-50 text-emerald-700 rounded cursor-pointer font-bold disabled:opacity-40 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-400"
+                          >
+                            {getSelection(row) === 'EXCLUDED' ? t('إعادة إدراج وجاهز للرفع', 'Reinclude and Mark Ready', language) : t('جاهز للرفع', 'Mark Ready', language)}
                           </button>
                         )
                       )}
@@ -1508,6 +1707,8 @@ export const ChineseMillsImportPanel: React.FC = () => {
                   <td className="py-2 px-2">
                     <span className={`text-[10px] font-bold px-2 py-0.5 rounded border ${statusInfo.cls}`}>{language === 'ar' ? statusInfo.ar : statusInfo.en}</span>
                     {hasUnresolved && <AlertTriangle className="inline w-3 h-3 text-amber-600 ms-1" />}
+                    {/* Global Ready-to-Import Override task §14: Decision shown SEPARATELY from Validation - never implies the validation itself changed. */}
+                    {row.readyToImport && <span className="ms-1 text-[10px] font-black px-1.5 py-0.5 rounded border bg-emerald-100 text-emerald-800 border-emerald-300">{t('جاهز للرفع', 'READY TO IMPORT', language)}</span>}
                   </td>
                   <td className="py-2 px-2">
                     <div className="flex items-center gap-1">
@@ -1526,6 +1727,22 @@ export const ChineseMillsImportPanel: React.FC = () => {
                         <button type="button" onClick={() => handleExcludeRow(row.rowIndex, 'EXCLUDED_ROW')} className="p-1 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded cursor-pointer" title={t('استبعاد', 'Exclude', language)}>
                           <Ban className="w-3.5 h-3.5" />
                         </button>
+                      )}
+                      {/* §1/§4: universal "Mark as Ready to Import" - reachable from every row regardless of its current validation state. */}
+                      {canManageImport && (
+                        row.readyToImport ? (
+                          <button type="button" onClick={() => handleUndoReady(row.rowIndex)} className="px-1.5 py-1 bg-amber-50 text-amber-700 rounded cursor-pointer font-bold">{t('إلغاء الجاهزية', 'Undo Ready', language)}</button>
+                        ) : (
+                          <button
+                            type="button"
+                            disabled={!canMarkReadyToImport(row)}
+                            onClick={() => handleMarkRowReady(row.rowIndex)}
+                            title={!canMarkReadyToImport(row) ? t('لا يمكن تحويل السجل إلى جاهز للرفع بسبب خطأ أساسي غير قابل للتجاوز.', 'This record cannot be marked Ready to Import because it has a non-overridable validation error.', language) : undefined}
+                            className="px-1.5 py-1 bg-emerald-50 text-emerald-700 rounded cursor-pointer font-bold disabled:opacity-40 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-400"
+                          >
+                            {t('جاهز للرفع', 'Mark Ready', language)}
+                          </button>
+                        )
                       )}
                     </div>
                   </td>
@@ -1647,6 +1864,7 @@ export const ChineseMillsImportPanel: React.FC = () => {
               { label: t('تحذير', 'Warning', language), value: selectionCounts.warning, cls: 'text-amber-600' },
               { label: t('متخطى', 'Skipped', language), value: selectionCounts.skipped, cls: 'text-slate-500' },
               { label: t('المستبعدة', 'Excluded', language), value: selectionCounts.excluded, cls: 'text-slate-500' },
+              { label: t('جاهز للرفع', 'Ready to Import', language), value: selectionCounts.markedReadyToImport, cls: 'text-emerald-800' },
               { label: t('المحددة', 'Selected', language), value: selectionCounts.selected, cls: 'text-slate-900' },
               { label: t('سيتم استيراده', 'Will Import', language), value: selectionCounts.willImport, cls: 'text-emerald-700' },
               { label: t('مسودة', 'Draft', language), value: savedDraft?.rows.length ?? 0, cls: 'text-indigo-600' },
@@ -1760,6 +1978,18 @@ export const ChineseMillsImportPanel: React.FC = () => {
                     <div className="flex items-center gap-1.5">
                       {canEditPending && <button type="button" onClick={() => openEditRow(row.rowIndex)} className="px-2 py-1 bg-sky-50 text-sky-700 rounded-md cursor-pointer">{t('تعديل', 'Edit', language)}</button>}
                       {canManageImport && <button type="button" onClick={() => handleReincludeRow(row.rowIndex)} className="px-2 py-1 bg-emerald-50 text-emerald-700 rounded-md cursor-pointer">{t('إعادة إدراج', 'Re-include', language)}</button>}
+                      {/* §8/§9: EXCLUDED/SKIPPED can return to READY_TO_IMPORT only through this explicit action - never automatically restored. */}
+                      {canManageImport && (
+                        <button
+                          type="button"
+                          disabled={!canMarkReadyToImport(row)}
+                          onClick={() => handleMarkRowReady(row.rowIndex)}
+                          title={!canMarkReadyToImport(row) ? t('لا يمكن تحويل السجل إلى جاهز للرفع بسبب خطأ أساسي غير قابل للتجاوز.', 'This record cannot be marked Ready to Import because it has a non-overridable validation error.', language) : undefined}
+                          className="px-2 py-1 bg-emerald-100 text-emerald-800 rounded-md cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-400"
+                        >
+                          {t('إعادة إدراج وجاهز للرفع', 'Reinclude and Mark Ready', language)}
+                        </button>
+                      )}
                       {canDeletePermanently && <button type="button" onClick={() => setDeleteConfirm({ rowIndexes: [row.rowIndex] })} className="px-2 py-1 bg-red-50 text-red-700 rounded-md cursor-pointer">{t('حذف نهائي', 'Delete Permanently', language)}</button>}
                     </div>
                   </div>
@@ -1863,6 +2093,25 @@ export const ChineseMillsImportPanel: React.FC = () => {
             <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-100">
               <button type="button" onClick={() => setApproveAllConfirm(null)} className="px-4 py-2 text-xs font-bold text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-lg cursor-pointer">{t('إلغاء', 'Cancel', language)}</button>
               <button type="button" onClick={() => handleApproveAllInWindow(approveAllConfirm.scopeRowIndexes)} className="px-4 py-2 text-xs font-black text-white bg-sky-600 hover:bg-sky-700 rounded-lg cursor-pointer">{t('اعتماد', 'Approve', language)}</button>
+            </div>
+          </div>
+        </Modal>
+      )}
+
+      {/* Global Ready-to-Import Override task §7: "Mark All as Ready" confirmation. */}
+      {markAllReadyConfirm && (
+        <Modal isOpen onClose={() => setMarkAllReadyConfirm(null)} title={t('تحويل الكل إلى جاهز للرفع', 'Mark All as Ready to Import', language)} maxWidth="sm">
+          <div className="space-y-3 text-sm" dir={isRtl ? 'rtl' : 'ltr'}>
+            <p className="text-slate-800">
+              {t(
+                `سيتم تحويل ${markAllReadyConfirm.count} سجل من نطاق المراجعة الحالي إلى جاهز للرفع، مع الاحتفاظ بحالة التحقق الأصلية لكل سجل. هل تريد المتابعة؟`,
+                `${markAllReadyConfirm.count} record(s) in the current review scope will be marked Ready to Import, while each record's original validation state is preserved. Continue?`,
+                language
+              )}
+            </p>
+            <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-100">
+              <button type="button" onClick={() => setMarkAllReadyConfirm(null)} className="px-4 py-2 text-xs font-bold text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-lg cursor-pointer">{t('إلغاء', 'Cancel', language)}</button>
+              <button type="button" onClick={() => handleMarkAllReadyInWindow(markAllReadyConfirm.scopeRowIndexes)} className="px-4 py-2 text-xs font-black text-white bg-emerald-600 hover:bg-emerald-700 rounded-lg cursor-pointer">{t('تحويل', 'Convert', language)}</button>
             </div>
           </div>
         </Modal>
@@ -1978,6 +2227,25 @@ export const ChineseMillsImportPanel: React.FC = () => {
                     className="px-2.5 py-1.5 bg-sky-50 hover:bg-sky-100 text-sky-800 rounded-lg cursor-pointer"
                   >
                     {t(`اعتماد جميع السجلات (${reviewWindowApprovableRows.length})`, `Approve All Records (${reviewWindowApprovableRows.length})`, language)}
+                  </button>
+                )}
+                {/* Global Ready-to-Import Override task §5-7/IMPORTANT SELECT THEN CONVERT: "Mark Selected" operates ONLY on currently-selected rows; "Mark All" operates on the whole window scope regardless of selection (with confirmation, since it can reinclude EXCLUDED/SKIPPED rows too). */}
+                {canManageImport && reviewWindowSelectedMarkReadyEligibleRows.length > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => handleMarkSelectedReady(new Set(reviewWindowSelectedMarkReadyEligibleRows.map((r) => r.rowIndex)))}
+                    className="px-2.5 py-1.5 bg-emerald-50 hover:bg-emerald-100 text-emerald-800 rounded-lg cursor-pointer"
+                  >
+                    {t(`تحويل المحدد إلى جاهز للرفع (${reviewWindowSelectedMarkReadyEligibleRows.length})`, `Mark Selected as Ready to Import (${reviewWindowSelectedMarkReadyEligibleRows.length})`, language)}
+                  </button>
+                )}
+                {canManageImport && reviewWindowMarkReadyEligibleRows.length > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => setMarkAllReadyConfirm({ scopeRowIndexes: new Set(reviewWindowMarkReadyEligibleRows.map((r) => r.rowIndex)), count: reviewWindowMarkReadyEligibleRows.length })}
+                    className="px-2.5 py-1.5 bg-emerald-100 hover:bg-emerald-200 text-emerald-900 rounded-lg cursor-pointer"
+                  >
+                    {t(`تحويل الكل إلى جاهز للرفع (${reviewWindowMarkReadyEligibleRows.length})`, `Mark All as Ready to Import (${reviewWindowMarkReadyEligibleRows.length})`, language)}
                   </button>
                 )}
               </div>
