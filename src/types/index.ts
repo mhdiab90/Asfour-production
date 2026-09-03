@@ -259,6 +259,44 @@ export interface Furnace {
   updatedAt?: string;
 }
 
+export interface TubeBallMill {
+  id?: string;
+  code: string;
+  name: string;
+  model?: string;
+  status?: 'active' | 'maintenance' | 'inactive';
+  millCodeNormalized?: string;
+  nameNormalized?: string;
+  active: boolean;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+/**
+ * Storage Bunker / Silo Master Data ("البناكر", §20) - no existing
+ * bunker/silo collection was found anywhere in the codebase (the current
+ * TubeBallMillsRecord.storageBunker is plain free text), so this is a new,
+ * minimal collection ('bunkers') following the exact same established
+ * equipment-master-data pattern as Mill/TubeBallMill/Press/Furnace, not a
+ * new pattern. Source data may be incomplete (§20) - only `bunkerNumber` is
+ * ever required to create a review-time coding candidate; everything else
+ * may be filled in later.
+ */
+export interface Bunker {
+  id?: string;
+  code?: string;
+  bunkerNumber: string;
+  name?: string;
+  center?: string;
+  notes?: string;
+  status?: 'active' | 'maintenance' | 'inactive';
+  bunkerCodeNormalized?: string;
+  nameNormalized?: string;
+  active: boolean;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
 export interface FurnaceCar {
   id?: string;
   code: string;
@@ -1114,6 +1152,146 @@ export interface PressingImportSummary {
   highConfidenceMatchesCount?: number;
   unresolvedMismatchesCount?: number;
   rows: PressingImportRow[];
+}
+
+export interface TubeBallMillsMixtureComponent {
+  materialNameRaw: string;
+  quantityKg: number;
+  /** Normalized 0-100, derived from quantityKg - see mixturePure.ts. The full component set for one row always sums to exactly 100 (rounding remainder assigned to the largest component - never silently dropped). */
+  percentage: number;
+  resolvedMaterialId?: string;
+  resolvedMaterialCode?: string;
+  resolvedMaterialName?: string;
+  /** Only when explicitly detected (e.g. "جريت40%" §13) or already present on the resolved Material master record - never invented. */
+  aluminaPercentage?: number;
+}
+
+/** One bunker this row's Total production is allocated to - §19-22. */
+export interface TubeBallMillsBunkerAllocation {
+  bunkerRaw: string;
+  resolvedBunkerId?: string;
+  resolvedBunkerCode?: string;
+  resolvedBunkerName?: string;
+  /** Defaults to an equal split of Total across all parsed bunkers (§22 - a SUGGESTION only, user-editable) - never assumed to be historically true without the user confirming it. */
+  allocatedTons: number;
+}
+
+export interface TubeBallMillsImportRow {
+  rowIndex: number;
+  raw: Record<string, any>;
+  date: string;
+
+  // Mill Type ("نوع الطاحونة") - §7-8
+  millTypeRaw: string;
+  resolvedMillId?: string;
+  resolvedMillCode?: string;
+  resolvedMillName?: string;
+  /** A fuzzy-match candidate for an unresolved Mill Type (never auto-applied - the user must explicitly accept it via "Use Suggestion", or pick a different existing Mill, or Code New). */
+  suggestedMillId?: string;
+  suggestedMillCode?: string;
+  suggestedMillName?: string;
+  suggestedMillConfidence?: number;
+
+  // Material Type ("نوع الخامة") - §9-14: either a single raw material OR a mixture/BOM.
+  materialTypeRaw: string;
+  isMixture: boolean;
+  // Single-material resolution (used only when !isMixture)
+  resolvedMaterialId?: string;
+  resolvedMaterialCode?: string;
+  resolvedMaterialName?: string;
+  /** Parsed from an embedded "٪"/"%" pattern (§13, e.g. "جريت40%") - the RAW material's own alumina content, distinct from a mixture component's. */
+  detectedAluminaPercentage?: number;
+  /** A fuzzy-match candidate for an unresolved single (non-mixture) Material (never auto-applied). */
+  suggestedMaterialId?: string;
+  suggestedMaterialCode?: string;
+  suggestedMaterialName?: string;
+  suggestedMaterialConfidence?: number;
+  // Mixture/BOM resolution (used only when isMixture) - §11-16
+  mixtureComponents?: TubeBallMillsMixtureComponent[];
+  mixtureTotalQuantityKg?: number;
+  /** Set once the user accepts an existing Product(isMixtureBOM) or creates a new one - never auto-created (§14/§48). */
+  resolvedMixtureProductId?: string;
+  resolvedMixtureProductCode?: string;
+  resolvedMixtureProductName?: string;
+  /** A candidate found via composition-aware duplicate search (§14/§48) - shown to the user, never silently applied. */
+  suggestedMixtureProductId?: string;
+  suggestedMixtureProductName?: string;
+  suggestedMixtureMatchReason?: string;
+
+  // Hours / Rate / Total - §22-25
+  operatingHours: number;
+  tonsPerHour: number;
+  totalTons: number;
+  /** Set when the declared Tons/Hour materially disagrees with Total/Hours (§24) - a WARNING, never blocking on its own, and the source value is never silently overwritten. */
+  tonsPerHourMismatch?: boolean;
+  /** Tons Per Hour is OPTIONAL per the existing import schema (productionStageConfig.ts) - when the source left it blank, it is DERIVED as Total/Hours rather than left at a misleading 0, but NEVER silently: this flag is always set so the UI can visibly label it "derived", never presented as if the source actually provided it. */
+  tonsPerHourDerived?: boolean;
+
+  // Storage Bunkers ("بناكر التخزين") - §19-22
+  storageBunkersRaw: string;
+  bunkerAllocations: TubeBallMillsBunkerAllocation[];
+  /** True only once every parsed bunker is resolved AND the allocations sum to exactly totalTons (§22 - a hard blocking rule, not overridable by approval). */
+  bunkerAllocationValid: boolean;
+
+  status: TubeBallMillsImportStatus;
+  errors: string[];
+  warnings: string[];
+  warningCodes?: string[];
+  isDuplicate: boolean;
+  duplicateType?: 'FILE' | 'DATABASE';
+
+  // Partial-import row selection - identical convention to ChineseMillsImportRow/PressingImportRow (§4/§33).
+  rowSelection?: 'INCLUDED' | 'EXCLUDED' | 'PENDING';
+  exclusionReason?: 'USER_DESELECTED' | 'SKIPPED_ROW' | 'EXCLUDED_ROW';
+  excludedBy?: string;
+  excludedAt?: string;
+  importOutcome?: 'IMPORTED' | 'FAILED';
+
+  // Full row edit + history - §26-28
+  editedRowData?: Record<string, any>;
+  resolutionHistory?: Array<{ timestamp: string; actor: string; action: string; summary: string }>;
+
+  // Warning override - same convention as ChineseMillsImportRow.
+  warningsAccepted?: boolean;
+  warningOverrideBy?: string;
+  warningOverrideAt?: string;
+
+  // Approval (§22 of this task / reused verbatim from the Approve Invalid Records task) - an explicit override of OVERRIDABLE blocking errors, never a correction.
+  approved?: boolean;
+  approvedBy?: string;
+  approvedAt?: string;
+  approvalMethod?: 'INDIVIDUAL' | 'BULK';
+
+  // Ready-to-Import (reused verbatim from the Global Ready-to-Import Override task) - §24-27/§32.
+  readyToImport?: boolean;
+  readyToImportBy?: string;
+  readyToImportAt?: string;
+  readyToImportMethod?: 'INDIVIDUAL' | 'BULK_SELECTED' | 'BULK_ALL';
+  preReadyToImportState?: {
+    rowSelection?: 'INCLUDED' | 'EXCLUDED' | 'PENDING';
+    exclusionReason?: 'USER_DESELECTED' | 'SKIPPED_ROW' | 'EXCLUDED_ROW';
+    approved?: boolean;
+    approvedBy?: string;
+    approvedAt?: string;
+    approvalMethod?: 'INDIVIDUAL' | 'BULK';
+    warningsAccepted?: boolean;
+  };
+}
+
+export interface TubeBallMillsImportSummary {
+  totalRows: number;
+  validRows: number;
+  warningRows: number;
+  errorRows: number;
+  duplicateRows: number;
+  unknownMillsCount: number;
+  unknownMaterialsCount: number;
+  unresolvedMixtureCount: number;
+  unknownBunkersCount: number;
+  invalidBunkerAllocationCount: number;
+  rows: TubeBallMillsImportRow[];
+  /** Same controlled-degradation pattern as ChineseMillsImportSummary.masterDataLoadErrors (§8 of this task's Firestore-load safety). */
+  masterDataLoadErrors?: Array<{ domain: 'mill' | 'material' | 'bunker'; labelAr: string; labelEn: string; isPermissionDenied: boolean }>;
 }
 
 export interface BrandingSettings {
