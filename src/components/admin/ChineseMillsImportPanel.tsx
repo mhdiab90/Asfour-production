@@ -28,7 +28,7 @@ import {
 } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import { Customer, Product, ChineseMillsImportRow, ChineseMillsImportSummary } from '../../types';
-import { loadApprovedMappings } from '../../services/importMappingService';
+import { loadApprovedMappings, getHistoricalImportHistory, rollbackImportBatch, ImportAuditEntry } from '../../services/importMappingService';
 import { logAuditAction } from '../../services/auditService';
 import {
   downloadChineseMillsExcelTemplate,
@@ -46,6 +46,7 @@ import {
   describeMasterDataLoadError,
   isPermissionDeniedError,
   recheckDatabaseDuplicates,
+  getChineseMillsImportedRowsByBatch,
   CHINESE_MILLS_MASTER_COLLECTION,
   FAULT_TYPES_COLLECTION,
   ManualOverrideMap,
@@ -70,6 +71,7 @@ import {
   isNonOverridableBlockingCondition,
   canMarkReadyToImport,
   computeMarkReadyPatch,
+  explainChineseMillsRowErrors,
   BulkSelectionMode,
 } from '../../services/chineseMillsSelectionPure';
 import { ChineseMillsDraft, SaveDraftOutcome, saveDraft, getDraft, deleteDraft, logDraftOpened } from '../../services/chineseMillsDraftStorage';
@@ -211,6 +213,19 @@ export const ChineseMillsImportPanel: React.FC = () => {
   const [approveAllConfirm, setApproveAllConfirm] = useState<{ scopeRowIndexes: Set<number>; count: number } | null>(null);
   /** Global Ready-to-Import Override task §7: holds the CURRENT review window's scope for the "Mark All as Ready" confirmation dialog. */
   const [markAllReadyConfirm, setMarkAllReadyConfirm] = useState<{ scopeRowIndexes: Set<number>; count: number } | null>(null);
+
+  // ---- Comprehensive Historical Import Management: Import History (§4-5/§30-33) ----
+  const [showHistoryModal, setShowHistoryModal] = useState(false);
+  const [isLoadingHistory, setIsLoadingHistory] = useState(false);
+  const [importHistory, setImportHistory] = useState<ImportAuditEntry[]>([]);
+  const [historyDateFrom, setHistoryDateFrom] = useState('');
+  const [historyDateTo, setHistoryDateTo] = useState('');
+  const [historyDetail, setHistoryDetail] = useState<ImportAuditEntry | null>(null);
+  const [historyDetailRows, setHistoryDetailRows] = useState<any[] | null>(null);
+  const [isLoadingHistoryDetailRows, setIsLoadingHistoryDetailRows] = useState(false);
+  const [rollbackTarget, setRollbackTarget] = useState<ImportAuditEntry | null>(null);
+  const [isRollingBack, setIsRollingBack] = useState(false);
+  const [rollbackMessage, setRollbackMessage] = useState<string | null>(null);
   const [importResult, setImportResult] = useState<{ total: number; imported: number; failed: number; skipped: number; pending: number; excluded: number; cancelled: number; importId: string } | null>(null);
   /** §7: checked at BATCH BOUNDARIES only (see executeChineseMillsBatchImport's shouldCancel param) - a ref, not state, so the running import loop reads the latest value synchronously without needing to be re-created on every render. */
   const cancelImportRef = useRef(false);
@@ -1159,7 +1174,16 @@ export const ChineseMillsImportPanel: React.FC = () => {
         stillWritable,
         backupId || undefined,
         (pct) => setImportProgress(pct),
-        () => cancelImportRef.current
+        () => cancelImportRef.current,
+        {
+          fileName: file?.name,
+          totalRowsInSession: summary.totalRows,
+          selectedCount: selectionCounts.selected,
+          approvedCount: selectionCounts.approved,
+          correctedCount: selectionCounts.corrected,
+          warningCount: selectionCounts.warning,
+          blockingCount: selectionCounts.blocking,
+        }
       );
 
       // Reflect the fresh state back into the review session so any row the
@@ -1242,6 +1266,137 @@ export const ChineseMillsImportPanel: React.FC = () => {
     setFeedback({ type: 'success', message: t('تم إلغاء عملية الرفع بالكامل. لم يتم تسجيل أي سجل.', 'The entire import operation was cancelled. No records were written.', language) });
   };
 
+  /**
+   * Comprehensive Historical Import Management task §4-5: "Historical
+   * Import History" - reuses the EXISTING importAuditTrail collection/
+   * getHistoricalImportHistory() DataImportView.tsx's Pressing history modal
+   * already relies on (executeChineseMillsBatchImport already writes to it
+   * via logHistoricalImportExecution) - never a second history mechanism or
+   * a new Firestore collection. Filtered to stage==='chinese_mills'
+   * client-side since the single already-bounded query underneath is
+   * shared/unfiltered by design (§44 - never a new broad scan).
+   */
+  const openHistoryModal = async () => {
+    setShowHistoryModal(true);
+    setIsLoadingHistory(true);
+    try {
+      const history = await getHistoricalImportHistory();
+      setImportHistory(history.filter((h) => h.stage === 'chinese_mills'));
+    } catch (err) {
+      console.warn('Failed to load Chinese Mills import history:', err);
+    } finally {
+      setIsLoadingHistory(false);
+    }
+  };
+
+  /**
+   * §8-9: Import Details record-level rows - ONLY the rows that were
+   * actually written for this ImportId (getChineseMillsImportedRowsByBatch,
+   * a targeted single-field query - §44). Rows that were never imported
+   * (blocking/skipped/excluded/cancelled) cannot be replayed here once the
+   * originating review session is gone - the honest limitation is shown in
+   * the modal itself, never silently omitted.
+   */
+  const openHistoryDetail = async (entry: ImportAuditEntry) => {
+    setHistoryDetail(entry);
+    setHistoryDetailRows(null);
+    setIsLoadingHistoryDetailRows(true);
+    logAuditAction('UPDATE', 'stage_chinese_mills', entry.importBatchId, `[IMPORT_VIEWED] عرض تفاصيل عملية الرفع ${entry.importBatchId} - المستخدم: ${adminUser?.email || 'admin'}`).catch(() => {});
+    try {
+      const rows = await getChineseMillsImportedRowsByBatch(entry.importBatchId);
+      setHistoryDetailRows(rows);
+    } catch (err) {
+      console.warn('Failed to load import detail rows:', err);
+      setHistoryDetailRows([]);
+    } finally {
+      setIsLoadingHistoryDetailRows(false);
+    }
+  };
+
+  /** §38: Export Import Report - the imported-rows detail table, reusing the SAME xlsx export infra as the Error/Skipped Report below. */
+  const handleExportImportReport = () => {
+    if (!historyDetail || !historyDetailRows || historyDetailRows.length === 0) return;
+    const reportRows = historyDetailRows.map((r) => ({
+      [t('رقم الاستيراد', 'ImportId', language)]: historyDetail.importBatchId,
+      [t('معرف السجل', 'Record ID', language)]: r.id,
+      [t('التاريخ', 'Date', language)]: r.date || '',
+      [t('العميل', 'Customer', language)]: r.customerName || '',
+      [t('الطاحونة', 'Mill', language)]: r.millTypeName || r.millType || '',
+      [t('الوردية', 'Shift', language)]: r.shiftNumber ?? '',
+      [t('الإنتاج', 'Production', language)]: r.quantity ?? '',
+      [t('الحالة النهائية', 'Final Status', language)]: t('مستورد', 'IMPORTED', language),
+      [t('استورد بواسطة', 'Imported By', language)]: r.importedByName || '',
+      [t('وقت الاستيراد', 'Imported At', language)]: r.importedAt || '',
+    }));
+    const worksheet = XLSX.utils.json_to_sheet(reportRows);
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, worksheet, language === 'ar' ? 'تقرير الرفع' : 'Import Report');
+    XLSX.writeFile(workbook, `chinese-mills-import-report-${historyDetail.importBatchId}.xlsx`);
+  };
+
+  /**
+   * §30-33/§36: Delete Import Operation - reuses the EXISTING generic
+   * rollbackImportBatch(importBatchId, stage) (importMappingService.ts,
+   * already used by Pressing) rather than a second deletion mechanism.
+   * ImportId is the delete key (never date alone - §30/§32); the
+   * confirmation dialog (§31) shows ImportId/Type/Date/Imported Count
+   * before anything is touched.
+   */
+  const openRollbackConfirm = (entry: ImportAuditEntry) => {
+    setRollbackTarget(entry);
+    setRollbackMessage(null);
+    logAuditAction('UPDATE', 'stage_chinese_mills', entry.importBatchId, `[IMPORT_DELETE_REQUESTED] طلب حذف عملية الرفع ${entry.importBatchId} - المستخدم: ${adminUser?.email || 'admin'}`).catch(() => {});
+  };
+
+  const handleConfirmRollback = async () => {
+    if (!rollbackTarget) return;
+    setIsRollingBack(true);
+    setRollbackMessage(null);
+    try {
+      const res = await rollbackImportBatch(rollbackTarget.importBatchId, 'chinese_mills');
+      setRollbackMessage(
+        t(
+          `تم حذف عملية الرفع بنجاح - تم حذف ${res.deletedCount} سجل من الدفعة (${rollbackTarget.importBatchId}).`,
+          `Import deleted successfully - removed ${res.deletedCount} record(s) from batch (${rollbackTarget.importBatchId}).`,
+          language
+        )
+      );
+      logAuditAction(
+        'UPDATE',
+        'stage_chinese_mills',
+        rollbackTarget.importBatchId,
+        `[IMPORT_DELETE_COMPLETED] تم حذف عملية الرفع ${rollbackTarget.importBatchId} - عدد السجلات المحذوفة: ${res.deletedCount} - المستخدم: ${adminUser?.email || 'admin'}`
+      ).catch(() => {});
+      const refreshed = await getHistoricalImportHistory();
+      setImportHistory(refreshed.filter((h) => h.stage === 'chinese_mills'));
+      setRollbackTarget(null);
+    } catch (err: any) {
+      setRollbackMessage(cleanErrorMessage(err, language, 'Delete import operation failed'));
+    } finally {
+      setIsRollingBack(false);
+    }
+  };
+
+  /** §5/§43: client-side date-range filter over the already-fetched, bounded history list - never a repeated Firestore query per filter change. */
+  const filteredImportHistory = useMemo(() => {
+    return importHistory.filter((h) => {
+      const d = (h.performedAt || '').slice(0, 10);
+      if (historyDateFrom && d < historyDateFrom) return false;
+      if (historyDateTo && d > historyDateTo) return false;
+      return true;
+    });
+  }, [importHistory, historyDateFrom, historyDateTo]);
+
+  /** §4: Final Status, derived ONLY from actual recorded counts - never a stored/invented value. */
+  const deriveImportFinalStatus = (h: ImportAuditEntry): { key: string; ar: string; en: string; cls: string } => {
+    const failed = h.failedCount || 0;
+    const imported = h.importedCount || 0;
+    const cancelled = h.cancelledCount || 0;
+    if (failed === 0 && cancelled === 0) return { key: 'COMPLETED', ar: 'مكتمل', en: 'COMPLETED', cls: 'bg-emerald-100 text-emerald-800 border-emerald-300' };
+    if (imported === 0) return { key: 'FAILED', ar: 'فشل', en: 'FAILED', cls: 'bg-red-100 text-red-800 border-red-300' };
+    return { key: 'PARTIALLY_COMPLETED', ar: 'مكتمل جزئيًا', en: 'PARTIALLY_COMPLETED', cls: 'bg-amber-100 text-amber-800 border-amber-300' };
+  };
+
   const filteredRows = useMemo(() => {
     if (!summary) return [];
     return summary.rows.filter((r) => {
@@ -1273,6 +1428,25 @@ export const ChineseMillsImportPanel: React.FC = () => {
    */
   const pendingRows = useMemo(() => (summary ? summary.rows.filter((r) => r.errors.length > 0) : []), [summary]);
   const selectionCounts = useMemo(() => computeSelectionCounts(summary?.rows || []), [summary]);
+  /**
+   * Comprehensive Historical Import Management task §10: "Incomplete
+   * Records Center" counts - purely a client-side breakdown of the
+   * ALREADY-loaded pendingRows by their structured explanation type (§12),
+   * never a Firestore read (§44).
+   */
+  const incompleteRecordsBreakdown = useMemo(() => {
+    let missingRequired = 0, unknownCodes = 0, logicalErrors = 0, pendingApproval = 0, readyCount = 0;
+    for (const row of pendingRows) {
+      const explanations = explainChineseMillsRowErrors(row);
+      if (explanations.some((e) => e.type === 'MISSING_REQUIRED_FIELD')) missingRequired++;
+      if (explanations.some((e) => e.type === 'UNKNOWN_MASTER_DATA_CODE')) unknownCodes++;
+      if (explanations.some((e) => e.type === 'DUPLICATE_MATCH' || e.type === 'LOGICAL_INCONSISTENCY')) logicalErrors++;
+      // "Pending Approval": overridable via the Approve action, but not yet approved - the actionable queue, not rows already resolved.
+      if (!row.approved && explanations.some((e) => e.overridable)) pendingApproval++;
+      if (row.readyToImport) readyCount++;
+    }
+    return { total: pendingRows.length, missingRequired, unknownCodes, logicalErrors, pendingApproval, ready: readyCount };
+  }, [pendingRows]);
   const validRowsForWindow = useMemo(() => (summary ? summary.rows.filter(matchesValid) : []), [summary]);
   const readyRowsForWindow = useMemo(() => (summary ? summary.rows.filter(matchesReady) : []), [summary]);
   const correctedRowsForWindow = useMemo(() => (summary ? summary.rows.filter(matchesCorrected) : []), [summary]);
@@ -1369,9 +1543,27 @@ export const ChineseMillsImportPanel: React.FC = () => {
     const pendingMatches = (row.proposedMatches || []).filter((m) => m.decision === 'PENDING');
     return (
       <div className="space-y-2">
+        {/* Comprehensive Historical Import Management task §11/§20: structured
+            Problem/Field/Current Value/Reason/Suggested Solution for EVERY
+            error on the row, never a bare status word, never only the first
+            problem when there are several. */}
         {row.errors.length > 0 && (
-          <div className="text-[11px] text-red-700 bg-red-50 border border-red-200 rounded-lg p-2 space-y-0.5">
-            {row.errors.map((e, i) => <div key={i}>• {e}</div>)}
+          <div className="space-y-1.5">
+            {explainChineseMillsRowErrors(row).map((exp, i) => (
+              <div key={i} className="text-[11px] text-red-800 bg-red-50 border border-red-200 rounded-lg p-2 space-y-0.5">
+                <div className="flex items-center gap-1.5 flex-wrap">
+                  <span className="font-black">{t('المشكلة:', 'Problem:', language)}</span>
+                  <span>{row.errors[i]}</span>
+                  <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded border ${exp.overridable ? 'bg-sky-100 text-sky-800 border-sky-300' : 'bg-red-200 text-red-900 border-red-400'}`}>
+                    {exp.overridable ? t('قابل للتجاوز بالاعتماد', 'Overridable via Approval', language) : t('غير قابل للتجاوز', 'Non-Overridable', language)}
+                  </span>
+                </div>
+                <div><span className="font-bold">{t('الحقل:', 'Field:', language)}</span> {t(exp.fieldLabelAr, exp.fieldLabelEn, language)}</div>
+                <div><span className="font-bold">{t('القيمة الحالية:', 'Current Value:', language)}</span> {exp.currentValue}</div>
+                <div><span className="font-bold">{t('السبب:', 'Reason:', language)}</span> {t(exp.reasonAr, exp.reasonEn, language)}</div>
+                <div><span className="font-bold">{t('الحل المقترح:', 'Suggested Solution:', language)}</span> {t(exp.suggestedSolutionAr, exp.suggestedSolutionEn, language)}</div>
+              </div>
+            ))}
           </div>
         )}
         {row.warnings.length > 0 && (
@@ -1768,6 +1960,16 @@ export const ChineseMillsImportPanel: React.FC = () => {
 
   return (
     <div className="space-y-5" dir={isRtl ? 'rtl' : 'ltr'}>
+      {/* Comprehensive Historical Import Management task §4: Historical
+          Import History is reachable at all times, whether or not a file is
+          currently loaded - never buried behind an active review session. */}
+      <div className="flex items-center justify-end">
+        <button type="button" onClick={openHistoryModal} className="px-3 py-1.5 text-[11px] font-bold text-indigo-800 bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 rounded-lg cursor-pointer flex items-center gap-1.5">
+          <History className="w-3.5 h-3.5" />
+          {t('سجل عمليات الرفع التاريخية', 'Historical Import History', language)}
+        </button>
+      </div>
+
       {/* Permission Error banner (§8/§20) - a domain that failed to load never
           crashes the screen; shown alongside the rest of a still-usable panel
           since optional fields (Customer/Fault Type) can be skipped. */}
@@ -1903,6 +2105,8 @@ export const ChineseMillsImportPanel: React.FC = () => {
               <div className="text-[11px] text-indigo-900">
                 <span className="font-black">{t('المسودات', 'Drafts', language)}: </span>
                 {t('استيراد الطواحين الصينية', 'Chinese Mills Historical Import', language)} · {t('أُنشئت', 'Created', language)} {new Date(savedDraft.createdAt).toLocaleString()} · {t('عدد الصفوف', 'Rows', language)}: {savedDraft.rows.length}
+                {/* Comprehensive Historical Import Management task §6-7: honest about the ACTUAL storage mechanism (browser localStorage, not a server-side/cross-device record) - never implies it is globally available when it is not. */}
+                <div className="text-[10px] text-indigo-600 mt-0.5">{t('هذه المسودة محفوظة محليًا على هذا المتصفح.', 'This draft is stored locally in this browser.', language)}</div>
               </div>
               {canManageImport && (
                 <button type="button" onClick={handleOpenDraft} className="px-3 py-1.5 text-[11px] font-bold text-indigo-800 bg-indigo-100 hover:bg-indigo-200 rounded-lg cursor-pointer">{t('فتح المسودة', 'Open Draft', language)}</button>
@@ -1998,14 +2202,28 @@ export const ChineseMillsImportPanel: React.FC = () => {
             </div>
           )}
 
-          {/* Pending Records (Part 6 CRITICAL) - a row that cannot currently be
-              completed is parked here, never permanently lost. */}
+          {/* Pending Records / Incomplete Records Center (Part 6 CRITICAL,
+              Comprehensive Historical Import Management task §10) - a row
+              that cannot currently be completed is parked here, never
+              permanently lost, with a breakdown of WHY. */}
           <div id="cm-pending-section" className="p-3 bg-red-50/40 border border-red-200 rounded-xl space-y-2 scroll-mt-4">
             <div className="flex items-center justify-between flex-wrap gap-2">
               <h3 className="text-xs font-black text-red-900 flex items-center gap-1.5">
                 <AlertCircle className="w-4 h-4" />
-                {t(`السجلات المعلقة (${pendingRows.length})`, `Pending Records (${pendingRows.length})`, language)}
+                {t(`السجلات غير المكتملة (${incompleteRecordsBreakdown.total})`, `Incomplete Records (${incompleteRecordsBreakdown.total})`, language)}
               </h3>
+            </div>
+            {incompleteRecordsBreakdown.total > 0 && (
+              <div className="flex flex-wrap items-center gap-1.5 text-[10px]">
+                <span className="px-2 py-1 rounded-md bg-white border border-red-200 text-red-800 font-bold">{t(`حقول ناقصة: ${incompleteRecordsBreakdown.missingRequired}`, `Missing Required: ${incompleteRecordsBreakdown.missingRequired}`, language)}</span>
+                <span className="px-2 py-1 rounded-md bg-white border border-red-200 text-red-800 font-bold">{t(`أكواد غير معروفة: ${incompleteRecordsBreakdown.unknownCodes}`, `Unknown Codes: ${incompleteRecordsBreakdown.unknownCodes}`, language)}</span>
+                <span className="px-2 py-1 rounded-md bg-white border border-red-200 text-red-800 font-bold">{t(`أخطاء منطقية: ${incompleteRecordsBreakdown.logicalErrors}`, `Logical Errors: ${incompleteRecordsBreakdown.logicalErrors}`, language)}</span>
+                <span className="px-2 py-1 rounded-md bg-white border border-sky-200 text-sky-800 font-bold">{t(`بانتظار الاعتماد: ${incompleteRecordsBreakdown.pendingApproval}`, `Pending Approval: ${incompleteRecordsBreakdown.pendingApproval}`, language)}</span>
+                <span className="px-2 py-1 rounded-md bg-white border border-emerald-200 text-emerald-800 font-bold">{t(`جاهز للرفع: ${incompleteRecordsBreakdown.ready}`, `Ready to Import: ${incompleteRecordsBreakdown.ready}`, language)}</span>
+              </div>
+            )}
+            <div className="flex items-center justify-between flex-wrap gap-2">
+              <span />
               {pendingRows.length > 0 && canEditPending && (
                 <button
                   type="button"
@@ -2128,6 +2346,207 @@ export const ChineseMillsImportPanel: React.FC = () => {
               <button type="button" onClick={() => setShowCancelEntireConfirm(false)} className="px-4 py-2 text-xs font-bold text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-lg cursor-pointer">{t('رجوع', 'Back', language)}</button>
               <button type="button" onClick={handleCancelEntireImport} className="px-4 py-2 text-xs font-black text-white bg-red-600 hover:bg-red-700 rounded-lg cursor-pointer">{t('إلغاء عملية الرفع', 'Cancel Import', language)}</button>
             </div>
+          </div>
+        </Modal>
+      )}
+
+      {/* Comprehensive Historical Import Management task §4-5/§43: Historical Import History. */}
+      {showHistoryModal && (
+        <Modal isOpen onClose={() => setShowHistoryModal(false)} title={t('سجل عمليات الرفع التاريخية - الطواحين الصينية', 'Historical Import History - Chinese Mills', language)} maxWidth="4xl">
+          <div className="space-y-3" dir={isRtl ? 'rtl' : 'ltr'}>
+            <div className="flex flex-wrap items-end gap-2">
+              <label className="text-[11px] font-bold text-slate-600">
+                {t('من تاريخ', 'From', language)}
+                <input type="date" value={historyDateFrom} onChange={(e) => setHistoryDateFrom(e.target.value)} className="block mt-1 px-2 py-1.5 text-[11px] border border-slate-300 rounded-lg" />
+              </label>
+              <label className="text-[11px] font-bold text-slate-600">
+                {t('إلى تاريخ', 'To', language)}
+                <input type="date" value={historyDateTo} onChange={(e) => setHistoryDateTo(e.target.value)} className="block mt-1 px-2 py-1.5 text-[11px] border border-slate-300 rounded-lg" />
+              </label>
+              {(historyDateFrom || historyDateTo) && (
+                <button type="button" onClick={() => { setHistoryDateFrom(''); setHistoryDateTo(''); }} className="px-2.5 py-1.5 text-[11px] font-bold text-slate-600 bg-slate-100 hover:bg-slate-200 rounded-lg cursor-pointer">{t('مسح الفلتر', 'Clear Filter', language)}</button>
+              )}
+              <span className="text-[11px] text-slate-500 ms-auto">{t(`عدد العمليات: ${filteredImportHistory.length}`, `Operations: ${filteredImportHistory.length}`, language)}</span>
+            </div>
+
+            {isLoadingHistory ? (
+              <div className="text-center py-10 text-slate-400 text-xs flex items-center justify-center gap-2"><Loader2 className="w-4 h-4 animate-spin" />{t('جاري التحميل...', 'Loading...', language)}</div>
+            ) : filteredImportHistory.length === 0 ? (
+              <p className="text-[11px] text-slate-500 text-center py-10">{t('لا توجد عمليات رفع تاريخية مطابقة.', 'No matching historical import operations.', language)}</p>
+            ) : (
+              <div className="overflow-x-auto max-h-[55vh] overflow-y-auto border border-slate-200 rounded-xl">
+                <table className="w-full text-[11px] min-w-[1100px]">
+                  <thead className="sticky top-0 bg-slate-50 z-10">
+                    <tr className="text-slate-500 border-b border-slate-200">
+                      <th className="text-start py-2 px-2 font-bold">{t('رقم العملية', 'ImportId', language)}</th>
+                      <th className="text-start py-2 px-2 font-bold">{t('اسم الملف', 'File Name', language)}</th>
+                      <th className="text-start py-2 px-2 font-bold">{t('التاريخ/الوقت', 'Date/Time', language)}</th>
+                      <th className="text-start py-2 px-2 font-bold">{t('المستخدم', 'User', language)}</th>
+                      <th className="text-end py-2 px-2 font-bold">{t('الإجمالي', 'Total', language)}</th>
+                      <th className="text-end py-2 px-2 font-bold">{t('مستورد', 'Imported', language)}</th>
+                      <th className="text-end py-2 px-2 font-bold">{t('فشل', 'Failed', language)}</th>
+                      <th className="text-end py-2 px-2 font-bold">{t('متخطى', 'Skipped', language)}</th>
+                      <th className="text-end py-2 px-2 font-bold">{t('ملغى', 'Cancelled', language)}</th>
+                      <th className="text-start py-2 px-2 font-bold">{t('الحالة النهائية', 'Final Status', language)}</th>
+                      <th className="text-start py-2 px-2 font-bold">{t('إجراءات', 'Actions', language)}</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {filteredImportHistory.map((h) => {
+                      const st = deriveImportFinalStatus(h);
+                      return (
+                        <tr key={h.importBatchId} className="border-b border-slate-100 hover:bg-slate-50/40">
+                          <td className="py-1.5 px-2 font-mono text-slate-500">{h.importBatchId}</td>
+                          <td className="py-1.5 px-2 text-slate-700">{h.fileName || '-'}</td>
+                          <td className="py-1.5 px-2 text-slate-500 font-mono">{h.performedAt ? new Date(h.performedAt).toLocaleString() : '-'}</td>
+                          <td className="py-1.5 px-2 text-slate-700">{h.performedByName || '-'}</td>
+                          <td className="py-1.5 px-2 text-end font-bold text-slate-800">{h.totalRows}</td>
+                          <td className="py-1.5 px-2 text-end text-emerald-700 font-bold">{h.importedCount}</td>
+                          <td className="py-1.5 px-2 text-end text-red-600">{h.failedCount}</td>
+                          <td className="py-1.5 px-2 text-end text-slate-500">{h.skippedCount}</td>
+                          <td className="py-1.5 px-2 text-end text-amber-600">{h.cancelledCount ?? 0}</td>
+                          <td className="py-1.5 px-2"><span className={`text-[10px] font-bold px-2 py-0.5 rounded border ${st.cls}`}>{t(st.ar, st.en, language)}</span></td>
+                          <td className="py-1.5 px-2">
+                            <div className="flex items-center gap-1">
+                              <button type="button" onClick={() => openHistoryDetail(h)} className="px-2 py-1 bg-sky-50 hover:bg-sky-100 text-sky-700 rounded-md cursor-pointer font-bold">{t('عرض التفاصيل', 'View Details', language)}</button>
+                              {canDeletePermanently && (
+                                <button type="button" onClick={() => openRollbackConfirm(h)} className="px-2 py-1 bg-red-50 hover:bg-red-100 text-red-700 rounded-md cursor-pointer font-bold">{t('حذف', 'Delete', language)}</button>
+                              )}
+                            </div>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        </Modal>
+      )}
+
+      {/* §8-9: Import Details - aggregate counts (from the history entry) + record-level table of the rows ACTUALLY imported for this ImportId. */}
+      {historyDetail && (
+        <Modal isOpen onClose={() => { setHistoryDetail(null); setHistoryDetailRows(null); }} title={t('تفاصيل عملية الرفع', 'Import Details', language)} subtitle={historyDetail.importBatchId} maxWidth="4xl">
+          <div className="space-y-4" dir={isRtl ? 'rtl' : 'ltr'}>
+            <div className="flex flex-wrap items-center gap-2">
+              {[
+                { label: t('الإجمالي', 'Total', language), value: historyDetail.totalRows },
+                { label: t('المحدد', 'Selected', language), value: historyDetail.selectedCount ?? '-' },
+                { label: t('مستورد', 'Imported', language), value: historyDetail.importedCount },
+                { label: t('فشل', 'Failed', language), value: historyDetail.failedCount },
+                { label: t('متخطى', 'Skipped', language), value: historyDetail.skippedCount },
+                { label: t('ملغى', 'Cancelled', language), value: historyDetail.cancelledCount ?? 0 },
+                { label: t('متبقي', 'Remaining', language), value: historyDetail.remainingCount ?? '-' },
+                { label: t('معتمد', 'Approved', language), value: historyDetail.approvedCount ?? '-' },
+                { label: t('مصحح', 'Corrected', language), value: historyDetail.correctedCount ?? '-' },
+                { label: t('تحذير', 'Warning', language), value: historyDetail.warningCount ?? '-' },
+                { label: t('حظر', 'Blocking', language), value: historyDetail.blockingCount ?? '-' },
+              ].map((s) => (
+                <div key={s.label} className="text-center px-3 py-1.5 rounded-lg border border-slate-200 bg-slate-50/60">
+                  <span className="text-[10px] font-bold text-slate-500 block">{s.label}</span>
+                  <span className="text-sm font-black block text-slate-900">{s.value}</span>
+                </div>
+              ))}
+            </div>
+
+            <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-[11px] text-slate-700 bg-slate-50/60 border border-slate-200 rounded-lg p-3">
+              <div><span className="font-bold">{t('نوع الاستيراد: ', 'Import Type: ', language)}</span>{t('الطواحين الصينية', 'Chinese Mills', language)}</div>
+              <div><span className="font-bold">{t('اسم الملف: ', 'File Name: ', language)}</span>{historyDetail.fileName || '-'}</div>
+              <div><span className="font-bold">{t('المستخدم: ', 'User: ', language)}</span>{historyDetail.performedByName || '-'}</div>
+              <div><span className="font-bold">{t('التاريخ/الوقت: ', 'Date/Time: ', language)}</span>{historyDetail.performedAt ? new Date(historyDetail.performedAt).toLocaleString() : '-'}</div>
+              <div><span className="font-bold">{t('عدد المطابقات المعتمدة: ', 'Approved Mappings: ', language)}</span>{historyDetail.approvedMappingsCount}</div>
+              <div><span className="font-bold">{t('نسخة احتياطية: ', 'Backup: ', language)}</span>{historyDetail.backupId || t('لا يوجد', 'None', language)}</div>
+            </div>
+
+            <div>
+              <h4 className="text-xs font-black text-slate-800 mb-1.5">{t(`السجلات المستوردة فعليًا (${historyDetailRows?.length ?? 0})`, `Actually-Imported Records (${historyDetailRows?.length ?? 0})`, language)}</h4>
+              {isLoadingHistoryDetailRows ? (
+                <div className="text-center py-8 text-slate-400 text-xs flex items-center justify-center gap-2"><Loader2 className="w-4 h-4 animate-spin" />{t('جاري التحميل...', 'Loading...', language)}</div>
+              ) : historyDetailRows && historyDetailRows.length > 0 ? (
+                <div className="overflow-x-auto max-h-[35vh] overflow-y-auto border border-slate-200 rounded-xl">
+                  <table className="w-full text-[11px] min-w-[760px]">
+                    <thead className="sticky top-0 bg-slate-50 z-10">
+                      <tr className="text-slate-500 border-b border-slate-200">
+                        <th className="text-start py-1.5 px-2 font-bold">{t('معرف السجل', 'Record ID', language)}</th>
+                        <th className="text-start py-1.5 px-2 font-bold">{t('التاريخ', 'Date', language)}</th>
+                        <th className="text-start py-1.5 px-2 font-bold">{t('العميل', 'Customer', language)}</th>
+                        <th className="text-start py-1.5 px-2 font-bold">{t('الطاحونة', 'Mill', language)}</th>
+                        <th className="text-end py-1.5 px-2 font-bold">{t('الإنتاج', 'Production', language)}</th>
+                        <th className="text-start py-1.5 px-2 font-bold">{t('استورد بواسطة', 'Imported By', language)}</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {historyDetailRows.map((r) => (
+                        <tr key={r.id} className="border-b border-slate-100">
+                          <td className="py-1.5 px-2 font-mono text-slate-400">{r.id}</td>
+                          <td className="py-1.5 px-2 text-slate-700">{r.date || '-'}</td>
+                          <td className="py-1.5 px-2 text-slate-700">{r.customerName || '-'}</td>
+                          <td className="py-1.5 px-2 text-slate-700">{r.millTypeName || r.millType || '-'}</td>
+                          <td className="py-1.5 px-2 text-end font-bold text-slate-800">{r.quantity ?? '-'}</td>
+                          <td className="py-1.5 px-2 text-slate-500">{r.importedByName || '-'}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              ) : (
+                <p className="text-[11px] text-slate-500 py-4">{t('لا توجد سجلات مستوردة فعليًا لهذه العملية.', 'No records were actually imported for this operation.', language)}</p>
+              )}
+              <p className="text-[10px] text-slate-400 mt-2">
+                {t(
+                  'ملاحظة: تفاصيل السجلات التي لم تُستورد (محظورة/متخطاة/مستبعدة/ملغاة) غير متاحة بعد إغلاق جلسة المراجعة التي أنتجتها - لتجنّب تخزين غير محدود في قاعدة البيانات. استخدم "تقرير الأخطاء" وقت المراجعة للحصول عليها.',
+                  'Note: detail for records that were NOT imported (blocking/skipped/excluded/cancelled) is not available once the review session that produced them is closed - this avoids unbounded database storage growth. Use the Error Report during the review session to capture it.',
+                  language
+                )}
+              </p>
+            </div>
+
+            <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-100">
+              <button type="button" disabled={!historyDetailRows || historyDetailRows.length === 0} onClick={handleExportImportReport} className="px-4 py-2 text-xs font-bold text-indigo-800 bg-indigo-50 hover:bg-indigo-100 disabled:opacity-40 disabled:cursor-not-allowed rounded-lg cursor-pointer">{t('تصدير تقرير عملية الرفع', 'Export Import Report', language)}</button>
+            </div>
+          </div>
+        </Modal>
+      )}
+
+      {/* §31-33: Delete Import Operation confirmation - ImportId is the key, never date alone. */}
+      {rollbackTarget && (
+        <Modal isOpen onClose={() => { if (!isRollingBack) { setRollbackTarget(null); setRollbackMessage(null); } }} title={t('حذف عملية الرفع', 'Delete Import Operation', language)} maxWidth="sm">
+          <div className="space-y-3 text-sm" dir={isRtl ? 'rtl' : 'ltr'}>
+            {!rollbackMessage ? (
+              <>
+                <div className="text-[11px] text-slate-700 bg-slate-50/60 border border-slate-200 rounded-lg p-3 space-y-1">
+                  <div><span className="font-bold">{t('رقم العملية: ', 'ImportId: ', language)}</span>{rollbackTarget.importBatchId}</div>
+                  <div><span className="font-bold">{t('نوع الاستيراد: ', 'Import Type: ', language)}</span>{t('الطواحين الصينية', 'Chinese Mills', language)}</div>
+                  <div><span className="font-bold">{t('التاريخ: ', 'Date: ', language)}</span>{rollbackTarget.performedAt ? new Date(rollbackTarget.performedAt).toLocaleString() : '-'}</div>
+                  <div><span className="font-bold">{t('عدد السجلات المستوردة: ', 'Imported Count: ', language)}</span>{rollbackTarget.importedCount}</div>
+                </div>
+                <p className="text-slate-800">
+                  {t(
+                    `سيتم حذف السجلات المرتبطة بعملية الرفع ${rollbackTarget.importBatchId} وعددها ${rollbackTarget.importedCount} سجلًا. هذا الإجراء قد يؤثر على بيانات إنتاجية فعلية. هل تريد المتابعة؟`,
+                    `This will delete ${rollbackTarget.importedCount} records associated with import ${rollbackTarget.importBatchId}. This may affect actual production data. Continue?`,
+                    language
+                  )}
+                </p>
+                <p className="text-[10px] text-amber-700 bg-amber-50 border border-amber-200 rounded-lg p-2">
+                  {t('هذا الحذف نهائي ولا يوجد تراجع تلقائي عنه من داخل هذه الشاشة - استخدم النسخة الاحتياطية قبل الاستيراد إن وُجدت لاستعادة البيانات.', 'This deletion is permanent and not automatically reversible from this screen - use the pre-import backup, if one exists, to restore the data.', language)}
+                </p>
+                <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-100">
+                  <button type="button" disabled={isRollingBack} onClick={() => setRollbackTarget(null)} className="px-4 py-2 text-xs font-bold text-slate-700 bg-slate-100 hover:bg-slate-200 disabled:opacity-40 rounded-lg cursor-pointer">{t('إلغاء', 'Cancel', language)}</button>
+                  <button type="button" disabled={isRollingBack} onClick={handleConfirmRollback} className="px-4 py-2 text-xs font-black text-white bg-red-600 hover:bg-red-700 disabled:opacity-40 rounded-lg cursor-pointer flex items-center gap-1.5">
+                    {isRollingBack && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
+                    {t('حذف عملية الرفع', 'Delete Import Operation', language)}
+                  </button>
+                </div>
+              </>
+            ) : (
+              <>
+                <p className="text-slate-800">{rollbackMessage}</p>
+                <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-100">
+                  <button type="button" onClick={() => { setRollbackTarget(null); setRollbackMessage(null); }} className="px-4 py-2 text-xs font-bold text-white bg-slate-700 hover:bg-slate-800 rounded-lg cursor-pointer">{t('إغلاق', 'Close', language)}</button>
+                </div>
+              </>
+            )}
           </div>
         </Modal>
       )}

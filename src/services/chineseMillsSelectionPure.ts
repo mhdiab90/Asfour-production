@@ -292,3 +292,161 @@ export function planBatchCancellation(
     totalBatches,
   };
 }
+
+/**
+ * Comprehensive Historical Import Management task §11-21: structured error
+ * explanation - classifies each of a row's ACTUAL error strings (produced
+ * verbatim by revalidateChineseMillsRowFields in
+ * chineseMillsHistoricalImportService.ts) into a Problem/Field/Current
+ * Value/Reason/Suggested Solution/Actions record. This is pattern-matching
+ * against the REAL, EXISTING validator's own known output - never a new or
+ * invented validation rule (§12). §17: a specification-CODE problem is
+ * always labeled with its own field (specificationCodeRaw), never confused
+ * with the free-text `specification` description field.
+ */
+export type ChineseMillsErrorType =
+  | 'MISSING_REQUIRED_FIELD'
+  | 'MISSING_OPTIONAL_FIELD'
+  | 'UNKNOWN_MASTER_DATA_CODE'
+  | 'DUPLICATE_MATCH'
+  | 'LOGICAL_INCONSISTENCY'
+  | 'INVALID_FORMAT'
+  | 'OTHER_VALIDATION_ERROR';
+
+export type ChineseMillsErrorAction = 'APPLY_SUGGESTED' | 'SELECT_EXISTING' | 'MANUAL_FIX' | 'ADD_NEW' | 'APPROVE' | 'EXCLUDE' | 'SKIP' | 'REVALIDATE';
+
+export interface ChineseMillsErrorExplanation {
+  type: ChineseMillsErrorType;
+  field: string;
+  fieldLabelAr: string;
+  fieldLabelEn: string;
+  currentValue: string;
+  reasonAr: string;
+  reasonEn: string;
+  suggestedSolutionAr: string;
+  suggestedSolutionEn: string;
+  overridable: boolean;
+  actions: ChineseMillsErrorAction[];
+}
+
+const MASTER_DATA_ACTIONS: ChineseMillsErrorAction[] = ['SELECT_EXISTING', 'MANUAL_FIX', 'ADD_NEW', 'APPROVE', 'EXCLUDE', 'SKIP', 'REVALIDATE'];
+const REQUIRED_FIELD_ACTIONS: ChineseMillsErrorAction[] = ['MANUAL_FIX', 'EXCLUDE', 'SKIP', 'REVALIDATE'];
+
+/** Classifies ONE error message string into a structured explanation for the given row. Returns a generic OTHER_VALIDATION_ERROR explanation for any message that doesn't match a known pattern (never throws, never silently drops the error). */
+export function explainChineseMillsRowError(row: ChineseMillsImportRow, errorMessage: string): ChineseMillsErrorExplanation {
+  const overridable = !isNonOverridableBlockingCondition({ ...row, errors: [errorMessage] });
+
+  if (errorMessage.includes('التاريخ مفقود أو غير صالح') || errorMessage.includes('Date is missing or invalid')) {
+    return {
+      type: 'MISSING_REQUIRED_FIELD', field: 'date', fieldLabelAr: 'التاريخ', fieldLabelEn: 'Date',
+      currentValue: row.date || '-',
+      reasonAr: 'التاريخ حقل أساسي مطلوب لكل سجل إنتاج ولا يمكن استيراد السجل بدونه.', reasonEn: 'Date is a required field for every production record and the row cannot be imported without it.',
+      suggestedSolutionAr: 'أدخل تاريخًا صالحًا يدويًا.', suggestedSolutionEn: 'Enter a valid date manually.',
+      overridable: false, actions: REQUIRED_FIELD_ACTIONS,
+    };
+  }
+  if (errorMessage.startsWith('العميل "') || errorMessage.startsWith('Customer "')) {
+    return {
+      type: 'UNKNOWN_MASTER_DATA_CODE', field: 'customerNameRaw', fieldLabelAr: 'العميل', fieldLabelEn: 'Customer',
+      currentValue: row.customerNameRaw || '-',
+      reasonAr: 'لا يوجد عميل مطابق لهذا الاسم في البيانات الرئيسية.', reasonEn: 'No matching customer exists in Master Data for this name.',
+      suggestedSolutionAr: 'اختيار عميل موجود أو إضافة عميل جديد.', suggestedSolutionEn: 'Select an existing customer or add a new one.',
+      overridable, actions: MASTER_DATA_ACTIONS,
+    };
+  }
+  if (errorMessage.includes('نوع الطاحونة مفقود') || errorMessage.includes('Mill Type is missing')) {
+    return {
+      type: 'MISSING_REQUIRED_FIELD', field: 'millTypeRaw', fieldLabelAr: 'نوع الطاحونة', fieldLabelEn: 'Mill Type',
+      currentValue: row.millTypeRaw || '-',
+      reasonAr: 'نوع الطاحونة حقل أساسي مطلوب - لا يمكن معرفة الآلة المنتجة بدونه.', reasonEn: 'Mill Type is a required field - which machine produced this record cannot be known without it.',
+      suggestedSolutionAr: 'أدخل نوع الطاحونة يدويًا.', suggestedSolutionEn: 'Enter the Mill Type manually.',
+      overridable: false, actions: REQUIRED_FIELD_ACTIONS,
+    };
+  }
+  if (errorMessage.includes('تعذر التحقق من نوع الطاحونة') || errorMessage.includes('Could not verify Mill Type')) {
+    return {
+      type: 'OTHER_VALIDATION_ERROR', field: 'millTypeRaw', fieldLabelAr: 'نوع الطاحونة', fieldLabelEn: 'Mill Type',
+      currentValue: row.millTypeRaw || '-',
+      reasonAr: 'تعذر التحقق من نوع الطاحونة لأن البيانات الأساسية للطواحين غير متاحة حاليًا (مشكلة صلاحيات مؤقتة، وليست خطأ في السجل نفسه).', reasonEn: 'Mill Type could not be verified because Chinese Mills Master Data is currently unavailable (a temporary permission issue, not an error in the record itself).',
+      suggestedSolutionAr: 'أعد المحاولة لاحقًا، أو اعتمد السجل إذا كنت متأكدًا من صحة القيمة.', suggestedSolutionEn: 'Retry later, or approve the record if you are confident the value is correct.',
+      overridable, actions: MASTER_DATA_ACTIONS,
+    };
+  }
+  if (errorMessage.startsWith('نوع الطاحونة "') || errorMessage.startsWith('Mill Type "')) {
+    return {
+      type: 'UNKNOWN_MASTER_DATA_CODE', field: 'millTypeRaw', fieldLabelAr: 'نوع الطاحونة', fieldLabelEn: 'Mill Type',
+      currentValue: row.millTypeRaw || '-',
+      reasonAr: 'لا يوجد نوع طاحونة مطابق لهذه القيمة في البيانات الرئيسية.', reasonEn: 'No matching Mill Type exists in Master Data for this value.',
+      suggestedSolutionAr: 'اختيار نوع طاحونة موجود أو إضافة نوع جديد.', suggestedSolutionEn: 'Select an existing Mill Type or add a new one.',
+      overridable, actions: MASTER_DATA_ACTIONS,
+    };
+  }
+  if (errorMessage.includes('رقم الوردية') && (errorMessage.includes('غير صالح') || errorMessage.includes('is invalid'))) {
+    return {
+      type: 'INVALID_FORMAT', field: 'shiftRaw', fieldLabelAr: 'الوردية', fieldLabelEn: 'Shift',
+      currentValue: String(row.shiftRaw ?? '-'),
+      reasonAr: 'الورديات المسموح بها فقط 1 أو 2 أو 3.', reasonEn: 'Only shifts 1, 2, or 3 are allowed.',
+      suggestedSolutionAr: 'أدخل رقم وردية صالح (1، 2، أو 3).', suggestedSolutionEn: 'Enter a valid shift number (1, 2, or 3).',
+      overridable: false, actions: REQUIRED_FIELD_ACTIONS,
+    };
+  }
+  if (errorMessage.includes('كمية الإنتاج مفقودة') || errorMessage.includes('Production Quantity is missing')) {
+    return {
+      type: 'MISSING_REQUIRED_FIELD', field: 'productionQuantity', fieldLabelAr: 'كمية الإنتاج', fieldLabelEn: 'Production Quantity',
+      currentValue: String(row.productionQuantity ?? '-'),
+      reasonAr: 'كمية الإنتاج هي المقياس الأساسي للسجل ويجب أن تكون رقمًا موجبًا.', reasonEn: 'Production Quantity is the record\'s core metric and must be a positive number.',
+      suggestedSolutionAr: 'أدخل كمية إنتاج صحيحة أكبر من صفر.', suggestedSolutionEn: 'Enter a valid Production Quantity greater than zero.',
+      overridable: false, actions: REQUIRED_FIELD_ACTIONS,
+    };
+  }
+  if (errorMessage.startsWith('كود المواصفة "') || errorMessage.startsWith('Specification Code "')) {
+    return {
+      type: 'UNKNOWN_MASTER_DATA_CODE', field: 'specificationCodeRaw', fieldLabelAr: 'كود المواصفة', fieldLabelEn: 'Specification Code',
+      currentValue: row.specificationCodeRaw || '-',
+      reasonAr: 'لا يوجد منتج مطابق لهذا الكود في البيانات الرئيسية للمنتجات.', reasonEn: 'No matching product exists in Product Master Data for this code.',
+      suggestedSolutionAr: 'اختيار منتج موجود أو تصحيح الكود.', suggestedSolutionEn: 'Select an existing product or correct the code.',
+      overridable, actions: MASTER_DATA_ACTIONS,
+    };
+  }
+  if (errorMessage.startsWith('نوع العطل "') || errorMessage.startsWith('Fault Type "')) {
+    return {
+      type: 'MISSING_OPTIONAL_FIELD', field: 'faultTypeRaw', fieldLabelAr: 'نوع العطل', fieldLabelEn: 'Fault Type',
+      currentValue: row.faultTypeRaw || '-',
+      reasonAr: 'لا يوجد نوع عطل مطابق لهذه القيمة في البيانات الرئيسية - حقل اختياري.', reasonEn: 'No matching Fault Type exists in Master Data for this value - an optional field.',
+      suggestedSolutionAr: 'اختيار نوع عطل موجود، تصحيح القيمة، أو حذفها لأنها اختيارية.', suggestedSolutionEn: 'Select an existing Fault Type, correct the value, or clear it since it is optional.',
+      overridable, actions: [...MASTER_DATA_ACTIONS],
+    };
+  }
+  if (errorMessage.includes('صف مكرر داخل نفس الملف') || errorMessage.includes('Duplicate row within the same file')) {
+    return {
+      type: 'DUPLICATE_MATCH', field: 'date', fieldLabelAr: 'صف مكرر', fieldLabelEn: 'Duplicate Row',
+      currentValue: `${row.date} / ${row.millTypeRaw} / ${row.shiftRaw}`,
+      reasonAr: 'يوجد صف آخر بنفس التاريخ والطاحونة والوردية والعميل داخل نفس الملف - استيراد الاثنين يكرر نفس الإنتاج الفعلي.', reasonEn: 'Another row with the same date, mill, shift, and customer exists in this same file - importing both would double-count the same real production.',
+      suggestedSolutionAr: 'راجع الملف الأصلي وتأكد أي صف هو الصحيح، ثم استبعد أو تخطَّ الآخر.', suggestedSolutionEn: 'Review the source file to confirm which row is correct, then exclude or skip the other.',
+      overridable: false, actions: ['EXCLUDE', 'SKIP', 'REVALIDATE'],
+    };
+  }
+  const optionalNumericMatch = errorMessage.match(/^"(.+)" (?:غير رقمية|is not numeric)\.?$/);
+  if (optionalNumericMatch) {
+    return {
+      type: 'INVALID_FORMAT', field: 'optionalNumeric', fieldLabelAr: optionalNumericMatch[1], fieldLabelEn: optionalNumericMatch[1],
+      currentValue: '-',
+      reasonAr: 'القيمة المدخلة غير رقمية - حقل اختياري، يُعامل كصفر ما لم يُصحَّح.', reasonEn: 'The entered value is not numeric - an optional field, treated as zero unless corrected.',
+      suggestedSolutionAr: 'صحّح القيمة يدويًا أو اتركها فارغة.', suggestedSolutionEn: 'Correct the value manually, or leave it blank.',
+      overridable, actions: ['MANUAL_FIX', 'APPROVE', 'EXCLUDE', 'SKIP', 'REVALIDATE'],
+    };
+  }
+
+  return {
+    type: 'OTHER_VALIDATION_ERROR', field: 'other', fieldLabelAr: 'أخرى', fieldLabelEn: 'Other',
+    currentValue: '-',
+    reasonAr: errorMessage, reasonEn: errorMessage,
+    suggestedSolutionAr: 'راجع السجل يدويًا.', suggestedSolutionEn: 'Review the record manually.',
+    overridable, actions: overridable ? MASTER_DATA_ACTIONS : REQUIRED_FIELD_ACTIONS,
+  };
+}
+
+/** All structured explanations for a row's current errors, in order (§20: multiple problems in one row). */
+export function explainChineseMillsRowErrors(row: ChineseMillsImportRow): ChineseMillsErrorExplanation[] {
+  return row.errors.map((e) => explainChineseMillsRowError(row, e));
+}

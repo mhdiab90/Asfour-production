@@ -46,6 +46,20 @@ export interface ImportAuditEntry {
   performedByName?: string;
   performedAt: string;
   backupId?: string;
+  /**
+   * Comprehensive Historical Import Management task, §4/§8: optional richer
+   * counts for modules (Chinese Mills first) that track them - never
+   * required, so every EXISTING entry (Pressing, written before this field
+   * existed) stays perfectly valid and simply renders these as "-" rather
+   * than needing a backfill/migration.
+   */
+  selectedCount?: number;
+  cancelledCount?: number;
+  remainingCount?: number;
+  approvedCount?: number;
+  correctedCount?: number;
+  warningCount?: number;
+  blockingCount?: number;
 }
 
 // In-memory quick lookup cache

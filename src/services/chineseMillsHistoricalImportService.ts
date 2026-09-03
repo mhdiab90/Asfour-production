@@ -789,7 +789,15 @@ export async function executeChineseMillsBatchImport(
   rowsToImport: ChineseMillsImportRow[],
   backupId?: string,
   onProgress?: (percent: number, currentBatch: number, totalBatches: number) => void,
-  shouldCancel?: () => boolean
+  shouldCancel?: () => boolean,
+  /**
+   * Comprehensive Historical Import Management task, §4/§8: optional richer
+   * context for the Import History entry - never required (backward
+   * compatible with any existing caller), threaded straight into the
+   * EXISTING logHistoricalImportExecution call below rather than a second
+   * history-writing path.
+   */
+  historyContext?: { fileName?: string; totalRowsInSession?: number; selectedCount?: number; approvedCount?: number; correctedCount?: number; warningCount?: number; blockingCount?: number }
 ): Promise<{ importedCount: number; failedCount: number; skippedCount: number; cancelledCount: number; errors: string[]; importId: string }> {
   const writable = rowsToImport.filter(isChineseMillsRowWritable);
   const skippedCount = rowsToImport.length - writable.length;
@@ -907,12 +915,24 @@ export async function executeChineseMillsBatchImport(
   await logHistoricalImportExecution({
     importBatchId: importId,
     stage: 'chinese_mills',
-    fileName: '',
-    totalRows: rowsToImport.length,
+    fileName: historyContext?.fileName || '',
+    totalRows: historyContext?.totalRowsInSession ?? rowsToImport.length,
     importedCount,
-    failedCount: rowsToImport.length - importedCount - skippedCount,
+    // Bug fix while touching this line: cancelledCount was not previously
+    // subtracted here, so a mid-execution cancellation was mislabeled as
+    // "failed" in the Import History entry even though those rows never
+    // actually failed - they simply never started (see the returned result
+    // below, which already gets this right).
+    failedCount: rowsToImport.length - importedCount - skippedCount - cancelledCount,
     skippedCount,
+    cancelledCount,
+    remainingCount: rowsToImport.length - importedCount - skippedCount - cancelledCount,
     approvedMappingsCount: mappingEntries.length,
+    selectedCount: historyContext?.selectedCount,
+    approvedCount: historyContext?.approvedCount,
+    correctedCount: historyContext?.correctedCount,
+    warningCount: historyContext?.warningCount,
+    blockingCount: historyContext?.blockingCount,
     performedBy: currentUser?.uid || 'SUPER_ADMIN',
     performedByName: currentUser?.email || '',
     performedAt: new Date().toISOString(),
@@ -936,6 +956,31 @@ export async function executeChineseMillsBatchImport(
     errors,
     importId,
   };
+}
+
+/**
+ * Comprehensive Historical Import Management task, §8-9: record-level
+ * detail for a completed import operation's Import Details view - the
+ * production documents actually written for that ImportId, queried by the
+ * SAME importBatchId field executeChineseMillsBatchImport already stamps on
+ * every doc (safeBatchSet's `importBatchId: importId`). A single-field
+ * equality query - never a broad collection scan (§44) - and its result set
+ * is naturally bounded to exactly this one operation's own imported rows,
+ * never the whole stage_chinese_mills collection.
+ *
+ * Rows that did NOT end up imported (blocking/skipped/excluded/cancelled)
+ * are NOT retrievable here or anywhere else once the review session that
+ * produced them is gone - the staging dataset was never itself persisted to
+ * Firestore, by design, specifically to avoid the unbounded storage growth
+ * that caused this project's prior Firestore quota incidents. Callers must
+ * present that limitation honestly rather than implying full row-level
+ * replay is always available.
+ */
+export async function getChineseMillsImportedRowsByBatch(importBatchId: string): Promise<any[]> {
+  if (!importBatchId) return [];
+  const q = query(collection(db, CHINESE_MILLS_COLLECTION), where('importBatchId', '==', importBatchId));
+  const snap = await getDocs(q);
+  return snap.docs.map((d) => ({ id: d.id, ...d.data() }));
 }
 
 /** §6.1-6.4: creates a Customer with an optional (never invented) code - Name-only creation is a first-class, non-blocking outcome. */
