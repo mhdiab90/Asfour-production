@@ -66,6 +66,8 @@ import {
   matchesReady,
   matchesCorrected,
   matchesInvalidNeedsReview,
+  matchesApproved,
+  isNonOverridableBlockingCondition,
   BulkSelectionMode,
 } from '../../services/chineseMillsSelectionPure';
 import { ChineseMillsDraft, SaveDraftOutcome, saveDraft, getDraft, deleteDraft, logDraftOpened } from '../../services/chineseMillsDraftStorage';
@@ -203,6 +205,8 @@ export const ChineseMillsImportPanel: React.FC = () => {
   const [importProgress, setImportProgress] = useState(0);
   const [showFinalConfirm, setShowFinalConfirm] = useState(false);
   const [showCancelEntireConfirm, setShowCancelEntireConfirm] = useState(false);
+  /** Approve Invalid Records task §6: holds the CURRENT review window's approvable scope for the confirmation dialog - never approved until the user explicitly confirms. */
+  const [approveAllConfirm, setApproveAllConfirm] = useState<{ scopeRowIndexes: Set<number>; count: number } | null>(null);
   const [importResult, setImportResult] = useState<{ total: number; imported: number; failed: number; skipped: number; pending: number; excluded: number; cancelled: number; importId: string } | null>(null);
   /** §7: checked at BATCH BOUNDARIES only (see executeChineseMillsBatchImport's shouldCancel param) - a ref, not state, so the running import loop reads the latest value synchronously without needing to be re-created on every render. */
   const cancelImportRef = useRef(false);
@@ -408,14 +412,15 @@ export const ChineseMillsImportPanel: React.FC = () => {
       const target = rows.find((r) => r.rowIndex === rowIndex);
       if (!target) return rows;
       const revalidated = revalidateAll([target])[0];
-      // §39: record the revalidation outcome (still Pending vs. now Ready).
-      const withHistory: ChineseMillsImportRow = {
-        ...revalidated,
-        resolutionHistory: [
-          ...(target.resolutionHistory || []),
-          { timestamp: new Date().toISOString(), actor: adminUser?.email || 'admin', action: 'REVALIDATE', summary: revalidated.errors.length === 0 ? t('إعادة فحص: أصبح جاهزًا (PENDING → READY_TO_IMPORT).', 'Revalidate: now Ready (PENDING → READY_TO_IMPORT).', language) : t(`إعادة فحص: لا يزال معلقًا - ${revalidated.errors.length} مشكلة متبقية.`, `Revalidate: still Pending - ${revalidated.errors.length} remaining issue(s).`, language) },
-        ],
-      };
+      const history = [...(target.resolutionHistory || [])];
+      history.push({ timestamp: new Date().toISOString(), actor: adminUser?.email || 'admin', action: 'REVALIDATE', summary: revalidated.errors.length === 0 ? t('إعادة فحص: أصبح جاهزًا (PENDING → READY_TO_IMPORT).', 'Revalidate: now Ready (PENDING → READY_TO_IMPORT).', language) : t(`إعادة فحص: لا يزال معلقًا - ${revalidated.errors.length} مشكلة متبقية.`, `Revalidate: still Pending - ${revalidated.errors.length} remaining issue(s).`, language) });
+      // §14: an approval decision was made against the row's PREVIOUS validation
+      // state - never silently carried forward onto a re-validated one, whether
+      // it improved or is still failing.
+      if (target.approved) {
+        history.push({ timestamp: new Date().toISOString(), actor: adminUser?.email || 'admin', action: 'ROW_APPROVAL_REVOKED', summary: t('إلغاء الاعتماد تلقائيًا - تم إعادة فحص السجل.', 'Approval automatically revoked - row was revalidated.', language) });
+      }
+      const withHistory: ChineseMillsImportRow = { ...revalidated, approved: false, approvedBy: undefined, approvedAt: undefined, approvalMethod: undefined, resolutionHistory: history };
       return rows.map((r) => (r.rowIndex === rowIndex ? withHistory : r));
     });
   };
@@ -427,16 +432,19 @@ export const ChineseMillsImportPanel: React.FC = () => {
     updateRows((rows) => {
       const targets = rows.filter((r) => pendingSelected.has(r.rowIndex));
       const revalidatedMap = new Map(
-        revalidateAll(targets).map((revalidated) => [
-          revalidated.rowIndex,
-          {
-            ...revalidated,
-            resolutionHistory: [
-              ...(targets.find((t) => t.rowIndex === revalidated.rowIndex)?.resolutionHistory || []),
-              { timestamp: new Date().toISOString(), actor: adminUser?.email || 'admin', action: 'REVALIDATE', summary: revalidated.errors.length === 0 ? t('إعادة فحص جماعي: أصبح جاهزًا.', 'Bulk revalidate: now Ready.', language) : t(`إعادة فحص جماعي: لا يزال معلقًا - ${revalidated.errors.length} مشكلة متبقية.`, `Bulk revalidate: still Pending - ${revalidated.errors.length} remaining issue(s).`, language) },
-            ],
-          } as ChineseMillsImportRow,
-        ])
+        revalidateAll(targets).map((revalidated) => {
+          const before = targets.find((t) => t.rowIndex === revalidated.rowIndex);
+          const history = [...(before?.resolutionHistory || [])];
+          history.push({ timestamp: new Date().toISOString(), actor: adminUser?.email || 'admin', action: 'REVALIDATE', summary: revalidated.errors.length === 0 ? t('إعادة فحص جماعي: أصبح جاهزًا.', 'Bulk revalidate: now Ready.', language) : t(`إعادة فحص جماعي: لا يزال معلقًا - ${revalidated.errors.length} مشكلة متبقية.`, `Bulk revalidate: still Pending - ${revalidated.errors.length} remaining issue(s).`, language) });
+          // §14: never silently carry an approval decision forward onto revalidated data.
+          if (before?.approved) {
+            history.push({ timestamp: new Date().toISOString(), actor: adminUser?.email || 'admin', action: 'ROW_APPROVAL_REVOKED', summary: t('إلغاء الاعتماد تلقائيًا - تم إعادة فحص السجل.', 'Approval automatically revoked - row was revalidated.', language) });
+          }
+          return [
+            revalidated.rowIndex,
+            { ...revalidated, approved: false, approvedBy: undefined, approvedAt: undefined, approvalMethod: undefined, resolutionHistory: history } as ChineseMillsImportRow,
+          ] as const;
+        })
       );
       return rows.map((r) => revalidatedMap.get(r.rowIndex) || r);
     });
@@ -486,6 +494,125 @@ export const ChineseMillsImportPanel: React.FC = () => {
         return { ...r, rowSelection: outcome.rowSelection, exclusionReason: outcome.exclusionReason };
       })
     );
+  };
+
+  /**
+   * Approve Invalid Records task §4/§17: an explicit administrative decision
+   * that the row is accepted for import despite its current (overridable)
+   * errors - NEVER a correction. Preserves everything (errors, warnings,
+   * originalRowData/editedRowData, resolutionHistory) exactly as-is; only
+   * adds the approval fields plus one resolutionHistory entry, using the
+   * SAME row-level history mechanism as every other decision here (never a
+   * second/divergent history model). A non-overridable row (§10) is never
+   * reachable here - the "Approve" button is disabled for it in the UI.
+   */
+  const handleApproveRow = (rowIndex: number, method: 'INDIVIDUAL' | 'BULK') => {
+    const actor = adminUser?.email || 'admin';
+    const now = new Date().toISOString();
+    updateRows((rows) =>
+      rows.map((r) => {
+        if (r.rowIndex !== rowIndex) return r;
+        if (r.errors.length === 0 || isNonOverridableBlockingCondition(r)) return r;
+        return {
+          ...r,
+          approved: true,
+          approvedBy: actor,
+          approvedAt: now,
+          approvalMethod: method,
+          resolutionHistory: [
+            ...(r.resolutionHistory || []),
+            {
+              timestamp: now,
+              actor,
+              action: 'ROW_APPROVED',
+              summary: t(`اعتماد السجل (${method === 'BULK' ? 'جماعي' : 'فردي'}) - الأخطاء الأصلية محفوظة: ${r.errors.join(' · ')}`, `Row approved (${method === 'BULK' ? 'bulk' : 'individual'}) - original errors preserved: ${r.errors.join(' · ')}`, language),
+            },
+          ],
+        };
+      })
+    );
+    if (method === 'INDIVIDUAL') {
+      const row = summary?.rows.find((r) => r.rowIndex === rowIndex);
+      logAuditAction(
+        'UPDATE',
+        'stage_chinese_mills',
+        undefined,
+        `[ROW_APPROVED] استيراد الطواحين الصينية - صف #${rowIndex} - طريقة الاعتماد: فردي - المستخدم: ${actor} - الأخطاء الأصلية: ${(row?.errors || []).join(' | ')} - التحذيرات الأصلية: ${(row?.warnings || []).join(' | ')}`
+      ).catch(() => {});
+    }
+  };
+
+  /**
+   * §13: Revoke Approval - safe, explicit undo BEFORE import. The row
+   * returns to its previous review state (still BLOCKING/NEEDS_REVIEW since
+   * errors were never cleared, only overridden) and becomes non-importable
+   * again. Distinct from Delete/Skip/Exclude - selection state (rowSelection)
+   * is completely untouched here.
+   */
+  const handleRevokeApproval = (rowIndex: number) => {
+    const actor = adminUser?.email || 'admin';
+    const now = new Date().toISOString();
+    updateRows((rows) =>
+      rows.map((r) => {
+        if (r.rowIndex !== rowIndex || !r.approved) return r;
+        return {
+          ...r,
+          approved: false,
+          approvedBy: undefined,
+          approvedAt: undefined,
+          approvalMethod: undefined,
+          resolutionHistory: [
+            ...(r.resolutionHistory || []),
+            { timestamp: now, actor, action: 'ROW_APPROVAL_REVOKED', summary: t('إلغاء الاعتماد - عاد السجل إلى حالة يحتاج مراجعة.', 'Approval revoked - row returned to needs-review state.', language) },
+          ],
+        };
+      })
+    );
+    logAuditAction('UPDATE', 'stage_chinese_mills', undefined, `[ROW_APPROVAL_REVOKED] استيراد الطواحين الصينية - صف #${rowIndex} - المستخدم: ${actor}`).catch(() => {});
+  };
+
+  /**
+   * §5-6/§21-22: Approve All Records - approves every APPROVABLE row
+   * (has a blocking error AND is overridable) within the CURRENT REVIEW
+   * WINDOW SCOPE exactly, mirroring handleScopedBulkSelection's own scoping
+   * pattern (never the whole dataset, never dependent on scroll/rendered
+   * DOM). Non-overridable rows in scope are left untouched/still blocking -
+   * never silently approved. One Firestore audit write for the whole batch
+   * (§18 - never one write per row for an in-session decision), while every
+   * affected row keeps its own resolutionHistory entry in-memory exactly
+   * like the individual path.
+   */
+  const handleApproveAllInWindow = (scopeRowIndexes: Set<number>) => {
+    const actor = adminUser?.email || 'admin';
+    const now = new Date().toISOString();
+    // Computed from the CURRENT snapshot (never inside the updateRows updater
+    // callback) so the audit log's count is never at risk of double-counting
+    // if React invokes that updater more than once for the same commit.
+    const approvedCount = (summary?.rows || []).filter((r) => scopeRowIndexes.has(r.rowIndex) && r.errors.length > 0 && !isNonOverridableBlockingCondition(r)).length;
+    updateRows((rows) =>
+      rows.map((r) => {
+        if (!scopeRowIndexes.has(r.rowIndex)) return r;
+        if (r.errors.length === 0 || isNonOverridableBlockingCondition(r)) return r;
+        return {
+          ...r,
+          approved: true,
+          approvedBy: actor,
+          approvedAt: now,
+          approvalMethod: 'BULK' as const,
+          resolutionHistory: [
+            ...(r.resolutionHistory || []),
+            { timestamp: now, actor, action: 'ROW_APPROVED', summary: t(`اعتماد جماعي - الأخطاء الأصلية محفوظة: ${r.errors.join(' · ')}`, `Bulk approval - original errors preserved: ${r.errors.join(' · ')}`, language) },
+          ],
+        };
+      })
+    );
+    setApproveAllConfirm(null);
+    logAuditAction(
+      'BULK_IMPORT',
+      'stage_chinese_mills',
+      undefined,
+      `[BULK_APPROVAL] استيراد الطواحين الصينية - اعتماد جماعي لنطاق المراجعة الحالي - عدد السجلات المعتمدة: ${approvedCount} - المستخدم: ${actor}`
+    ).catch(() => {});
   };
 
   /**
@@ -789,21 +916,32 @@ export const ChineseMillsImportPanel: React.FC = () => {
     updateRows((rows) =>
       rows.map((r) => {
         if (r.rowIndex !== editRowState.rowIndex) return r;
+        const history = [
+          ...(r.resolutionHistory || []),
+          {
+            timestamp: new Date().toISOString(),
+            actor: adminUser?.email || 'admin',
+            action: 'FULL_ROW_EDIT',
+            summary: t(`تعديل كامل للصف - حقول معدلة: ${changedFields.join(', ') || 'لا شيء'}`, `Full row edit - changed fields: ${changedFields.join(', ') || 'none'}`, language),
+          },
+        ];
+        // §14: the row was materially changed - an approval decision made
+        // against its PREVIOUS data/errors is now stale and must never be
+        // silently preserved, whether the edit fixed the row or not.
+        if (r.approved) {
+          history.push({ timestamp: new Date().toISOString(), actor: adminUser?.email || 'admin', action: 'ROW_APPROVAL_REVOKED', summary: t('إلغاء الاعتماد تلقائيًا - تم تعديل السجل.', 'Approval automatically revoked - row was edited.', language) });
+        }
         return {
           ...r,
           ...resolved,
           isDuplicate: r.isDuplicate,
           duplicateType: r.duplicateType,
           editedRowData: { ...editDraft },
-          resolutionHistory: [
-            ...(r.resolutionHistory || []),
-            {
-              timestamp: new Date().toISOString(),
-              actor: adminUser?.email || 'admin',
-              action: 'FULL_ROW_EDIT',
-              summary: t(`تعديل كامل للصف - حقول معدلة: ${changedFields.join(', ') || 'لا شيء'}`, `Full row edit - changed fields: ${changedFields.join(', ') || 'none'}`, language),
-            },
-          ],
+          approved: false,
+          approvedBy: undefined,
+          approvedAt: undefined,
+          approvalMethod: undefined,
+          resolutionHistory: history,
         };
       })
     );
@@ -990,6 +1128,18 @@ export const ChineseMillsImportPanel: React.FC = () => {
   /** §11/§15: Selected/Will Import counts SCOPED to exactly this window's own rows - computed from the same reviewWindowRows the Select All button now operates on (see handleScopedBulkSelection), so the header can never show a number that disagrees with what Select All just did. */
   const reviewWindowSelectedCount = useMemo(() => reviewWindowRows.filter((r) => getSelection(r) === 'INCLUDED').length, [reviewWindowRows]);
   const reviewWindowWillImportCount = useMemo(() => reviewWindowRows.filter(isChineseMillsRowWritable).length, [reviewWindowRows]);
+  /**
+   * Approve Invalid Records task §5-6/§21: "Approve All Records" scope -
+   * EXACTLY the blocking, overridable rows this window is currently showing
+   * (the 'ALL' window's own Needs-Review subsection for mode 'ALL', or the
+   * whole window for mode 'INVALID') - never the whole dataset, never rows
+   * outside the current filter/window, and never a non-overridable row (§10).
+   */
+  const reviewWindowApprovableRows = useMemo(() => {
+    if (!reviewWindow) return [];
+    const source = reviewWindow.mode === 'ALL' ? allWindowInvalidRows : reviewWindow.mode === 'INVALID' ? reviewWindowRows : [];
+    return source.filter((r) => r.errors.length > 0 && !isNonOverridableBlockingCondition(r));
+  }, [reviewWindow, allWindowInvalidRows, reviewWindowRows]);
 
   const millOptions: ComboboxOption[] = mills.map((m) => ({ id: m.id || '', code: m.code || '', name: m.name || '' }));
   const customerOptions: ComboboxOption[] = customers.map((c) => ({ id: c.id || '', code: c.code || '', name: c.name || '' }));
@@ -1237,6 +1387,13 @@ export const ChineseMillsImportPanel: React.FC = () => {
                     {isReady && <span className="ms-1.5 text-[10px] font-bold px-1.5 py-0.5 rounded border bg-emerald-100 text-emerald-800 border-emerald-300">{t('جاهز', 'Ready', language)}</span>}
                   </td>
                   <td className="py-1.5 px-1 text-red-700">
+                    {/* §12: never hide the original error, even once approved - "Status: APPROVED" + "Original Error: ..." + "Decision: Approved by user" all shown together, never one replacing the other. */}
+                    {row.approved && (
+                      <div className="mb-1 flex items-center gap-1">
+                        <span className="text-[10px] font-black px-1.5 py-0.5 rounded border bg-sky-100 text-sky-800 border-sky-300">{t('معتمد', 'APPROVED', language)}</span>
+                        <span className="text-[10px] text-slate-500">{t(`اعتماد ${row.approvalMethod === 'BULK' ? 'جماعي' : 'فردي'} بواسطة ${row.approvedBy || ''}`, `${row.approvalMethod === 'BULK' ? 'Bulk' : 'Individual'} approval by ${row.approvedBy || ''}`, language)}</span>
+                      </div>
+                    )}
                     {row.errors.map((e, i) => <div key={i}>• {e}</div>)}
                   </td>
                   <td className="py-1.5 px-1 text-slate-500 font-mono">{lastModified ? new Date(lastModified).toLocaleString() : '-'}</td>
@@ -1246,6 +1403,22 @@ export const ChineseMillsImportPanel: React.FC = () => {
                       {canEditPending && <button type="button" onClick={() => handleRevalidateRow(row.rowIndex)} className="px-1.5 py-1 bg-slate-100 text-slate-700 rounded cursor-pointer font-bold">{t('إعادة الفحص', 'Revalidate', language)}</button>}
                       {canManageImport && (
                         <button type="button" disabled={!isReady} onClick={() => handleReincludeRow(row.rowIndex)} className="px-1.5 py-1 bg-emerald-50 text-emerald-700 rounded cursor-pointer font-bold disabled:opacity-40 disabled:cursor-not-allowed">{t('إعادة إدراج', 'Re-include', language)}</button>
+                      )}
+                      {/* §4/§10/§13: Approve/Revoke Approval - independent of Re-include (which requires the row to already be error-free). Disabled + explained when the row's only errors are non-overridable structural rules (§10). */}
+                      {canManageImport && !isReady && (
+                        row.approved ? (
+                          <button type="button" onClick={() => handleRevokeApproval(row.rowIndex)} className="px-1.5 py-1 bg-amber-50 text-amber-700 rounded cursor-pointer font-bold">{t('إلغاء الاعتماد', 'Revoke Approval', language)}</button>
+                        ) : (
+                          <button
+                            type="button"
+                            disabled={isNonOverridableBlockingCondition(row)}
+                            onClick={() => handleApproveRow(row.rowIndex, 'INDIVIDUAL')}
+                            title={isNonOverridableBlockingCondition(row) ? t('لا يمكن الاعتماد - يوجد شرط أساسي غير قابل للتجاوز (تاريخ غير صالح/نوع طاحونة مفقود/وردية غير صالحة/كمية إنتاج غير صالحة/صف مكرر داخل الملف).', 'Cannot approve - a non-overridable structural rule applies (invalid date / missing Mill Type / invalid shift / invalid Production Quantity / duplicate within the file).', language) : undefined}
+                            className="px-1.5 py-1 bg-sky-50 text-sky-700 rounded cursor-pointer font-bold disabled:opacity-40 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-400"
+                          >
+                            {t('اعتماد', 'Approve', language)}
+                          </button>
+                        )
                       )}
                       {getSelection(row) !== 'EXCLUDED' && (
                         <>
@@ -1469,6 +1642,8 @@ export const ChineseMillsImportPanel: React.FC = () => {
               { label: t('الجاهزة', 'Ready', language), value: selectionCounts.ready, cls: 'text-emerald-600' },
               { label: t('المصححة', 'Corrected', language), value: selectionCounts.corrected, cls: 'text-sky-600' },
               { label: t('تحتاج مراجعة', 'Invalid / Needs Review', language), value: selectionCounts.invalidNeedsReview, cls: 'text-red-600' },
+              { label: t('معتمد', 'Approved', language), value: selectionCounts.approved, cls: 'text-sky-700' },
+              { label: t('حظر غير قابل للتجاوز', 'Non-Overridable Blocking', language), value: selectionCounts.blocking, cls: 'text-red-700' },
               { label: t('تحذير', 'Warning', language), value: selectionCounts.warning, cls: 'text-amber-600' },
               { label: t('متخطى', 'Skipped', language), value: selectionCounts.skipped, cls: 'text-slate-500' },
               { label: t('المستبعدة', 'Excluded', language), value: selectionCounts.excluded, cls: 'text-slate-500' },
@@ -1674,6 +1849,25 @@ export const ChineseMillsImportPanel: React.FC = () => {
         </div>
       )}
 
+      {/* Approve Invalid Records task §6: Approve All Records confirmation - a consequential business decision, never applied silently. */}
+      {approveAllConfirm && (
+        <Modal isOpen onClose={() => setApproveAllConfirm(null)} title={t('اعتماد جميع السجلات', 'Approve All Records', language)} maxWidth="sm">
+          <div className="space-y-3 text-sm" dir={isRtl ? 'rtl' : 'ltr'}>
+            <p className="text-slate-800">
+              {t(
+                `سيتم اعتماد ${approveAllConfirm.count} سجل من السجلات التي تحتاج مراجعة، وستصبح مؤهلة للرفع وفقًا لسياسة الاعتماد. هل تريد المتابعة؟`,
+                `${approveAllConfirm.count} records requiring review will be approved and become eligible for import under the approval policy. Continue?`,
+                language
+              )}
+            </p>
+            <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-100">
+              <button type="button" onClick={() => setApproveAllConfirm(null)} className="px-4 py-2 text-xs font-bold text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-lg cursor-pointer">{t('إلغاء', 'Cancel', language)}</button>
+              <button type="button" onClick={() => handleApproveAllInWindow(approveAllConfirm.scopeRowIndexes)} className="px-4 py-2 text-xs font-black text-white bg-sky-600 hover:bg-sky-700 rounded-lg cursor-pointer">{t('اعتماد', 'Approve', language)}</button>
+            </div>
+          </div>
+        </Modal>
+      )}
+
       {/* §15: Cancel Entire Import confirmation - distinct action, distinct dialog. */}
       {showCancelEntireConfirm && (
         <Modal isOpen onClose={() => setShowCancelEntireConfirm(false)} title={t('إلغاء عملية الرفع بالكامل', 'Cancel Entire Import', language)} maxWidth="sm">
@@ -1776,6 +1970,16 @@ export const ChineseMillsImportPanel: React.FC = () => {
                 {/* §2-4/§17: scoped to exactly the rows THIS window is showing (reviewWindowRows), never the whole dataset - the fix for the reported bug. Works regardless of scroll position/off-screen rows since it iterates the underlying row array, never the rendered DOM. */}
                 <button type="button" onClick={() => handleScopedBulkSelection('ALL', new Set(reviewWindowRows.map((r) => r.rowIndex)))} className="px-2.5 py-1.5 bg-slate-100 hover:bg-slate-200 rounded-lg cursor-pointer">{t('تحديد الكل', 'Select All', language)}</button>
                 <button type="button" onClick={() => handleScopedBulkSelection('NONE', new Set(reviewWindowRows.map((r) => r.rowIndex)))} className="px-2.5 py-1.5 bg-slate-100 hover:bg-slate-200 rounded-lg cursor-pointer">{t('إلغاء تحديد الكل', 'Deselect All', language)}</button>
+                {/* §5-6: Approve All Records - only where this window can actually show blocking rows, and only enabled when at least one is approvable right now. */}
+                {canManageImport && reviewWindowApprovableRows.length > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => setApproveAllConfirm({ scopeRowIndexes: new Set(reviewWindowApprovableRows.map((r) => r.rowIndex)), count: reviewWindowApprovableRows.length })}
+                    className="px-2.5 py-1.5 bg-sky-50 hover:bg-sky-100 text-sky-800 rounded-lg cursor-pointer"
+                  >
+                    {t(`اعتماد جميع السجلات (${reviewWindowApprovableRows.length})`, `Approve All Records (${reviewWindowApprovableRows.length})`, language)}
+                  </button>
+                )}
               </div>
               <div className="flex items-center gap-2">
                 {reviewWindow.source === 'LIVE' && canManageImport && (

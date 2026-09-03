@@ -12,15 +12,69 @@
  */
 import { ChineseMillsImportRow } from '../types';
 
-/** A row is writable only once it is explicitly INCLUDED (never while EXCLUDED or still parked PENDING), every blocking condition is cleared, every WARNING has been explicitly accepted, and every smart-match proposal has a decision (never left silently PENDING). */
+/**
+ * Approve Invalid Records task, §10: which of a row's blocking errors an
+ * authorized user's approval decision may safely override, vs. a hard
+ * structural rule this business has defined as non-overridable. Determined
+ * by inspecting the ACTUAL Firestore write payload in
+ * executeChineseMillsBatchImport (chineseMillsHistoricalImportService.ts) -
+ * every resolved master-data field (customer/mill/fault/specification
+ * type/id) is written with a `|| ''` fallback to the raw imported text, so
+ * an unresolved master-data MATCH never blocks the write at the database
+ * level and is safely overridable. These five conditions are checked
+ * directly off the row's own independently-recomputed typed fields (never
+ * by matching freeform, locale-varying error text) because writing past them
+ * would corrupt the record or the dataset outright, regardless of any human
+ * decision:
+ *  - INVALID_DATE: `date` is written as a plain string and is the key half
+ *    of the duplicate-detection key and every date-based report/query.
+ *  - Mill Type entirely blank (not just unmatched): the record would carry
+ *    no press identity at all - `millTypeRaw` has no raw-text fallback to
+ *    fall back to when it never had one.
+ *  - Invalid Shift: `shiftNumber` is a closed 1/2/3 enum written as `?? null`
+ *    - a null/invalid shift breaks shift-based aggregation.
+ *  - Production Quantity <= 0: written directly as the raw `quantity`
+ *    number, no fallback - this is the row's entire business reason to
+ *    exist; a record with none has no meaning.
+ *  - Duplicate-in-file: approving this would double-count real, physical
+ *    production in every report - a data-integrity safety net, not a
+ *    reviewable data-quality question.
+ */
+export function isNonOverridableBlockingCondition(row: ChineseMillsImportRow): boolean {
+  if (row.status === 'INVALID_DATE') return true;
+  if (!row.millTypeRaw || !row.millTypeRaw.trim()) return true;
+  if (!row.resolvedShiftNumber) return true;
+  if (!(row.productionQuantity > 0)) return true;
+  if (row.duplicateType === 'FILE') return true;
+  return false;
+}
+
+/**
+ * A row is writable only once it is explicitly INCLUDED (never while
+ * EXCLUDED or still parked PENDING), every WARNING has been explicitly
+ * accepted, and every smart-match proposal has a decision (never left
+ * silently PENDING). A row with blocking errors is writable ONLY if an
+ * authorized user has explicitly approved it (row.approved) AND none of its
+ * errors are non-overridable per isNonOverridableBlockingCondition above -
+ * approval is an override of REVIEWABLE errors, never a bypass of a hard
+ * structural/data-integrity rule.
+ */
 export function isChineseMillsRowWritable(row: ChineseMillsImportRow): boolean {
   if ((row.rowSelection ?? 'INCLUDED') !== 'INCLUDED') return false;
-  if (row.errors.length > 0) return false;
+  if (row.errors.length > 0) {
+    if (!row.approved) return false;
+    if (isNonOverridableBlockingCondition(row)) return false;
+  }
   if (row.warnings.length > 0 && !row.warningsAccepted) return false;
   if ((row.proposedMatches || []).some((m) => m.decision === 'PENDING')) return false;
   if (row.actualRateDecision === 'PENDING') return false;
   if (row.customerCodeUpdateProposal?.decision === 'PENDING') return false;
   return true;
+}
+
+/** APPROVED (for display/counters): has a blocking error AND has been explicitly approved - independent of whether that approval actually makes it writable (a non-overridable error can still be approved-for-review-tracking but will never count toward Will Import). */
+export function matchesApproved(row: ChineseMillsImportRow): boolean {
+  return row.errors.length > 0 && row.approved === true;
 }
 
 /** getSelection with the same 'INCLUDED' default used throughout the panel. */
@@ -122,24 +176,30 @@ export interface ChineseMillsSelectionCounts {
   excluded: number;
   skipped: number;
   willImport: number;
+  /** Approve Invalid Records task §19: has a blocking error AND has been explicitly approved. */
+  approved: number;
+  /** Has a blocking error that approval can never override (§10) - always excluded from Will Import regardless of approval. */
+  blocking: number;
 }
 
 /** §3/§11 - the top-of-screen counts, computed ONLY from actual row state - never invented/estimated. */
 export function computeSelectionCounts(rows: ChineseMillsImportRow[]): ChineseMillsSelectionCounts {
-  let valid = 0, ready = 0, corrected = 0, invalidNeedsReview = 0, warning = 0, selected = 0, excluded = 0, skipped = 0, willImport = 0;
+  let valid = 0, ready = 0, corrected = 0, invalidNeedsReview = 0, warning = 0, selected = 0, excluded = 0, skipped = 0, willImport = 0, approved = 0, blocking = 0;
   for (const row of rows) {
     if (matchesValid(row)) valid++;
     if (matchesReady(row)) ready++;
     if (matchesCorrected(row)) corrected++;
     if (matchesInvalidNeedsReview(row)) invalidNeedsReview++;
     if (row.warnings.length > 0) warning++;
+    if (matchesApproved(row)) approved++;
+    if (row.errors.length > 0 && isNonOverridableBlockingCondition(row)) blocking++;
     const sel = getRowSelection(row);
     if (sel === 'INCLUDED') selected++;
     if (sel === 'EXCLUDED') excluded++;
     if (sel === 'EXCLUDED' && row.exclusionReason === 'SKIPPED_ROW') skipped++;
     if (isChineseMillsRowWritable(row)) willImport++;
   }
-  return { total: rows.length, valid, ready, corrected, invalidNeedsReview, warning, selected, excluded, skipped, willImport };
+  return { total: rows.length, valid, ready, corrected, invalidNeedsReview, warning, selected, excluded, skipped, willImport, approved, blocking };
 }
 
 /**
