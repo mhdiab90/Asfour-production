@@ -59,3 +59,8 @@ export function deleteDraft(userEmail: string): void {
     logAuditAction('DELETE', 'historicalImportSession', deleted.id, `[DRAFT_DELETED] استيراد الطواحين الصينية - ${deleted.rows.length} صف - الملف: ${deleted.fileName}`).catch(() => {});
   }
 }
+
+/** §8-9: ROW_DRAFT_OPENED - same bracketed-tag convention as DRAFT_SAVED/DRAFT_DELETED above, one entry per reopen (not per row). */
+export function logDraftOpened(draft: ChineseMillsDraft): void {
+  logAuditAction('UPDATE', 'historicalImportSession', draft.id, `[DRAFT_OPENED] استيراد الطواحين الصينية - ${draft.rows.length} صف - الملف: ${draft.fileName}`).catch(() => {});
+}

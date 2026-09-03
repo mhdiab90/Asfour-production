@@ -773,12 +773,24 @@ export { isChineseMillsRowWritable };
  * Commits writable rows to `stage_chinese_mills` in 400-row batches (§34).
  * Re-filters to isChineseMillsRowWritable as a final safety net even if the
  * caller already filtered - one bad row is never allowed to block the rest.
+ *
+ * Cancellation scope (§7): `shouldCancel`, when provided, is checked ONLY at
+ * batch boundaries (before starting the NEXT 400-row batch) - not mid-batch,
+ * since a single `writeBatch().commit()` is already atomic and there is no
+ * safe interruption point inside it without rebuilding the import engine.
+ * Rows in batches already committed before cancellation remain imported
+ * (never rolled back - this was never a transactional whole-import
+ * operation to begin with, batch failures already worked this way); rows in
+ * batches not yet started are reported as `cancelledCount`, not silently
+ * dropped, and remain in the review session as PENDING/EXCLUDED for later
+ * reprocessing exactly like a normal partial import.
  */
 export async function executeChineseMillsBatchImport(
   rowsToImport: ChineseMillsImportRow[],
   backupId?: string,
-  onProgress?: (percent: number, currentBatch: number, totalBatches: number) => void
-): Promise<{ importedCount: number; failedCount: number; skippedCount: number; errors: string[]; importId: string }> {
+  onProgress?: (percent: number, currentBatch: number, totalBatches: number) => void,
+  shouldCancel?: () => boolean
+): Promise<{ importedCount: number; failedCount: number; skippedCount: number; cancelledCount: number; errors: string[]; importId: string }> {
   const writable = rowsToImport.filter(isChineseMillsRowWritable);
   const skippedCount = rowsToImport.length - writable.length;
   const importId = `HIST-IMP-CM-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
@@ -787,10 +799,15 @@ export async function executeChineseMillsBatchImport(
   const BATCH_SIZE = 400;
   const totalBatches = Math.ceil(writable.length / BATCH_SIZE) || 1;
   let importedCount = 0;
+  let cancelledCount = 0;
   const errors: string[] = [];
   const mappingEntries: Array<{ domain: string; originalValue: string; mappedEntityId: string; mappedEntityName: string; mappedEntityCode?: string; confidence: number; matchType: string }> = [];
 
   for (let i = 0; i < writable.length; i += BATCH_SIZE) {
+    if (shouldCancel && shouldCancel()) {
+      cancelledCount = writable.length - i;
+      break;
+    }
     const chunk = writable.slice(i, i + BATCH_SIZE);
     const batch = writeBatch(db);
     const currentBatchNum = Math.floor(i / BATCH_SIZE) + 1;
@@ -902,12 +919,20 @@ export async function executeChineseMillsBatchImport(
     backupId,
   }).catch(() => {});
 
-  await logAuditAction('BULK_IMPORT', CHINESE_MILLS_COLLECTION, importId, `استيراد تاريخي للطواحين الصينية: ${importedCount} سجل بنجاح من أصل ${rowsToImport.length}`).catch(() => {});
+  await logAuditAction(
+    'BULK_IMPORT',
+    CHINESE_MILLS_COLLECTION,
+    importId,
+    cancelledCount > 0
+      ? `استيراد تاريخي للطواحين الصينية (أُلغي جزئيًا): ${importedCount} سجل بنجاح، ${cancelledCount} أُلغي قبل التنفيذ، من أصل ${rowsToImport.length}`
+      : `استيراد تاريخي للطواحين الصينية: ${importedCount} سجل بنجاح من أصل ${rowsToImport.length}`
+  ).catch(() => {});
 
   return {
     importedCount,
-    failedCount: rowsToImport.length - importedCount - skippedCount,
+    failedCount: rowsToImport.length - importedCount - skippedCount - cancelledCount,
     skippedCount,
+    cancelledCount,
     errors,
     importId,
   };

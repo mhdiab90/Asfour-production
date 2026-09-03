@@ -26,8 +26,10 @@ import {
   History,
   Ban,
 } from 'lucide-react';
+import * as XLSX from 'xlsx';
 import { Customer, Product, ChineseMillsImportRow, ChineseMillsImportSummary } from '../../types';
 import { loadApprovedMappings } from '../../services/importMappingService';
+import { logAuditAction } from '../../services/auditService';
 import {
   downloadChineseMillsExcelTemplate,
   parseAndValidateChineseMillsExcel,
@@ -66,7 +68,7 @@ import {
   matchesInvalidNeedsReview,
   BulkSelectionMode,
 } from '../../services/chineseMillsSelectionPure';
-import { ChineseMillsDraft, SaveDraftOutcome, saveDraft, getDraft, deleteDraft } from '../../services/chineseMillsDraftStorage';
+import { ChineseMillsDraft, SaveDraftOutcome, saveDraft, getDraft, deleteDraft, logDraftOpened } from '../../services/chineseMillsDraftStorage';
 
 type FilterTab = 'ALL' | 'VALID' | 'WARNING' | 'ERROR' | 'DUPLICATE' | 'EXCLUDED';
 type EntityListItem = { id?: string; code?: string; name?: string };
@@ -200,7 +202,10 @@ export const ChineseMillsImportPanel: React.FC = () => {
   const [isImporting, setIsImporting] = useState(false);
   const [importProgress, setImportProgress] = useState(0);
   const [showFinalConfirm, setShowFinalConfirm] = useState(false);
-  const [importResult, setImportResult] = useState<{ total: number; imported: number; failed: number; skipped: number; pending: number; excluded: number; importId: string } | null>(null);
+  const [importResult, setImportResult] = useState<{ total: number; imported: number; failed: number; skipped: number; pending: number; excluded: number; cancelled: number; importId: string } | null>(null);
+  /** §7: checked at BATCH BOUNDARIES only (see executeChineseMillsBatchImport's shouldCancel param) - a ref, not state, so the running import loop reads the latest value synchronously without needing to be re-created on every render. */
+  const cancelImportRef = useRef(false);
+  const [cancelRequested, setCancelRequested] = useState(false);
 
   const [editRowState, setEditRowState] = useState<{ rowIndex: number } | null>(null);
   const [editDraft, setEditDraft] = useState<Record<string, string> | null>(null);
@@ -356,8 +361,25 @@ export const ChineseMillsImportPanel: React.FC = () => {
   // ---- Row selection (partial import + Pending, Row-Based Review Part 6) ----
   const getSelection = (row: ChineseMillsImportRow): 'INCLUDED' | 'EXCLUDED' | 'PENDING' => row.rowSelection ?? 'INCLUDED';
 
+  /** §8-9: ROW_SKIPPED/ROW_EXCLUDED - recorded via the SAME per-row resolutionHistory mechanism already used by Re-include/Revalidate below, never a second/divergent history model. */
   const handleExcludeRow = (rowIndex: number, reason: ChineseMillsImportRow['exclusionReason'] = 'USER_DESELECTED') => {
-    updateOneRow(rowIndex, { rowSelection: 'EXCLUDED', exclusionReason: reason, excludedBy: adminUser?.email || 'admin', excludedAt: new Date().toISOString() });
+    updateRows((rows) =>
+      rows.map((r) => {
+        if (r.rowIndex !== rowIndex) return r;
+        const action = reason === 'SKIPPED_ROW' ? 'ROW_SKIPPED' : 'ROW_EXCLUDED';
+        return {
+          ...r,
+          rowSelection: 'EXCLUDED',
+          exclusionReason: reason,
+          excludedBy: adminUser?.email || 'admin',
+          excludedAt: new Date().toISOString(),
+          resolutionHistory: [
+            ...(r.resolutionHistory || []),
+            { timestamp: new Date().toISOString(), actor: adminUser?.email || 'admin', action, summary: reason === 'SKIPPED_ROW' ? t('تخطي السجل', 'Row skipped', language) : t('استبعاد السجل', 'Row excluded', language) },
+          ],
+        };
+      })
+    );
   };
 
   /** Moves a row (from EXCLUDED or PENDING) back to INCLUDED and revalidates it against current Master Data - used by both the Excluded panel and the Pending Records section (§27: "Re-include" - never bypasses validation). */
@@ -439,6 +461,71 @@ export const ChineseMillsImportPanel: React.FC = () => {
     );
   };
 
+  /**
+   * Scoped Select All/Deselect All for a review window, matching Pressing's
+   * own established pattern of a scope restricted to "the rows this specific
+   * view is showing" (selectedExcludedRowIndices in DataImportView.tsx's
+   * excluded-rows sub-panel, and this file's own pendingSelected) rather than
+   * a single global selection actor. ROOT CAUSE: the review window's own
+   * "Select All"/"Deselect All" buttons previously called the PLAIN
+   * handleBulkSelection('ALL'/'NONE') above, which always operates on the
+   * ENTIRE dataset (summary.rows) - so clicking "Select All" while reviewing
+   * only the 10 rows shown in the "Invalid" window would silently reach past
+   * that window and flip rows never displayed there, and vice versa for a
+   * window with a NARROWER shown set than "everything eligible." This variant
+   * restricts the SAME computeBulkSelectionOutcome decision to exactly the
+   * rowIndexes currently visible in the open review window.
+   */
+  const handleScopedBulkSelection = (mode: 'ALL' | 'NONE', scopeRowIndexes: Set<number>) => {
+    updateRows((rows) =>
+      rows.map((r) => {
+        if (!scopeRowIndexes.has(r.rowIndex)) return r;
+        const outcome = computeBulkSelectionOutcome(r, mode);
+        if (!outcome) return r; // PENDING rows are never touched by bulk selection
+        return { ...r, rowSelection: outcome.rowSelection, exclusionReason: outcome.exclusionReason };
+      })
+    );
+  };
+
+  /**
+   * §20: Download Error/Skipped-Excluded Report - reuses the SAME xlsx
+   * client-side export infra DataImportView.tsx's Pressing importer already
+   * uses (handleExportErrorReport there), never a new export pipeline.
+   * Covers every row that will NOT import right now (blocking errors,
+   * Pending, or Excluded/Skipped) with the row-level audit fields §20 asks
+   * for, sourced from data that already exists on the row (raw/resolved
+   * fields, resolutionHistory, exclusionReason/excludedBy/excludedAt) -
+   * nothing invented.
+   */
+  const handleExportErrorReport = () => {
+    if (!summary) return;
+    const rows = summary.rows.filter((r) => !isChineseMillsRowWritable(r));
+    if (rows.length === 0) return;
+
+    const reportRows = rows.map((r) => {
+      const lastResolution = r.resolutionHistory?.[r.resolutionHistory.length - 1];
+      const user = r.excludedBy || r.warningOverrideBy || lastResolution?.actor || '';
+      const timestamp = r.excludedAt || r.warningOverrideAt || lastResolution?.timestamp || '';
+      return {
+        [t('رقم الصف', 'Row #', language)]: r.rowIndex,
+        [t('القيمة الأصلية', 'Original Value', language)]: `${r.customerNameRaw || ''} / ${r.millTypeRaw || ''} / ${r.specificationCodeRaw || ''}`,
+        [t('القيمة المصححة', 'Corrected Value', language)]: `${r.resolvedCustomerName || ''} / ${r.resolvedMillName || ''} / ${r.resolvedProductName || ''}`,
+        [t('الخطأ', 'Error', language)]: r.errors.join(' | '),
+        [t('التحذير', 'Warning', language)]: r.warnings.join(' | '),
+        [t('الحل', 'Resolution', language)]: r.resolutionHistory?.map((h) => h.summary).join(' | ') || '',
+        [t('القرار', 'Decision', language)]: `${getSelection(r)}${r.exclusionReason ? ` (${r.exclusionReason})` : ''}`,
+        [t('الحالة', 'Status', language)]: r.status,
+        [t('المستخدم', 'User', language)]: user,
+        [t('التوقيت', 'Timestamp', language)]: timestamp,
+      };
+    });
+
+    const worksheet = XLSX.utils.json_to_sheet(reportRows);
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, worksheet, t('أخطاء ومستبعد', 'Errors-Skipped', language));
+    XLSX.writeFile(workbook, `chinese-mills-import-errors-${Date.now()}.xlsx`);
+  };
+
 /** §4-9/§24-25: opens the bounded review window for a given selection mode -
    * every selection shortcut must produce a VISIBLE, observable result, never
    * just a silent state change (root cause of the reported "dead button" bug:
@@ -481,6 +568,7 @@ export const ChineseMillsImportPanel: React.FC = () => {
     setSummary({ ...savedDraft.summary, rows: savedDraft.rows } as ChineseMillsImportSummary);
     setActiveFilterTab('ALL');
     setReviewWindow({ mode: 'INVALID', source: 'DRAFT' });
+    logDraftOpened(savedDraft);
   };
 
   const handleDeleteDraft = () => {
@@ -741,6 +829,9 @@ export const ChineseMillsImportPanel: React.FC = () => {
     if (writableRows.length === 0 || !summary) return;
     setIsImporting(true);
     setImportProgress(0);
+    cancelImportRef.current = false;
+    setCancelRequested(false);
+    logAuditAction('BULK_IMPORT', 'stage_chinese_mills', undefined, `[ROW_IMPORT_STARTED] استيراد الطواحين الصينية - بدء رفع ${writableRows.length} سجل`).catch(() => {});
     try {
       const [freshCustomers, freshMills, freshFaultTypes, freshProducts] = await Promise.all([
         fetchMasterDataSafe<Customer>('customers', 'customer'),
@@ -761,10 +852,20 @@ export const ChineseMillsImportPanel: React.FC = () => {
       const stillWritable = candidates.filter(isChineseMillsRowWritable);
       const droppedAtLastMoment = candidates.length - stillWritable.length;
 
-      const result = await executeChineseMillsBatchImport(stillWritable, backupId || undefined, (pct) => setImportProgress(pct));
+      const result = await executeChineseMillsBatchImport(
+        stillWritable,
+        backupId || undefined,
+        (pct) => setImportProgress(pct),
+        () => cancelImportRef.current
+      );
 
       // Reflect the fresh state back into the review session so any row the
       // last-moment check caught stays visible and repairable - never lost.
+      // Rows in batches that never started because of a cancellation are
+      // NOT in `candidates`' patch map with a changed status here - they
+      // simply remain whatever they already were (still selected/INCLUDED,
+      // just not yet written), so the user can re-open Import immediately
+      // to continue, exactly like a normal partial import.
       updateRows((rows) => {
         const patchMap = new Map(candidates.map((r) => [r.rowIndex, r]));
         return rows.map((r) => patchMap.get(r.rowIndex) || r);
@@ -780,13 +881,22 @@ export const ChineseMillsImportPanel: React.FC = () => {
         skipped: droppedAtLastMoment,
         pending: pendingAfter,
         excluded: excludedAfter,
+        cancelled: result.cancelledCount,
         importId: result.importId,
       });
     } catch (err: any) {
       setFeedback({ type: 'error', message: cleanErrorMessage(err, language, 'Import execution error') });
     } finally {
       setIsImporting(false);
+      cancelImportRef.current = false;
+      setCancelRequested(false);
     }
+  };
+
+  /** §7: requests cancellation at the next batch boundary - never mid-batch (a writeBatch().commit() already in flight always finishes; rows already committed stay committed, matching "never fake atomic cancellation"). */
+  const handleCancelDuringImport = () => {
+    cancelImportRef.current = true;
+    setCancelRequested(true);
   };
 
   const filteredRows = useMemo(() => {
@@ -825,6 +935,9 @@ export const ChineseMillsImportPanel: React.FC = () => {
   /** §7: "Select All" opens a MIXED-state window - the needs-review subset renders with the invalid-style table (error/reason/manual-edit actions) and everything else with the main review table (checkbox/status/decision), exactly mirroring how the main screen itself already separates Pending Records from the main table - never a third/divergent row layout. */
   const allWindowInvalidRows = useMemo(() => reviewWindowRows.filter(matchesInvalidNeedsReview), [reviewWindowRows]);
   const allWindowMainRows = useMemo(() => reviewWindowRows.filter((r) => !matchesInvalidNeedsReview(r)), [reviewWindowRows]);
+  /** §11/§15: Selected/Will Import counts SCOPED to exactly this window's own rows - computed from the same reviewWindowRows the Select All button now operates on (see handleScopedBulkSelection), so the header can never show a number that disagrees with what Select All just did. */
+  const reviewWindowSelectedCount = useMemo(() => reviewWindowRows.filter((r) => getSelection(r) === 'INCLUDED').length, [reviewWindowRows]);
+  const reviewWindowWillImportCount = useMemo(() => reviewWindowRows.filter(isChineseMillsRowWritable).length, [reviewWindowRows]);
 
   const millOptions: ComboboxOption[] = mills.map((m) => ({ id: m.id || '', code: m.code || '', name: m.name || '' }));
   const customerOptions: ComboboxOption[] = customers.map((c) => ({ id: c.id || '', code: c.code || '', name: c.name || '' }));
@@ -1362,6 +1475,14 @@ export const ChineseMillsImportPanel: React.FC = () => {
             <button type="button" onClick={() => openReviewWindow('INVALID')} className="px-2.5 py-1.5 bg-red-50 hover:bg-red-100 text-red-800 rounded-lg cursor-pointer">{t(`تحديد غير الصالح (${selectionCounts.invalidNeedsReview})`, `Select Invalid / Needs Review (${selectionCounts.invalidNeedsReview})`, language)}</button>
             <button type="button" onClick={() => handleBulkSelection('WARNING_APPROVED')} className="px-2.5 py-1.5 bg-amber-50 hover:bg-amber-100 text-amber-800 rounded-lg cursor-pointer">{t('تحديد التحذيرات المعتمدة', 'Select Warning Approved', language)}</button>
             <button type="button" onClick={() => setShowExcludedPanel((v) => !v)} className="px-2.5 py-1.5 bg-slate-100 hover:bg-slate-200 rounded-lg cursor-pointer">{t(`الصفوف المستبعدة (${excludedRows.length})`, `Excluded Rows (${excludedRows.length})`, language)}</button>
+            <button
+              type="button"
+              onClick={handleExportErrorReport}
+              disabled={summary.totalRows - selectionCounts.willImport === 0}
+              className="px-2.5 py-1.5 text-amber-700 hover:bg-amber-50 border border-amber-200 rounded-lg disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
+            >
+              {t('تصدير تقرير الأخطاء/المستبعد', 'Export Error/Skipped Report', language)}
+            </button>
           </div>
 
           {/* Excluded rows repair panel (§36-38) */}
@@ -1419,11 +1540,17 @@ export const ChineseMillsImportPanel: React.FC = () => {
           {isImporting ? (
             <div className="space-y-2 pt-2 border-t border-slate-100 sticky bottom-0 bg-white z-10">
               <div className="flex items-center justify-between text-xs font-bold text-slate-700">
-                <span>{t('جاري إرسال السجلات...', 'Writing records...', language)}</span>
+                <span>{cancelRequested ? t('جاري الإلغاء بعد اكتمال الدفعة الحالية...', 'Cancelling after the current batch finishes...', language) : t('جاري إرسال السجلات...', 'Writing records...', language)}</span>
                 <span>{importProgress}%</span>
               </div>
               <div className="w-full h-3 bg-slate-100 rounded-full overflow-hidden">
-                <div className="h-full bg-emerald-600 transition-all duration-300" style={{ width: `${importProgress}%` }} />
+                <div className={`h-full transition-all duration-300 ${cancelRequested ? 'bg-amber-500' : 'bg-emerald-600'}`} style={{ width: `${importProgress}%` }} />
+              </div>
+              {/* §7: cancellation is only ever applied at the NEXT batch boundary (400 rows/batch) - never mid-batch, since a writeBatch().commit() already in flight cannot be safely interrupted without rebuilding the import engine. */}
+              <div className="flex justify-end">
+                <button type="button" disabled={cancelRequested} onClick={handleCancelDuringImport} className="px-3 py-1.5 text-[11px] font-bold text-red-700 bg-red-50 hover:bg-red-100 disabled:opacity-40 disabled:cursor-not-allowed rounded-lg cursor-pointer">
+                  {cancelRequested ? t('تم طلب الإلغاء...', 'Cancellation requested...', language) : t('إلغاء الرفع', 'Cancel Import', language)}
+                </button>
               </div>
             </div>
           ) : (
@@ -1449,7 +1576,13 @@ export const ChineseMillsImportPanel: React.FC = () => {
             <div><span className="text-slate-600 block text-[11px]">{t('مستبعد', 'Excluded', language)}</span><span className="text-base font-black text-slate-700">{importResult.excluded}</span></div>
             <div><span className="text-amber-700 block text-[11px]">{t('متخطى', 'Skipped', language)}</span><span className="text-base font-black text-amber-600">{importResult.skipped}</span></div>
             {importResult.failed > 0 && <div><span className="text-red-700 block text-[11px]">{t('فشل', 'Failed', language)}</span><span className="text-base font-black text-red-600">{importResult.failed}</span></div>}
+            {importResult.cancelled > 0 && <div><span className="text-orange-700 block text-[11px]">{t('ملغى', 'Cancelled', language)}</span><span className="text-base font-black text-orange-600">{importResult.cancelled}</span></div>}
           </div>
+          {importResult.cancelled > 0 && (
+            <p className="text-[11px] text-orange-800 bg-orange-50 border border-orange-200 rounded-lg p-2 max-w-2xl mx-auto">
+              {t('تم إلغاء الرفع قبل اكتمال جميع السجلات. السجلات المستوردة بالفعل باقية كما هي، والسجلات المتبقية ما زالت محددة وجاهزة - يمكنك الضغط على "اعتماد ورفع" مرة أخرى لإكمالها.', 'Import was cancelled before all records finished. Already-imported records remain as-is, and the remaining records are still selected and ready - click "Approve & Import" again to continue.', language)}
+            </p>
+          )}
         </div>
       )}
 
@@ -1464,7 +1597,16 @@ export const ChineseMillsImportPanel: React.FC = () => {
             </p>
             <p className="text-xs text-slate-600">{t('سيتم إعادة فحص السجلات المحددة مقابل أحدث البيانات الأساسية قبل الرفع مباشرة. السجلات المعلقة أو المستبعدة أو ذات التحذيرات غير المعتمدة لن يتم استيرادها الآن ويمكن معالجتها لاحقًا دون إعادة رفع الملف.', 'The selected records will be revalidated against the latest Master Data immediately before writing. Pending, Excluded, or warning-not-yet-approved records will not be imported now and can be fixed later without re-uploading the file.', language)}</p>
             <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-100">
-              <button type="button" onClick={() => setShowFinalConfirm(false)} className="px-4 py-2 text-xs font-bold text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-lg cursor-pointer">{t('إلغاء', 'Cancel', language)}</button>
+              <button
+                type="button"
+                onClick={() => {
+                  setShowFinalConfirm(false);
+                  logAuditAction('BULK_IMPORT', 'stage_chinese_mills', undefined, `[ROW_REVIEW_CANCELLED] استيراد الطواحين الصينية - تم إلغاء الرفع قبل التنفيذ - ${writableRows.length} سجل كان سيتم رفعه`).catch(() => {});
+                }}
+                className="px-4 py-2 text-xs font-bold text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-lg cursor-pointer"
+              >
+                {t('إلغاء الرفع', 'Cancel Import', language)}
+              </button>
               <button type="button" onClick={handleConfirmImport} className="px-4 py-2 text-xs font-black text-white bg-emerald-600 hover:bg-emerald-700 rounded-lg cursor-pointer">{t('تأكيد', 'Confirm', language)}</button>
             </div>
           </div>
@@ -1493,13 +1635,11 @@ export const ChineseMillsImportPanel: React.FC = () => {
                   {reviewWindow.mode === 'INVALID' && reviewWindow.source === 'LIVE' && t('مراجعة السجلات التي تحتاج مراجعة', 'Review Invalid / Needs-Review Records', language)}
                 </h3>
                 <p className="text-[11px] text-slate-500 mt-0.5">
-                  {reviewWindow.mode === 'ALL'
-                    ? t(
-                        `المحدد: ${reviewWindowRows.length} · جاهز للاستيراد: ${writableRows.length} · يحتاج مراجعة: ${allWindowInvalidRows.length}`,
-                        `Selected: ${reviewWindowRows.length} · Ready to import: ${writableRows.length} · Needs review: ${allWindowInvalidRows.length}`,
-                        language
-                      )
-                    : t(`عدد السجلات: ${reviewWindowRows.length}`, `Records: ${reviewWindowRows.length}`, language)}
+                  {t(
+                    `عدد السجلات: ${reviewWindowRows.length} · المحدد: ${reviewWindowSelectedCount} · سيتم استيراده: ${reviewWindowWillImportCount}`,
+                    `Records: ${reviewWindowRows.length} · Selected: ${reviewWindowSelectedCount} · Will Import: ${reviewWindowWillImportCount}`,
+                    language
+                  )}
                 </p>
               </div>
               <button type="button" onClick={closeReviewWindow} className="w-8 h-8 rounded-lg flex items-center justify-center text-slate-400 hover:text-slate-700 hover:bg-slate-200/60 cursor-pointer"><X className="w-5 h-5" /></button>
@@ -1530,8 +1670,9 @@ export const ChineseMillsImportPanel: React.FC = () => {
             {/* Footer: mode-dependent action bar (§6/§13/§16), always reachable. */}
             <div className="px-5 py-3.5 border-t border-slate-100 bg-white shrink-0 flex flex-wrap items-center justify-between gap-2">
               <div className="flex items-center gap-2 text-[11px] font-bold">
-                <button type="button" onClick={() => handleBulkSelection('ALL')} className="px-2.5 py-1.5 bg-slate-100 hover:bg-slate-200 rounded-lg cursor-pointer">{t('تحديد الكل', 'Select All', language)}</button>
-                <button type="button" onClick={() => handleBulkSelection('NONE')} className="px-2.5 py-1.5 bg-slate-100 hover:bg-slate-200 rounded-lg cursor-pointer">{t('إلغاء تحديد الكل', 'Deselect All', language)}</button>
+                {/* §2-4/§17: scoped to exactly the rows THIS window is showing (reviewWindowRows), never the whole dataset - the fix for the reported bug. Works regardless of scroll position/off-screen rows since it iterates the underlying row array, never the rendered DOM. */}
+                <button type="button" onClick={() => handleScopedBulkSelection('ALL', new Set(reviewWindowRows.map((r) => r.rowIndex)))} className="px-2.5 py-1.5 bg-slate-100 hover:bg-slate-200 rounded-lg cursor-pointer">{t('تحديد الكل', 'Select All', language)}</button>
+                <button type="button" onClick={() => handleScopedBulkSelection('NONE', new Set(reviewWindowRows.map((r) => r.rowIndex)))} className="px-2.5 py-1.5 bg-slate-100 hover:bg-slate-200 rounded-lg cursor-pointer">{t('إلغاء تحديد الكل', 'Deselect All', language)}</button>
               </div>
               <div className="flex items-center gap-2">
                 {reviewWindow.source === 'LIVE' && canManageImport && (

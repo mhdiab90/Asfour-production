@@ -138,3 +138,30 @@ export function planImport(rows: ChineseMillsImportRow[]): { willImport: Chinese
   }
   return { willImport, willRemain };
 }
+
+/**
+ * §6-7/§9: pure batch-boundary planner behind executeChineseMillsBatchImport's
+ * cancellation loop - given how many writable rows there are and which batch
+ * index a cancel request landed on (or -1 if never cancelled), returns the
+ * same importedCount/cancelledCount split the real Firestore loop produces,
+ * WITHOUT touching Firestore. This is the single source of truth for "how
+ * many rows count as imported vs. cancelled" so the UI's importResult and
+ * the service's return value can never disagree. Batches already started are
+ * never partially rolled back (a writeBatch().commit() is atomic) - only
+ * whole not-yet-started batches are ever counted as cancelled.
+ */
+export function planBatchCancellation(
+  writableCount: number,
+  batchSize: number,
+  cancelledAtBatchStartIndex: number
+): { importedCount: number; cancelledCount: number; totalBatches: number } {
+  const totalBatches = Math.ceil(writableCount / batchSize) || 1;
+  if (cancelledAtBatchStartIndex < 0 || cancelledAtBatchStartIndex >= writableCount) {
+    return { importedCount: writableCount, cancelledCount: 0, totalBatches };
+  }
+  return {
+    importedCount: cancelledAtBatchStartIndex,
+    cancelledCount: writableCount - cancelledAtBatchStartIndex,
+    totalBatches,
+  };
+}
