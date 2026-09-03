@@ -28,7 +28,9 @@ import {
 } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import { Customer, Product, ChineseMillsImportRow, ChineseMillsImportSummary } from '../../types';
-import { loadApprovedMappings, getHistoricalImportHistory, rollbackImportBatch, ImportAuditEntry } from '../../services/importMappingService';
+import { loadApprovedMappings, loadHistoricalImportOperations, rollbackImportBatch, ImportAuditEntry } from '../../services/importMappingService';
+import { deriveImportFinalStatus, filterImportHistory } from '../../services/importHistoryPure';
+import { STAGE_DISPLAY_NAMES } from '../../services/stageRecordService';
 import { logAuditAction } from '../../services/auditService';
 import {
   downloadChineseMillsExcelTemplate,
@@ -220,6 +222,10 @@ export const ChineseMillsImportPanel: React.FC = () => {
   const [importHistory, setImportHistory] = useState<ImportAuditEntry[]>([]);
   const [historyDateFrom, setHistoryDateFrom] = useState('');
   const [historyDateTo, setHistoryDateTo] = useState('');
+  /** §4/§26: which module's operations to show. Defaults to this panel's own module, but every historical import module is reachable from the same list. */
+  const [historyStageFilter, setHistoryStageFilter] = useState<string>('chinese_mills');
+  /** §1/§6: the actual load errors, surfaced instead of being swallowed into a misleading empty state. */
+  const [historyErrors, setHistoryErrors] = useState<{ auditTrailError?: string; auditLogError?: string }>({});
   const [historyDetail, setHistoryDetail] = useState<ImportAuditEntry | null>(null);
   const [historyDetailRows, setHistoryDetailRows] = useState<any[] | null>(null);
   const [isLoadingHistoryDetailRows, setIsLoadingHistoryDetailRows] = useState(false);
@@ -1279,11 +1285,14 @@ export const ChineseMillsImportPanel: React.FC = () => {
   const openHistoryModal = async () => {
     setShowHistoryModal(true);
     setIsLoadingHistory(true);
+    setHistoryErrors({});
     try {
-      const history = await getHistoricalImportHistory();
-      setImportHistory(history.filter((h) => h.stage === 'chinese_mills'));
-    } catch (err) {
-      console.warn('Failed to load Chinese Mills import history:', err);
+      const { entries, auditTrailError, auditLogError } = await loadHistoricalImportOperations();
+      setImportHistory(entries);
+      setHistoryErrors({ auditTrailError, auditLogError });
+    } catch (err: any) {
+      console.warn('Failed to load import history:', err);
+      setHistoryErrors({ auditLogError: err?.code || err?.message || 'unknown-error' });
     } finally {
       setIsLoadingHistory(false);
     }
@@ -1303,7 +1312,11 @@ export const ChineseMillsImportPanel: React.FC = () => {
     setIsLoadingHistoryDetailRows(true);
     logAuditAction('UPDATE', 'stage_chinese_mills', entry.importBatchId, `[IMPORT_VIEWED] عرض تفاصيل عملية الرفع ${entry.importBatchId} - المستخدم: ${adminUser?.email || 'admin'}`).catch(() => {});
     try {
-      const rows = await getChineseMillsImportedRowsByBatch(entry.importBatchId);
+      // Record-level detail is only available for THIS module's own
+      // collection - another module's rows are not readable through this
+      // panel's query, so we show its aggregate metadata only rather than
+      // an empty table that implies "nothing was imported".
+      const rows = entry.stage === 'chinese_mills' ? await getChineseMillsImportedRowsByBatch(entry.importBatchId) : [];
       setHistoryDetailRows(rows);
     } catch (err) {
       console.warn('Failed to load import detail rows:', err);
@@ -1353,7 +1366,10 @@ export const ChineseMillsImportPanel: React.FC = () => {
     setIsRollingBack(true);
     setRollbackMessage(null);
     try {
-      const res = await rollbackImportBatch(rollbackTarget.importBatchId, 'chinese_mills');
+      // §17: keyed by ImportId, and rolled back against the operation's OWN
+      // module (never this panel's hardcoded stage) now that the list can
+      // show every historical import module.
+      const res = await rollbackImportBatch(rollbackTarget.importBatchId, rollbackTarget.stage);
       setRollbackMessage(
         t(
           `تم حذف عملية الرفع بنجاح - تم حذف ${res.deletedCount} سجل من الدفعة (${rollbackTarget.importBatchId}).`,
@@ -1367,8 +1383,8 @@ export const ChineseMillsImportPanel: React.FC = () => {
         rollbackTarget.importBatchId,
         `[IMPORT_DELETE_COMPLETED] تم حذف عملية الرفع ${rollbackTarget.importBatchId} - عدد السجلات المحذوفة: ${res.deletedCount} - المستخدم: ${adminUser?.email || 'admin'}`
       ).catch(() => {});
-      const refreshed = await getHistoricalImportHistory();
-      setImportHistory(refreshed.filter((h) => h.stage === 'chinese_mills'));
+      const refreshed = await loadHistoricalImportOperations();
+      setImportHistory(refreshed.entries);
       setRollbackTarget(null);
     } catch (err: any) {
       setRollbackMessage(cleanErrorMessage(err, language, 'Delete import operation failed'));
@@ -1377,24 +1393,29 @@ export const ChineseMillsImportPanel: React.FC = () => {
     }
   };
 
-  /** §5/§43: client-side date-range filter over the already-fetched, bounded history list - never a repeated Firestore query per filter change. */
-  const filteredImportHistory = useMemo(() => {
-    return importHistory.filter((h) => {
-      const d = (h.performedAt || '').slice(0, 10);
-      if (historyDateFrom && d < historyDateFrom) return false;
-      if (historyDateTo && d > historyDateTo) return false;
-      return true;
-    });
-  }, [importHistory, historyDateFrom, historyDateTo]);
+  /** §26: all filtering is client-side over the already-fetched, bounded list - never a repeated Firestore query per filter change. */
+  const filteredImportHistory = useMemo(
+    () => filterImportHistory(importHistory as any, { stage: historyStageFilter, dateFrom: historyDateFrom, dateTo: historyDateTo }) as ImportAuditEntry[],
+    [importHistory, historyStageFilter, historyDateFrom, historyDateTo]
+  );
 
-  /** §4: Final Status, derived ONLY from actual recorded counts - never a stored/invented value. */
-  const deriveImportFinalStatus = (h: ImportAuditEntry): { key: string; ar: string; en: string; cls: string } => {
-    const failed = h.failedCount || 0;
-    const imported = h.importedCount || 0;
-    const cancelled = h.cancelledCount || 0;
-    if (failed === 0 && cancelled === 0) return { key: 'COMPLETED', ar: 'مكتمل', en: 'COMPLETED', cls: 'bg-emerald-100 text-emerald-800 border-emerald-300' };
-    if (imported === 0) return { key: 'FAILED', ar: 'فشل', en: 'FAILED', cls: 'bg-red-100 text-red-800 border-red-300' };
-    return { key: 'PARTIALLY_COMPLETED', ar: 'مكتمل جزئيًا', en: 'PARTIALLY_COMPLETED', cls: 'bg-amber-100 text-amber-800 border-amber-300' };
+  /** Every distinct module actually present in the loaded history, so the type filter lists real modules rather than a hardcoded guess (§16). */
+  const historyStageOptions = useMemo(() => Array.from(new Set(importHistory.map((h) => h.stage).filter(Boolean))).sort(), [importHistory]);
+
+  /** Bilingual module label - reuses the EXISTING STAGE_DISPLAY_NAMES map (stageRecordService.ts) for Arabic and a humanized key for English, never a second hardcoded stage list. */
+  const stageDisplayLabel = (stage: string): string => {
+    if (language === 'ar') return (STAGE_DISPLAY_NAMES as Record<string, string>)[stage] || stage;
+    return stage.split('_').map((w) => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
+  };
+
+  /** §5/§7: Final Status badge, derived ONLY from actually-recorded counts (importHistoryPure.deriveImportFinalStatus) - 'UNKNOWN' when they were never recorded, never a flattering default. */
+  const importFinalStatusBadge = (h: ImportAuditEntry): { ar: string; en: string; cls: string } => {
+    switch (deriveImportFinalStatus(h as any)) {
+      case 'COMPLETED': return { ar: 'مكتمل', en: 'COMPLETED', cls: 'bg-emerald-100 text-emerald-800 border-emerald-300' };
+      case 'FAILED': return { ar: 'فشل', en: 'FAILED', cls: 'bg-red-100 text-red-800 border-red-300' };
+      case 'PARTIALLY_COMPLETED': return { ar: 'مكتمل جزئيًا', en: 'PARTIALLY_COMPLETED', cls: 'bg-amber-100 text-amber-800 border-amber-300' };
+      default: return { ar: 'غير مسجل', en: 'NOT RECORDED', cls: 'bg-slate-100 text-slate-600 border-slate-300' };
+    }
   };
 
   const filteredRows = useMemo(() => {
@@ -2352,9 +2373,38 @@ export const ChineseMillsImportPanel: React.FC = () => {
 
       {/* Comprehensive Historical Import Management task §4-5/§43: Historical Import History. */}
       {showHistoryModal && (
-        <Modal isOpen onClose={() => setShowHistoryModal(false)} title={t('سجل عمليات الرفع التاريخية - الطواحين الصينية', 'Historical Import History - Chinese Mills', language)} maxWidth="4xl">
+        <Modal isOpen onClose={() => setShowHistoryModal(false)} title={t('سجل عمليات الرفع التاريخية', 'Historical Import History', language)} maxWidth="4xl">
           <div className="space-y-3" dir={isRtl ? 'rtl' : 'ltr'}>
+            {/* §1/§6: a permission/read failure is shown as exactly that - never as a benign "nothing here yet". */}
+            {historyErrors.auditTrailError && (
+              <div className="text-[11px] text-amber-900 bg-amber-50 border border-amber-200 rounded-lg p-2.5 space-y-1">
+                <div className="font-black">{t('تعذّر قراءة بيانات السجل الكاملة (importAuditTrail)', 'Could not read the full history store (importAuditTrail)', language)}</div>
+                <div className="font-mono text-[10px]">{historyErrors.auditTrailError}</div>
+                <div>
+                  {t(
+                    'مجموعة importAuditTrail ليس لها قاعدة في Firestore Rules، لذلك تُرفض القراءة والكتابة معًا. يتم الآن عرض العمليات المستخرجة من سجل التدقيق auditLogs (وهو مقروء) ببيانات أقل تفصيلًا. لإظهار البيانات الكاملة يلزم إضافة قاعدة importAuditTrail ونشر Firestore Rules.',
+                    'The importAuditTrail collection has no rule in Firestore Rules, so both reads and writes to it are denied. Operations reconstructed from the readable auditLogs trail are shown instead, with less detail. Showing full metadata requires adding an importAuditTrail rule and deploying Firestore Rules.',
+                    language
+                  )}
+                </div>
+              </div>
+            )}
+            {historyErrors.auditLogError && (
+              <div className="text-[11px] text-red-900 bg-red-50 border border-red-200 rounded-lg p-2.5">
+                <span className="font-black">{t('تعذّر قراءة سجل التدقيق: ', 'Could not read the audit trail: ', language)}</span>
+                <span className="font-mono text-[10px]">{historyErrors.auditLogError}</span>
+              </div>
+            )}
             <div className="flex flex-wrap items-end gap-2">
+              <label className="text-[11px] font-bold text-slate-600">
+                {t('نوع الاستيراد', 'Import Type', language)}
+                <select value={historyStageFilter} onChange={(e) => setHistoryStageFilter(e.target.value)} className="block mt-1 px-2 py-1.5 text-[11px] border border-slate-300 rounded-lg bg-white">
+                  <option value="ALL">{t('كل الوحدات', 'All Modules', language)}</option>
+                  {historyStageOptions.map((s) => (
+                    <option key={s} value={s}>{stageDisplayLabel(s)}</option>
+                  ))}
+                </select>
+              </label>
               <label className="text-[11px] font-bold text-slate-600">
                 {t('من تاريخ', 'From', language)}
                 <input type="date" value={historyDateFrom} onChange={(e) => setHistoryDateFrom(e.target.value)} className="block mt-1 px-2 py-1.5 text-[11px] border border-slate-300 rounded-lg" />
@@ -2379,6 +2429,7 @@ export const ChineseMillsImportPanel: React.FC = () => {
                   <thead className="sticky top-0 bg-slate-50 z-10">
                     <tr className="text-slate-500 border-b border-slate-200">
                       <th className="text-start py-2 px-2 font-bold">{t('رقم العملية', 'ImportId', language)}</th>
+                      <th className="text-start py-2 px-2 font-bold">{t('الوحدة', 'Module', language)}</th>
                       <th className="text-start py-2 px-2 font-bold">{t('اسم الملف', 'File Name', language)}</th>
                       <th className="text-start py-2 px-2 font-bold">{t('التاريخ/الوقت', 'Date/Time', language)}</th>
                       <th className="text-start py-2 px-2 font-bold">{t('المستخدم', 'User', language)}</th>
@@ -2393,18 +2444,28 @@ export const ChineseMillsImportPanel: React.FC = () => {
                   </thead>
                   <tbody>
                     {filteredImportHistory.map((h) => {
-                      const st = deriveImportFinalStatus(h);
+                      const st = importFinalStatusBadge(h);
+                      // §3/§8: a value that was never recorded renders as "not recorded", never as 0 or a guess.
+                      const num = (v: number | undefined) => (v === undefined ? <span className="text-slate-400">{t('غير مسجل', 'not recorded', language)}</span> : v);
                       return (
                         <tr key={h.importBatchId} className="border-b border-slate-100 hover:bg-slate-50/40">
-                          <td className="py-1.5 px-2 font-mono text-slate-500">{h.importBatchId}</td>
-                          <td className="py-1.5 px-2 text-slate-700">{h.fileName || '-'}</td>
+                          <td className="py-1.5 px-2 font-mono text-slate-500">
+                            {h.importBatchId}
+                            {h.metadataSource === 'AUDIT_LOG' && (
+                              <span className="ms-1 text-[9px] font-bold px-1 py-0.5 rounded border bg-slate-100 text-slate-600 border-slate-300" title={t('أُعيد بناء هذه العملية من سجل التدقيق - بيانات أقل تفصيلًا.', 'Reconstructed from the audit trail - limited metadata.', language)}>
+                                {t('بيانات محدودة', 'limited', language)}
+                              </span>
+                            )}
+                          </td>
+                          <td className="py-1.5 px-2 text-slate-700">{stageDisplayLabel(h.stage)}</td>
+                          <td className="py-1.5 px-2 text-slate-700">{h.fileName || <span className="text-slate-400">{t('غير مسجل', 'not recorded', language)}</span>}</td>
                           <td className="py-1.5 px-2 text-slate-500 font-mono">{h.performedAt ? new Date(h.performedAt).toLocaleString() : '-'}</td>
-                          <td className="py-1.5 px-2 text-slate-700">{h.performedByName || '-'}</td>
-                          <td className="py-1.5 px-2 text-end font-bold text-slate-800">{h.totalRows}</td>
-                          <td className="py-1.5 px-2 text-end text-emerald-700 font-bold">{h.importedCount}</td>
-                          <td className="py-1.5 px-2 text-end text-red-600">{h.failedCount}</td>
-                          <td className="py-1.5 px-2 text-end text-slate-500">{h.skippedCount}</td>
-                          <td className="py-1.5 px-2 text-end text-amber-600">{h.cancelledCount ?? 0}</td>
+                          <td className="py-1.5 px-2 text-slate-700">{h.performedByName || <span className="text-slate-400">{t('غير معروف', 'unknown', language)}</span>}</td>
+                          <td className="py-1.5 px-2 text-end font-bold text-slate-800">{num(h.totalRows)}</td>
+                          <td className="py-1.5 px-2 text-end text-emerald-700 font-bold">{num(h.importedCount)}</td>
+                          <td className="py-1.5 px-2 text-end text-red-600">{num(h.failedCount)}</td>
+                          <td className="py-1.5 px-2 text-end text-slate-500">{num(h.skippedCount)}</td>
+                          <td className="py-1.5 px-2 text-end text-amber-600">{num(h.cancelledCount)}</td>
                           <td className="py-1.5 px-2"><span className={`text-[10px] font-bold px-2 py-0.5 rounded border ${st.cls}`}>{t(st.ar, st.en, language)}</span></td>
                           <td className="py-1.5 px-2">
                             <div className="flex items-center gap-1">
@@ -2451,13 +2512,30 @@ export const ChineseMillsImportPanel: React.FC = () => {
             </div>
 
             <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-[11px] text-slate-700 bg-slate-50/60 border border-slate-200 rounded-lg p-3">
-              <div><span className="font-bold">{t('نوع الاستيراد: ', 'Import Type: ', language)}</span>{t('الطواحين الصينية', 'Chinese Mills', language)}</div>
-              <div><span className="font-bold">{t('اسم الملف: ', 'File Name: ', language)}</span>{historyDetail.fileName || '-'}</div>
+              <div><span className="font-bold">{t('نوع الاستيراد: ', 'Import Type: ', language)}</span>{stageDisplayLabel(historyDetail.stage)}</div>
+              <div><span className="font-bold">{t('اسم الملف: ', 'File Name: ', language)}</span>{historyDetail.fileName || t('غير مسجل', 'not recorded', language)}</div>
               <div><span className="font-bold">{t('المستخدم: ', 'User: ', language)}</span>{historyDetail.performedByName || '-'}</div>
               <div><span className="font-bold">{t('التاريخ/الوقت: ', 'Date/Time: ', language)}</span>{historyDetail.performedAt ? new Date(historyDetail.performedAt).toLocaleString() : '-'}</div>
               <div><span className="font-bold">{t('عدد المطابقات المعتمدة: ', 'Approved Mappings: ', language)}</span>{historyDetail.approvedMappingsCount}</div>
               <div><span className="font-bold">{t('نسخة احتياطية: ', 'Backup: ', language)}</span>{historyDetail.backupId || t('لا يوجد', 'None', language)}</div>
             </div>
+
+            {/* §3/§8: the ORIGINAL recorded audit sentence, verbatim - so the real wording and numbers are always visible even where they could not be parsed into typed count fields. */}
+            {historyDetail.rawDetails && (
+              <div className="text-[11px] text-slate-700 bg-white border border-slate-200 rounded-lg p-3">
+                <div className="font-bold mb-1">{t('النص المسجَّل الأصلي لعملية الرفع:', 'Original recorded audit entry:', language)}</div>
+                <div className="font-mono text-[10px] text-slate-600">{historyDetail.rawDetails}</div>
+                {historyDetail.metadataSource === 'AUDIT_LOG' && (
+                  <div className="text-[10px] text-amber-700 mt-1.5">
+                    {t(
+                      'أُعيد بناء هذه العملية من سجل التدقيق auditLogs لأن بيانات السجل الكاملة (importAuditTrail) غير مقروءة حاليًا - لذلك بعض الحقول غير مسجلة ولم يتم تقدير أي قيمة منها.',
+                      'This operation was reconstructed from the auditLogs trail because the full history store (importAuditTrail) is not currently readable - so some fields are simply not recorded, and none of them were estimated.',
+                      language
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
 
             <div>
               <h4 className="text-xs font-black text-slate-800 mb-1.5">{t(`السجلات المستوردة فعليًا (${historyDetailRows?.length ?? 0})`, `Actually-Imported Records (${historyDetailRows?.length ?? 0})`, language)}</h4>

@@ -3,19 +3,22 @@
  * Persists approved fuzzy match mappings across import sessions,
  * logs matching decisions, and provides safe batch rollback (Undo Import).
  */
-import { 
-  collection, 
-  doc, 
-  getDocs, 
-  setDoc, 
-  query, 
-  where, 
-  writeBatch, 
-  serverTimestamp 
+import {
+  collection,
+  doc,
+  getDocs,
+  setDoc,
+  query,
+  where,
+  orderBy,
+  limit,
+  writeBatch,
+  serverTimestamp
 } from 'firebase/firestore';
 import { db, auth } from '../config/firebase';
 import { logAuditAction } from './auditService';
 import { normalizeArabicForComparison } from '../utils/fuzzyMatching';
+import { importHistoryEntryFromAuditLog, mergeImportHistorySources, ImportHistorySource } from './importHistoryPure';
 
 export interface ImportMappingRecord {
   id?: string;
@@ -60,6 +63,16 @@ export interface ImportAuditEntry {
   correctedCount?: number;
   warningCount?: number;
   blockingCount?: number;
+  /**
+   * Which source this entry's metadata actually came from:
+   * 'AUDIT_TRAIL' = the full rich importAuditTrail document;
+   * 'AUDIT_LOG'   = reconstructed from the readable auditLogs BULK_IMPORT
+   *                 record, so most count fields were never recorded and
+   *                 stay undefined rather than being invented (§3).
+   */
+  metadataSource?: ImportHistorySource;
+  /** The original recorded audit sentence, carried verbatim so the real wording/numbers are always visible even when they could not be parsed into typed fields. */
+  rawDetails?: string;
 }
 
 // In-memory quick lookup cache
@@ -214,17 +227,84 @@ export async function rollbackImportBatch(
   return { deletedCount };
 }
 
+export interface ImportHistoryLoadResult {
+  entries: ImportAuditEntry[];
+  /** Set when the rich importAuditTrail source could not be read (today: PERMISSION_DENIED - it has no firestore.rules entry). Surfaced so the UI never renders a permission failure as a benign "nothing here yet". */
+  auditTrailError?: string;
+  /** Set when the readable auditLogs fallback source could not be read. */
+  auditLogError?: string;
+}
+
 /**
- * Fetch historical import audit logs
+ * ROOT-CAUSE FIX for the permanently-empty Import History screen.
+ *
+ * The rich `importAuditTrail` store this used to read exclusively has no
+ * rule in firestore.rules, whose helper section ends in an explicit
+ * `match /{document=**} { allow read, write: if false; }` default-deny - so
+ * BOTH logHistoricalImportExecution()'s writes AND this function's reads
+ * have always been PERMISSION_DENIED, each silently swallowed into a
+ * `console.warn` / an empty array. The screen therefore showed "no
+ * historical import operations recorded yet" for every module, forever,
+ * even though real imports had run.
+ *
+ * Two changes, neither of which needs a rules or index deployment:
+ *   1. The error is no longer swallowed - it is returned so the UI can say
+ *      what actually went wrong.
+ *   2. A SECOND, genuinely readable source is merged in: the `auditLogs`
+ *      collection (`allow read: if isSignedIn()`), where both Pressing and
+ *      Chinese Mills already write a BULK_IMPORT entry whose `documentId`
+ *      IS the ImportId. See importHistoryPure.ts for the derivation, which
+ *      never invents a field that was not actually recorded.
+ *
+ * Both queries are bounded and metadata-only (§27): one small
+ * one-doc-per-import collection, plus a `limit()`-capped auditLogs read -
+ * never a scan of any production records collection.
  */
-export async function getHistoricalImportHistory(): Promise<ImportAuditEntry[]> {
+export async function loadHistoricalImportOperations(maxCount = 300): Promise<ImportHistoryLoadResult> {
+  let auditTrailError: string | undefined;
+  let auditLogError: string | undefined;
+
+  let trailEntries: ImportAuditEntry[] = [];
   try {
     const snap = await getDocs(collection(db, 'importAuditTrail'));
-    return snap.docs
-      .map((d) => d.data() as ImportAuditEntry)
-      .sort((a, b) => (b.performedAt || '').localeCompare(a.performedAt || ''));
-  } catch (err) {
-    console.warn('Could not load historical import history:', err);
-    return [];
+    trailEntries = snap.docs.map((d) => d.data() as ImportAuditEntry);
+  } catch (err: any) {
+    auditTrailError = err?.code || err?.message || 'unknown-error';
+    console.warn('Could not load importAuditTrail history:', err);
   }
+
+  let logEntries: ImportAuditEntry[] = [];
+  try {
+    // Preferred: server-side ordered + capped. Falls back to an
+    // equality-only query if the composite index does not exist, since
+    // deploying Firestore indexes is out of scope here.
+    let snap;
+    try {
+      snap = await getDocs(query(collection(db, 'auditLogs'), where('action', '==', 'BULK_IMPORT'), orderBy('timestamp', 'desc'), limit(maxCount)));
+    } catch {
+      snap = await getDocs(query(collection(db, 'auditLogs'), where('action', '==', 'BULK_IMPORT'), limit(maxCount)));
+    }
+    logEntries = snap.docs
+      .map((d) => importHistoryEntryFromAuditLog({ id: d.id, ...(d.data() as any) }))
+      .filter((e): e is NonNullable<typeof e> => e !== null) as ImportAuditEntry[];
+  } catch (err: any) {
+    auditLogError = err?.code || err?.message || 'unknown-error';
+    console.warn('Could not load auditLogs-derived import history:', err);
+  }
+
+  return {
+    entries: mergeImportHistorySources(trailEntries as any, logEntries as any) as ImportAuditEntry[],
+    auditTrailError,
+    auditLogError,
+  };
+}
+
+/**
+ * Back-compatible wrapper - existing callers (DataImportView.tsx's shared
+ * Import History modal, used by Pressing/Mills/every stage) keep working
+ * unchanged and now receive the merged, actually-populated list.
+ */
+export async function getHistoricalImportHistory(): Promise<ImportAuditEntry[]> {
+  const { entries } = await loadHistoricalImportOperations();
+  return entries;
 }
