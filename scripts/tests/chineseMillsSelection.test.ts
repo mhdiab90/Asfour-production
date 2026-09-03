@@ -68,45 +68,40 @@ function buildFixture(): ChineseMillsImportRow[] {
 }
 
 // TEST 1: Select All
-test('TEST 1 - Select All selects every eligible (non-PENDING) row, never blocking/PENDING rows', () => {
+// ROOT CAUSE FIX (checkbox-state bug): a blocking/PENDING row's review-modal
+// checkbox reads getRowSelection(row) === 'INCLUDED' - the OLD behavior of
+// leaving PENDING rows untouched meant that checkbox could NEVER become
+// checked via Select All, no matter how many times it was clicked. Blocking
+// rows must now get a real INCLUDED decision too, exactly like Pressing
+// (which has no PENDING state at all) - they simply stay excluded from
+// Firestore writes via isChineseMillsRowWritable's OWN errors.length check,
+// completely independent of this selection flag.
+test('TEST 1 - Select All selects EVERY row including blocking/PENDING ones (they stay non-writable via isChineseMillsRowWritable, never via being skipped here)', () => {
   const rows = buildFixture();
   const outcomes = rows.map((r) => computeBulkSelectionOutcome(r, 'ALL'));
-  for (let i = 0; i < rows.length; i++) {
-    if (rows[i].rowSelection === 'PENDING') {
-      assert.equal(outcomes[i], null, `row ${rows[i].rowIndex} is PENDING - Select All must not touch it`);
-    } else {
-      assert.deepEqual(outcomes[i], { rowSelection: 'INCLUDED' });
-    }
-  }
-  // Never disabled by the presence of invalid rows - it still ran and selected all 13 eligible rows.
+  assert.ok(outcomes.every((o) => o?.rowSelection === 'INCLUDED'), 'every row - including the 5 PENDING/blocking ones - gets an explicit INCLUDED decision');
   const selectedCount = outcomes.filter((o) => o?.rowSelection === 'INCLUDED').length;
-  assert.equal(selectedCount, 13);
+  assert.equal(selectedCount, 18, 'all 18 rows (10 already-included + 5 blocking + 3 previously-excluded) become selected');
 });
 
 // TEST 2: Deselect All
-test('TEST 2 - Deselect All excludes every eligible row, never touches PENDING', () => {
+test('TEST 2 - Deselect All excludes EVERY row including blocking/PENDING ones', () => {
   const rows = buildFixture();
   const outcomes = rows.map((r) => computeBulkSelectionOutcome(r, 'NONE'));
-  for (let i = 0; i < rows.length; i++) {
-    if (rows[i].rowSelection === 'PENDING') {
-      assert.equal(outcomes[i], null);
-    } else {
-      assert.deepEqual(outcomes[i], { rowSelection: 'EXCLUDED', exclusionReason: 'USER_DESELECTED' });
-    }
-  }
+  assert.ok(outcomes.every((o) => o?.rowSelection === 'EXCLUDED' && o.exclusionReason === 'USER_DESELECTED'));
 });
 
 // TEST 3: Select Valid
-test('TEST 3 - Select Valid selects ONLY error-free, warning-free rows', () => {
+test('TEST 3 - Select Valid selects ONLY error-free, warning-free rows (a blocking row is still given an explicit EXCLUDED decision, never skipped)', () => {
   const rows = [
     makeRow({ rowIndex: 1, errors: [], warnings: [] }), // valid
     makeRow({ rowIndex: 2, errors: [], warnings: ['bag weight mismatch'] }), // has a warning - not "clean valid"
-    makeRow({ rowIndex: 3, rowSelection: 'PENDING', errors: ['unknown mill'] }), // PENDING - untouched
+    makeRow({ rowIndex: 3, rowSelection: 'PENDING', errors: ['unknown mill'] }), // blocking - not valid, but still gets a real decision
   ];
   const outcomes = rows.map((r) => computeBulkSelectionOutcome(r, 'VALID'));
   assert.deepEqual(outcomes[0], { rowSelection: 'INCLUDED' });
   assert.deepEqual(outcomes[1], { rowSelection: 'EXCLUDED', exclusionReason: 'USER_DESELECTED' });
-  assert.equal(outcomes[2], null);
+  assert.deepEqual(outcomes[2], { rowSelection: 'EXCLUDED', exclusionReason: 'USER_DESELECTED' });
   assert.equal(matchesValid(rows[0]), true);
   assert.equal(matchesValid(rows[1]), false);
 });
@@ -234,13 +229,19 @@ test('TEST 11 (mixed dataset) - "Select All" review-window partition covers ever
   const invalidPart = afterSelectAll.filter(matchesInvalidNeedsReview);
   const mainPart = afterSelectAll.filter((r) => !matchesInvalidNeedsReview(r));
 
+  // Classification (which section a row renders in) is intrinsic
+  // (errors.length > 0), NOT derived from rowSelection - so it stays stable
+  // at 10/90 even after Select All flips every row's rowSelection to
+  // INCLUDED. A blocking row does not "graduate" out of its review section
+  // just because it got selected.
   assert.equal(invalidPart.length, 10);
   assert.equal(mainPart.length, 90);
   assert.equal(invalidPart.length + mainPart.length, rows.length, 'every row must appear in exactly one section - nothing dropped, nothing duplicated');
 
-  // Selected count must visibly change (never stay at 0 - §11's explicit rule).
+  // Selected count must visibly change (never stay at 0 - §11's explicit rule) and must include the 10 blocking rows too (§10: they may be selected for review, just never written).
   const counts = computeSelectionCounts(afterSelectAll);
-  assert.equal(counts.selected, 90, 'Select All must select the 90 eligible rows - Selected must never remain 0 on a non-empty dataset');
+  assert.equal(counts.selected, 100, 'Select All selects ALL 100 rows, including the 10 blocking ones - this is exactly what makes their checkbox actually show checked');
+  assert.equal(counts.willImport, 90, 'the 10 blocking rows are selected/checked but still never counted as writable - errors.length > 0 still gates isChineseMillsRowWritable regardless of selection');
 
   // §10 (Select Valid) / independently, Select Invalid on the SAME dataset:
   const invalidOnly = afterSelectAll.filter(matchesInvalidNeedsReview);

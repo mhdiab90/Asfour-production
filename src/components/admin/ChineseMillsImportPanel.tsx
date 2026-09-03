@@ -202,6 +202,7 @@ export const ChineseMillsImportPanel: React.FC = () => {
   const [isImporting, setIsImporting] = useState(false);
   const [importProgress, setImportProgress] = useState(0);
   const [showFinalConfirm, setShowFinalConfirm] = useState(false);
+  const [showCancelEntireConfirm, setShowCancelEntireConfirm] = useState(false);
   const [importResult, setImportResult] = useState<{ total: number; imported: number; failed: number; skipped: number; pending: number; excluded: number; cancelled: number; importId: string } | null>(null);
   /** §7: checked at BATCH BOUNDARIES only (see executeChineseMillsBatchImport's shouldCancel param) - a ref, not state, so the running import loop reads the latest value synchronously without needing to be re-created on every render. */
   const cancelImportRef = useRef(false);
@@ -899,6 +900,46 @@ export const ChineseMillsImportPanel: React.FC = () => {
     setCancelRequested(true);
   };
 
+  /**
+   * §11-16: "Cancel Entire Import" - abandons the CURRENT import
+   * session/operation, distinct from Deselect All (rows only) or the
+   * pre-execution "Cancel Import" button on the Final Confirmation modal
+   * (which only declines THAT confirmation, leaving the session open for the
+   * user to resume/reconfigure and try again).
+   *
+   * - Mid-execution: reuses the EXACT SAME batch-boundary cancellation as
+   *   handleCancelDuringImport - never a second cancellation mechanism.
+   *   Rows already committed stay committed; remaining rows stay reviewable;
+   *   ImportId is preserved (it lives in the in-flight executeChineseMills-
+   *   BatchImport call, untouched here).
+   * - Before execution: writes ZERO rows (executeChineseMillsBatchImport is
+   *   never called), closes any open review window, and resets the loaded
+   *   session (file/summary/backupId/importResult) back to the upload
+   *   screen - but deliberately does NOT touch the saved Draft (§19: only an
+   *   explicit "Delete Draft" removes a draft, never this action).
+   */
+  const handleCancelEntireImport = () => {
+    setShowCancelEntireConfirm(false);
+    if (isImporting) {
+      handleCancelDuringImport();
+      return;
+    }
+    logAuditAction(
+      'BULK_IMPORT',
+      'stage_chinese_mills',
+      undefined,
+      `[IMPORT_CANCELLED] استيراد الطواحين الصينية - تم إلغاء عملية الرفع بالكامل قبل التنفيذ - المحدد: ${selectionCounts.selected} - سيتم استيراده: ${selectionCounts.willImport} - المستخدم: ${adminUser?.email || 'admin'}`
+    ).catch(() => {});
+    setReviewWindow(null);
+    setShowFinalConfirm(false);
+    setImportResult(null);
+    setSummary(null);
+    setFile(null);
+    setBackupId(null);
+    setActiveFilterTab('ALL');
+    setFeedback({ type: 'success', message: t('تم إلغاء عملية الرفع بالكامل. لم يتم تسجيل أي سجل.', 'The entire import operation was cancelled. No records were written.', language) });
+  };
+
   const filteredRows = useMemo(() => {
     if (!summary) return [];
     return summary.rows.filter((r) => {
@@ -917,7 +958,18 @@ export const ChineseMillsImportPanel: React.FC = () => {
   }, [summary, activeFilterTab]);
 
   const excludedRows = useMemo(() => (summary ? summary.rows.filter((r) => getSelection(r) === 'EXCLUDED') : []), [summary]);
-  const pendingRows = useMemo(() => (summary ? summary.rows.filter((r) => getSelection(r) === 'PENDING') : []), [summary]);
+  /**
+   * §ROOT-CAUSE: "Pending Records" membership must be based on the row's
+   * INTRINSIC blocking condition (errors.length > 0) - the same one
+   * rowSelection='PENDING' was always derived FROM at parse/recheck time
+   * (see chineseMillsHistoricalImportService.ts) - not on the mutable
+   * rowSelection field itself. Select All can now flip a blocking row's
+   * rowSelection to INCLUDED (so its checkbox actually shows checked, fixing
+   * the reported bug), and that row must still show up here with its error
+   * detail/manual-fix actions until the underlying issue is actually gone -
+   * never disappear from this section just because it was "selected."
+   */
+  const pendingRows = useMemo(() => (summary ? summary.rows.filter((r) => r.errors.length > 0) : []), [summary]);
   const selectionCounts = useMemo(() => computeSelectionCounts(summary?.rows || []), [summary]);
   const validRowsForWindow = useMemo(() => (summary ? summary.rows.filter(matchesValid) : []), [summary]);
   const readyRowsForWindow = useMemo(() => (summary ? summary.rows.filter(matchesReady) : []), [summary]);
@@ -1127,8 +1179,24 @@ export const ChineseMillsImportPanel: React.FC = () => {
    * panel, Re-include, Delete). Used identically by the always-inline
    * Pending Records section AND the bounded "Invalid / Needs Review" review
    * window (§9) - never a second/divergent table for the same data.
+   *
+   * ROOT CAUSE of the reported "individual checkbox works, Select All does
+   * not" bug: this table's row checkbox used to ALWAYS read/write
+   * `pendingSelected` (a completely separate local Set, scoped to the
+   * unrelated "Revalidate Selected" bulk-action on the main-page Pending
+   * section) - a state Select All/Deselect All (handleScopedBulkSelection,
+   * computeBulkSelectionOutcome) never touches. So a manual click worked
+   * (its own onChange updates that same Set) while Select All had literally
+   * nothing to change here. `selectionMode` makes this table context-aware:
+   * 'PENDING_REVALIDATE' (the main-page Pending Records section - unchanged,
+   * still the Revalidate-Selected picker) vs 'REVIEW' (the review modal -
+   * the checkbox now reads/writes rowSelection via getSelection/
+   * handleReincludeRow/handleExcludeRow, the EXACT SAME authoritative state
+   * and handlers the main review table's checkbox already uses, so Select
+   * All updates the one state every checkbox actually reads - never a second
+   * selection architecture).
    */
-  const renderInvalidStyleTable = (rows: ChineseMillsImportRow[]) => (
+  const renderInvalidStyleTable = (rows: ChineseMillsImportRow[], selectionMode: 'PENDING_REVALIDATE' | 'REVIEW' = 'PENDING_REVALIDATE') => (
     <div className="overflow-x-auto max-h-[calc(100vh-540px)] lg:max-h-[calc(100vh-480px)] overflow-y-auto">
       <table className="w-full text-[11px] min-w-[760px]">
         <thead className="sticky top-0 bg-red-50 z-10">
@@ -1151,7 +1219,11 @@ export const ChineseMillsImportPanel: React.FC = () => {
               <React.Fragment key={row.rowIndex}>
                 <tr className="border-b border-red-100/60 align-top">
                   <td className="py-1.5 px-1">
-                    <input type="checkbox" checked={pendingSelected.has(row.rowIndex)} onChange={(e) => setPendingSelected((prev) => { const next = new Set(prev); if (e.target.checked) next.add(row.rowIndex); else next.delete(row.rowIndex); return next; })} />
+                    {selectionMode === 'REVIEW' ? (
+                      <input type="checkbox" checked={getSelection(row) === 'INCLUDED'} onChange={(e) => (e.target.checked ? handleReincludeRow(row.rowIndex) : handleExcludeRow(row.rowIndex))} />
+                    ) : (
+                      <input type="checkbox" checked={pendingSelected.has(row.rowIndex)} onChange={(e) => setPendingSelected((prev) => { const next = new Set(prev); if (e.target.checked) next.add(row.rowIndex); else next.delete(row.rowIndex); return next; })} />
+                    )}
                   </td>
                   <td className="py-1.5 px-1 font-mono font-bold text-slate-700">
                     <button type="button" onClick={() => toggleExpandRow(row.rowIndex)} className="me-1 px-1 bg-slate-100 hover:bg-slate-200 rounded cursor-pointer">{isExpanded ? '−' : '+'}</button>
@@ -1373,6 +1445,22 @@ export const ChineseMillsImportPanel: React.FC = () => {
 
       {summary && (
         <div className="bg-white rounded-2xl border border-slate-200 shadow-xs p-5 sm:p-6 space-y-4">
+          {/* §11-16: "Cancel Entire Import" - abandons the CURRENT import
+              session/operation entirely, distinct from Deselect All (rows
+              only), closing the review window, or the pre-execution "Cancel
+              Import" button on the Final Confirmation modal (which only
+              declines that one confirmation, leaving the session open).
+              Always reachable at the top of the loaded session, regardless
+              of scroll position or which review window is open. */}
+          <div className="flex items-center justify-between gap-2">
+            <span className="text-[11px] text-slate-500 font-bold truncate">{file?.name || ''}</span>
+            {canManageImport && (
+              <button type="button" onClick={() => setShowCancelEntireConfirm(true)} className="shrink-0 px-3 py-1.5 text-[11px] font-bold text-red-700 bg-red-50 hover:bg-red-100 border border-red-200 rounded-lg cursor-pointer">
+                {t('إلغاء عملية الرفع بالكامل', 'Cancel Entire Import', language)}
+              </button>
+            )}
+          </div>
+
           {/* §3: top-of-screen counts, computed ONLY from actual row state (computeSelectionCounts) - never invented. */}
           <div className="flex flex-wrap items-center gap-2">
             {[
@@ -1540,7 +1628,7 @@ export const ChineseMillsImportPanel: React.FC = () => {
           {isImporting ? (
             <div className="space-y-2 pt-2 border-t border-slate-100 sticky bottom-0 bg-white z-10">
               <div className="flex items-center justify-between text-xs font-bold text-slate-700">
-                <span>{cancelRequested ? t('جاري الإلغاء بعد اكتمال الدفعة الحالية...', 'Cancelling after the current batch finishes...', language) : t('جاري إرسال السجلات...', 'Writing records...', language)}</span>
+                <span>{cancelRequested ? t('جارٍ إلغاء الرفع بعد إتمام الدفعة الحالية', 'Canceling import after the current batch completes', language) : t('جاري إرسال السجلات...', 'Writing records...', language)}</span>
                 <span>{importProgress}%</span>
               </div>
               <div className="w-full h-3 bg-slate-100 rounded-full overflow-hidden">
@@ -1584,6 +1672,21 @@ export const ChineseMillsImportPanel: React.FC = () => {
             </p>
           )}
         </div>
+      )}
+
+      {/* §15: Cancel Entire Import confirmation - distinct action, distinct dialog. */}
+      {showCancelEntireConfirm && (
+        <Modal isOpen onClose={() => setShowCancelEntireConfirm(false)} title={t('إلغاء عملية الرفع بالكامل', 'Cancel Entire Import', language)} maxWidth="sm">
+          <div className="space-y-3 text-sm" dir={isRtl ? 'rtl' : 'ltr'}>
+            <p className="text-slate-800">
+              {t('سيتم إلغاء عملية الرفع بالكامل ولن يتم تسجيل السجلات المتبقية. هل تريد المتابعة؟', 'The entire import operation will be cancelled and the remaining records will not be imported. Continue?', language)}
+            </p>
+            <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-100">
+              <button type="button" onClick={() => setShowCancelEntireConfirm(false)} className="px-4 py-2 text-xs font-bold text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-lg cursor-pointer">{t('رجوع', 'Back', language)}</button>
+              <button type="button" onClick={handleCancelEntireImport} className="px-4 py-2 text-xs font-black text-white bg-red-600 hover:bg-red-700 rounded-lg cursor-pointer">{t('إلغاء عملية الرفع', 'Cancel Import', language)}</button>
+            </div>
+          </div>
+        </Modal>
       )}
 
       {/* Final Import Confirmation (§20-21) */}
@@ -1652,7 +1755,7 @@ export const ChineseMillsImportPanel: React.FC = () => {
                   {allWindowInvalidRows.length > 0 && (
                     <div className="space-y-1.5">
                       <h4 className="text-xs font-black text-red-800">{t(`يحتاج مراجعة (${allWindowInvalidRows.length})`, `Needs Review (${allWindowInvalidRows.length})`, language)}</h4>
-                      {renderInvalidStyleTable(allWindowInvalidRows)}
+                      {renderInvalidStyleTable(allWindowInvalidRows, 'REVIEW')}
                     </div>
                   )}
                   <div className="space-y-1.5">
@@ -1661,7 +1764,7 @@ export const ChineseMillsImportPanel: React.FC = () => {
                   </div>
                 </>
               ) : reviewWindow.mode === 'INVALID' ? (
-                renderInvalidStyleTable(reviewWindowRows)
+                renderInvalidStyleTable(reviewWindowRows, 'REVIEW')
               ) : (
                 renderMainReviewTable(reviewWindowRows)
               )}

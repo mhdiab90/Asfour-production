@@ -259,16 +259,57 @@ test("TEST 13 - Select All scoped to one review window never touches rows outsid
   assert.equal(rows.filter((r) => r.rowIndex >= 1000 && getRowSelection(r) === 'EXCLUDED').length, 15, 'rows outside the window scope are completely untouched');
 });
 
-// PENDING rows are never swept by a scoped bulk action either (mirrors TEST 8
-// in chineseMillsSelection.test.ts, re-verified in the scoped-selection path).
-test('a PENDING row inside the review window scope is left untouched by scoped Select All (needs its own explicit re-include)', () => {
+// SUPERSEDED design decision, kept as a note: an earlier version of this
+// fix left PENDING/blocking rows untouched by bulk selection entirely. That
+// turned out to be the ROOT CAUSE of a real production bug: the review
+// modal's row checkbox reads getRowSelection(row) === 'INCLUDED', so a row
+// this function always skipped could NEVER show as checked, no matter how
+// many times "Select All" was clicked - a user manually testing the live
+// site confirmed individual checkboxes worked but Select All visibly did
+// nothing. The corrected behavior (matching Pressing's own proven pattern,
+// which has no PENDING state at all) is: Select All/Deselect All give EVERY
+// row, including blocking ones, a real INCLUDED/EXCLUDED decision. A
+// blocking row still never becomes writable - isChineseMillsRowWritable's
+// OWN errors.length check is a separate, independent gate.
+test('a PENDING/blocking row inside the review window scope IS swept by scoped Select All (selectable for review, still never writable)', () => {
   const pending = makeRow({ rowIndex: 1, rowSelection: 'PENDING', errors: ['duplicate row'] });
   const clean = makeRow({ rowIndex: 2 });
   const rows = [pending, clean];
   const scope = new Set([1, 2]);
   const after = applyScopedBulkSelection(rows, 'ALL', scope);
-  assert.equal(getRowSelection(after[0]), 'PENDING', 'PENDING rows are never silently flipped to INCLUDED by a bulk action');
+  assert.equal(getRowSelection(after[0]), 'INCLUDED', 'the blocking row IS selected by Select All - this is what makes its checkbox actually become checked');
+  assert.equal(isChineseMillsRowWritable(after[0]), false, 'but it is still never writable - the errors.length check in isChineseMillsRowWritable is untouched by selection');
   assert.equal(getRowSelection(after[1]), 'INCLUDED');
+});
+
+// TEST §7 (§23 of the current task): the EXACT regression - reproduce the
+// rendered checkbox's `checked` expression itself
+// (checked={getRowSelection(row) === 'INCLUDED'}, exactly as
+// ChineseMillsImportPanel.tsx's renderMainReviewTable and (since the fix)
+// renderInvalidStyleTable's REVIEW-mode checkbox both use), not merely "is
+// the row in some Set." Before the fix this stayed false for every blocking
+// row after Select All; after the fix it becomes true for every row in
+// scope, exactly matching manual re-include's effect.
+test('regression: the rendered checkbox checked-expression becomes true for every row (including blocking) after Select All, exactly like manual re-include does', () => {
+  const rows = [
+    makeRow({ rowIndex: 1 }), // clean
+    makeRow({ rowIndex: 2, rowSelection: 'PENDING', errors: ['missing customer code'] }), // blocking
+    makeRow({ rowIndex: 3, rowSelection: 'EXCLUDED', exclusionReason: 'USER_DESELECTED' }), // previously deselected
+  ];
+  const checkboxCheckedBefore = rows.map((r) => getRowSelection(r) === 'INCLUDED');
+  assert.deepEqual(checkboxCheckedBefore, [true, false, false], 'sanity: before Select All, rows 2 and 3 render unchecked');
+
+  const scope = new Set(rows.map((r) => r.rowIndex));
+  const afterSelectAll = applyScopedBulkSelection(rows, 'ALL', scope);
+  const checkboxCheckedAfter = afterSelectAll.map((r) => getRowSelection(r) === 'INCLUDED');
+  assert.deepEqual(checkboxCheckedAfter, [true, true, true], 'EVERY rendered checkbox (the same checked={getRowSelection(row) === "INCLUDED"} expression the UI uses) must become true after Select All - this is the exact bug: it must not merely update a counter or an unrelated Set');
+
+  // Manual re-include on a single row (what "the individual checkbox works" already did before this fix) produces the exact SAME checked value as Select All - one authoritative mechanism, not two.
+  const manuallyReincluded = { ...rows[1], rowSelection: 'INCLUDED' as const, exclusionReason: undefined };
+  assert.equal(getRowSelection(manuallyReincluded) === 'INCLUDED', checkboxCheckedAfter[1], 'manual single-row selection and bulk Select All must produce identical checked state for the same row');
+
+  const afterDeselectAll = applyScopedBulkSelection(afterSelectAll, 'NONE', scope);
+  assert.deepEqual(afterDeselectAll.map((r) => getRowSelection(r) === 'INCLUDED'), [false, false, false], 'Deselect All must likewise flip every rendered checkbox back to unchecked, including the blocking row');
 });
 
 console.log(`\n${passed} passed, ${failed} failed`);

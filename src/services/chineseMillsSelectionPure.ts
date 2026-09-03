@@ -50,16 +50,17 @@ export function matchesWarningApproved(row: ChineseMillsImportRow): boolean {
 
 /**
  * INVALID / NEEDS REVIEW: rows that require a user decision before they can
- * ever be imported - currently PENDING (blocking error, parked out of the
- * bulk-selectable set entirely, §406 in the panel) OR still INCLUDED/EXCLUDED
- * but carrying an unresolved condition (unaccepted warning, a smart-match
- * proposal still PENDING, an unresolved Actual Rate/Customer Code decision).
- * Deliberately does NOT include a row whose only issue is an ALREADY-accepted
- * warning (matchesWarningApproved) - task §8 requires WARNING to not be
- * reclassified as INVALID unless it genuinely still blocks the row.
+ * ever be imported - has a BLOCKING error (INTRINSIC: row.errors.length > 0,
+ * never the mutable rowSelection field - see the root-cause note on
+ * computeBulkSelectionOutcome below for why) OR still carries an unresolved
+ * condition (unaccepted warning, a smart-match proposal still PENDING, an
+ * unresolved Actual Rate/Customer Code decision). Deliberately does NOT
+ * include a row whose only issue is an ALREADY-accepted warning
+ * (matchesWarningApproved) - task §8 requires WARNING to not be reclassified
+ * as INVALID unless it genuinely still blocks the row.
  */
 export function matchesInvalidNeedsReview(row: ChineseMillsImportRow): boolean {
-  if (getRowSelection(row) === 'PENDING') return true;
+  if (row.errors.length > 0) return true;
   if (row.warnings.length > 0 && !row.warningsAccepted) return true;
   if ((row.proposedMatches || []).some((m) => m.decision === 'PENDING')) return true;
   if (row.actualRateDecision === 'PENDING') return true;
@@ -71,17 +72,35 @@ export type BulkSelectionMode = 'ALL' | 'NONE' | 'VALID' | 'READY' | 'CORRECTED'
 
 /**
  * Pure decision function behind handleBulkSelection: given one row and a
- * mode, decide its NEW rowSelection. PENDING rows are never touched by bulk
- * selection (§2 - a selected BLOCKING row must never become importable by
- * being swept into a bulk action; it needs its own explicit Re-include).
- * Returns `null` when the row should be left completely unchanged (only
- * happens for PENDING rows).
+ * mode, decide its NEW rowSelection.
+ *
+ * ROOT CAUSE FIX: a row with a blocking error is parked as rowSelection
+ * 'PENDING' at parse time (§ Row-Based Review Part 6). The PREVIOUS version
+ * of this function treated 'PENDING' as "never touched by bulk selection" -
+ * intended to stop a blocking row from becoming importable via a careless
+ * Select All, but it actually broke Select All/Deselect All entirely for
+ * every blocking row: the checkbox in the review modal reads
+ * getRowSelection(row) === 'INCLUDED', so a row this function always skipped
+ * could NEVER visually check, no matter how many times Select All was
+ * clicked - exactly the reported "individual checkbox works, Select All does
+ * nothing" bug (manual re-include/exclude call other handlers directly and
+ * were never gated here). This mirrors Pressing's OWN proven pattern
+ * exactly: Pressing has no PENDING state at all - EVERY row, blocking or
+ * not, gets an explicit INCLUDED/EXCLUDED decision from Select All/Deselect
+ * All (see pressingSelectionPure.ts's computePressingBulkOutcome), and
+ * "blocking" is a purely DERIVED, INTRINSIC classification
+ * (isRowReadyToImport/errors.length) that is completely independent of
+ * selection state. Selection ("is this row part of my reviewed batch") and
+ * writability ("can this row actually be written right now") are two
+ * separate questions - isChineseMillsRowWritable's OWN errors.length check
+ * already guarantees a blocking row can never be written regardless of
+ * whether it is now selected, so there is no safety reason to also gate it
+ * here. Never returns null anymore - every row gets a real decision.
  */
 export function computeBulkSelectionOutcome(
   row: ChineseMillsImportRow,
   mode: BulkSelectionMode
 ): { rowSelection: 'INCLUDED' | 'EXCLUDED'; exclusionReason?: 'USER_DESELECTED' } | null {
-  if (getRowSelection(row) === 'PENDING') return null;
   if (mode === 'ALL') return { rowSelection: 'INCLUDED' };
   if (mode === 'NONE') return { rowSelection: 'EXCLUDED', exclusionReason: 'USER_DESELECTED' };
   const matches =
