@@ -73,6 +73,8 @@ export interface ImportAuditEntry {
   metadataSource?: ImportHistorySource;
   /** The original recorded audit sentence, carried verbatim so the real wording/numbers are always visible even when they could not be parsed into typed fields. */
   rawDetails?: string;
+  /** False when the original import execution never generated/recorded a real, unique ImportId (the legacy executeBatchImport path) - importBatchId is then a synthetic-but-never-fabricated key, never to be displayed as a recorded ImportId. See importHistoryPure.ts. */
+  hasRecordedImportId?: boolean;
 }
 
 // In-memory quick lookup cache

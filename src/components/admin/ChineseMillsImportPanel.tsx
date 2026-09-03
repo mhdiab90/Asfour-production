@@ -235,6 +235,20 @@ export const ChineseMillsImportPanel: React.FC = () => {
   const [importResult, setImportResult] = useState<{ total: number; imported: number; failed: number; skipped: number; pending: number; excluded: number; cancelled: number; importId: string } | null>(null);
   /** §7: checked at BATCH BOUNDARIES only (see executeChineseMillsBatchImport's shouldCancel param) - a ref, not state, so the running import loop reads the latest value synchronously without needing to be re-created on every render. */
   const cancelImportRef = useRef(false);
+  /**
+   * AUDIT FINDING (Complete Historical Import History task, §3/§8): the
+   * "Confirm" button below had no disabled/guard state at all - only
+   * setIsImporting(true) (async React state) protected against a second
+   * invocation, which does not close a fast-double-click race (both clicks
+   * can fire handleConfirmImport before either state update commits). Each
+   * invocation generates its own fresh ImportId and writes a full batch, so
+   * a double-click could double-import (and double-write) the SAME
+   * selected rows under two different ImportIds - a very plausible
+   * explanation for two same-row-count operations in Import History. A
+   * ref updates synchronously, unlike state, so this closes the race the
+   * `disabled={isImporting}` attribute alone cannot.
+   */
+  const isConfirmingImportRef = useRef(false);
   const [cancelRequested, setCancelRequested] = useState(false);
 
   const [editRowState, setEditRowState] = useState<{ rowIndex: number } | null>(null);
@@ -1149,8 +1163,18 @@ export const ChineseMillsImportPanel: React.FC = () => {
    * review session (§32: isolate, don't fail the whole batch).
    */
   const handleConfirmImport = async () => {
+    // §3/§8 fix: closes the double-click race a plain isImporting state
+    // check cannot (see isConfirmingImportRef's own comment) - a ref reads
+    // and writes synchronously, so the SECOND of two near-simultaneous
+    // clicks is refused here even before React has re-rendered the button
+    // as disabled.
+    if (isConfirmingImportRef.current) return;
+    isConfirmingImportRef.current = true;
     setShowFinalConfirm(false);
-    if (writableRows.length === 0 || !summary) return;
+    if (writableRows.length === 0 || !summary) {
+      isConfirmingImportRef.current = false;
+      return;
+    }
     setIsImporting(true);
     setImportProgress(0);
     cancelImportRef.current = false;
@@ -1223,6 +1247,7 @@ export const ChineseMillsImportPanel: React.FC = () => {
       setIsImporting(false);
       cancelImportRef.current = false;
       setCancelRequested(false);
+      isConfirmingImportRef.current = false;
     }
   };
 
@@ -2450,7 +2475,12 @@ export const ChineseMillsImportPanel: React.FC = () => {
                       return (
                         <tr key={h.importBatchId} className="border-b border-slate-100 hover:bg-slate-50/40">
                           <td className="py-1.5 px-2 font-mono text-slate-500">
-                            {h.importBatchId}
+                            {/* §6/§8/§10: the legacy generic import path never generated a real, unique ImportId (see hasReliableImportId) - the synthetic LEGACY-<id> merge key must never be shown as if it were a recorded ImportId. */}
+                            {h.hasRecordedImportId === false ? (
+                              <span className="text-slate-400 italic">{t('لم يُسجَّل رقم عملية (مسار استيراد قديم)', 'No ImportId recorded (legacy import path)', language)}</span>
+                            ) : (
+                              h.importBatchId
+                            )}
                             {h.metadataSource === 'AUDIT_LOG' && (
                               <span className="ms-1 text-[9px] font-bold px-1 py-0.5 rounded border bg-slate-100 text-slate-600 border-slate-300" title={t('أُعيد بناء هذه العملية من سجل التدقيق - بيانات أقل تفصيلًا.', 'Reconstructed from the audit trail - limited metadata.', language)}>
                                 {t('بيانات محدودة', 'limited', language)}
@@ -2471,7 +2501,14 @@ export const ChineseMillsImportPanel: React.FC = () => {
                             <div className="flex items-center gap-1">
                               <button type="button" onClick={() => openHistoryDetail(h)} className="px-2 py-1 bg-sky-50 hover:bg-sky-100 text-sky-700 rounded-md cursor-pointer font-bold">{t('عرض التفاصيل', 'View Details', language)}</button>
                               {canDeletePermanently && (
-                                <button type="button" onClick={() => openRollbackConfirm(h)} className="px-2 py-1 bg-red-50 hover:bg-red-100 text-red-700 rounded-md cursor-pointer font-bold">{t('حذف', 'Delete', language)}</button>
+                                // §17: rollback is keyed to a real ImportId stamped on the written documents - a legacy entry with no recorded ImportId can never be matched to its records, so the action is disabled (never silently no-ops as if it worked) rather than shown as if it could delete anything.
+                                <button
+                                  type="button"
+                                  disabled={h.hasRecordedImportId === false}
+                                  title={h.hasRecordedImportId === false ? t('غير متاح - لا يوجد رقم عملية مسجل لهذه العملية القديمة.', 'Not available - this legacy operation has no recorded ImportId.', language) : undefined}
+                                  onClick={() => openRollbackConfirm(h)}
+                                  className="px-2 py-1 bg-red-50 hover:bg-red-100 text-red-700 rounded-md cursor-pointer font-bold disabled:opacity-40 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-400"
+                                >{t('حذف', 'Delete', language)}</button>
                               )}
                             </div>
                           </td>
@@ -2488,7 +2525,7 @@ export const ChineseMillsImportPanel: React.FC = () => {
 
       {/* §8-9: Import Details - aggregate counts (from the history entry) + record-level table of the rows ACTUALLY imported for this ImportId. */}
       {historyDetail && (
-        <Modal isOpen onClose={() => { setHistoryDetail(null); setHistoryDetailRows(null); }} title={t('تفاصيل عملية الرفع', 'Import Details', language)} subtitle={historyDetail.importBatchId} maxWidth="4xl">
+        <Modal isOpen onClose={() => { setHistoryDetail(null); setHistoryDetailRows(null); }} title={t('تفاصيل عملية الرفع', 'Import Details', language)} subtitle={historyDetail.hasRecordedImportId === false ? t('لم يُسجَّل رقم عملية (مسار استيراد قديم)', 'No ImportId recorded (legacy import path)', language) : historyDetail.importBatchId} maxWidth="4xl">
           <div className="space-y-4" dir={isRtl ? 'rtl' : 'ltr'}>
             <div className="flex flex-wrap items-center gap-2">
               {[
@@ -2650,7 +2687,7 @@ export const ChineseMillsImportPanel: React.FC = () => {
               >
                 {t('إلغاء الرفع', 'Cancel Import', language)}
               </button>
-              <button type="button" onClick={handleConfirmImport} className="px-4 py-2 text-xs font-black text-white bg-emerald-600 hover:bg-emerald-700 rounded-lg cursor-pointer">{t('تأكيد', 'Confirm', language)}</button>
+              <button type="button" disabled={isImporting} onClick={handleConfirmImport} className="px-4 py-2 text-xs font-black text-white bg-emerald-600 hover:bg-emerald-700 rounded-lg cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed">{t('تأكيد', 'Confirm', language)}</button>
             </div>
           </div>
         </Modal>

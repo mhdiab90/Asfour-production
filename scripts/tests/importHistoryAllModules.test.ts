@@ -24,6 +24,7 @@ import {
   mergeImportHistorySources,
   deriveImportFinalStatus,
   filterImportHistory,
+  hasReliableImportId,
   AuditLogLike,
 } from '../../src/services/importHistoryPure';
 
@@ -193,6 +194,106 @@ test('TEST 20 - history derivation touches only metadata sources (importAuditTra
   const sourcesRead = ['importAuditTrail', 'auditLogs'];
   assert.ok(!sourcesRead.includes('production'), 'Pressing production records are never scanned to build history');
   assert.ok(!sourcesRead.some((s) => s.startsWith('stage_')), 'no stage_* production collection is scanned to build history');
+});
+
+// ==========================================================================
+// AUDIT AND FIX HISTORICAL IMPORT HISTORY task - the follow-up audit that
+// found the legacy `executeBatchImport` path (Rotary Furnace, Tube/Ball
+// "Mills", Mortar/Concrete, Mixing, Lightweight Foam, Sorting) stamps the
+// LITERAL CONSTANT STRING 'excel_import' as documentId on EVERY invocation,
+// for EVERY stage, forever - so the previous version of mergeImportHistorySources
+// (keyed purely by importBatchId) silently collapsed every legacy import
+// ever run, across every module, into a single entry. That is precisely why
+// Mills never appeared correctly. Fixed via hasReliableImportId + a
+// per-document synthetic fallback key (LEGACY-<auditLog doc id>) that is
+// never displayed as a real ImportId.
+// ==========================================================================
+
+/** Exactly the shape historicalImportService.ts's executeBatchImport records for the generic legacy path - note the constant 'excel_import' documentId. */
+function makeLegacyLog(overrides: Partial<AuditLogLike> & { logId: string; stageCollection: string; importedCount: number; stageLabel: string }): AuditLogLike {
+  return {
+    id: overrides.logId,
+    action: 'BULK_IMPORT',
+    collection: overrides.stageCollection,
+    documentId: 'excel_import',
+    username: overrides.username ?? 'admin@asfour.com',
+    userId: overrides.userId ?? 'uid-1',
+    timestamp: overrides.timestamp ?? '2026-07-01T08:00:00.000Z',
+    details: `تم استيراد ${overrides.importedCount} سجل لمرحلة ${overrides.stageLabel} من ملف Excel`,
+  };
+}
+
+// §8/TEST 6: Chinese Mills 1607/1607 investigation.
+test('TEST 6 - two Chinese Mills entries with DIFFERENT real ImportIds (even with the same row count) are genuine separate operations - never merged', () => {
+  const opA: AuditLogLike = { ...chineseMillsLog, documentId: 'HIST-IMP-CM-1700000000000-aaaa', timestamp: '2026-08-10T08:00:00.000Z', details: 'استيراد تاريخي للطواحين الصينية: 1607 سجل بنجاح من أصل 1607' };
+  const opB: AuditLogLike = { ...chineseMillsLog, documentId: 'HIST-IMP-CM-1700086400000-bbbb', timestamp: '2026-08-11T08:00:00.000Z', details: 'استيراد تاريخي للطواحين الصينية: 1607 سجل بنجاح من أصل 1607' };
+  const merged = mergeImportHistorySources([], [importHistoryEntryFromAuditLog(opA)!, importHistoryEntryFromAuditLog(opB)!]);
+  assert.equal(merged.length, 2, 'two distinct ImportIds -> two distinct operations, even though the row count (1607) happens to match');
+  assert.notEqual(merged[0].importBatchId, merged[1].importBatchId);
+  assert.ok(merged.every((m) => m.hasRecordedImportId), 'both have real recorded ImportIds - this is the genuine-separate-uploads case, not the collapsing bug');
+});
+
+test('TEST 6b - the SAME ImportId appearing twice (a genuine duplicate read, or the SAME operation in both sources) IS deduplicated into one entry', () => {
+  const sameOpTwice: AuditLogLike = { ...chineseMillsLog, documentId: 'HIST-IMP-CM-1700000000000-aaaa' };
+  const merged = mergeImportHistorySources([], [importHistoryEntryFromAuditLog(sameOpTwice)!, importHistoryEntryFromAuditLog(sameOpTwice)!]);
+  assert.equal(merged.length, 1, 'the SAME ImportId is never shown as two separate operations');
+});
+
+// ROOT CAUSE (§6/§8): the legacy sentinel 'excel_import' is not a reliable per-operation identity.
+test('hasReliableImportId distinguishes real generated ImportIds (HIST-IMP- prefix) from the legacy excel_import sentinel', () => {
+  assert.equal(hasReliableImportId('HIST-IMP-1700000000000-abcd'), true);
+  assert.equal(hasReliableImportId('HIST-IMP-CM-1700000000000-abcd'), true);
+  assert.equal(hasReliableImportId('excel_import'), false);
+  assert.equal(hasReliableImportId(undefined), false);
+  assert.equal(hasReliableImportId(''), false);
+});
+
+// TEST 7: legacy import with no ImportId -> never fabricated, but also never silently hidden.
+test('TEST 7 - a legacy import with no real ImportId is represented (never fabricated an ImportId) and flagged hasRecordedImportId=false', () => {
+  const legacy = makeLegacyLog({ logId: 'auditdoc-legacy-1', stageCollection: 'stage_tube_ball_mills', importedCount: 240, stageLabel: 'tube_ball_mills' });
+  const entry = importHistoryEntryFromAuditLog(legacy)!;
+  assert.equal(entry.hasRecordedImportId, false);
+  assert.equal(entry.stage, 'tube_ball_mills', 'the STAGE is still correctly known (from `collection`), even though no ImportId was ever recorded');
+  assert.equal(entry.importedCount, 240, 'the one number the legacy sentence DID record is still surfaced');
+  assert.notEqual(entry.importBatchId, 'excel_import', 'the shared constant sentinel is never used AS the operation identity');
+  assert.ok(entry.importBatchId.startsWith('LEGACY-'), 'a clearly-synthetic, never-displayed-as-real key');
+});
+
+// THE ACTUAL BUG THIS TASK FOUND: without the fix, every legacy operation
+// (any stage, any date) collapses into the Map's last-write-wins entry
+// because they all share documentId 'excel_import'. Prove the fix keeps
+// them separate - across DIFFERENT stages AND the same stage on different days.
+test('ROOT CAUSE FIX - multiple distinct legacy operations (different stages, different runs) are NOT collapsed into one, unlike before this fix', () => {
+  const mills1 = makeLegacyLog({ logId: 'auditdoc-mills-1', stageCollection: 'stage_tube_ball_mills', importedCount: 240, stageLabel: 'tube_ball_mills', timestamp: '2026-06-01T08:00:00.000Z' });
+  const mills2 = makeLegacyLog({ logId: 'auditdoc-mills-2', stageCollection: 'stage_tube_ball_mills', importedCount: 88, stageLabel: 'tube_ball_mills', timestamp: '2026-06-15T08:00:00.000Z' });
+  const rotary1 = makeLegacyLog({ logId: 'auditdoc-rotary-1', stageCollection: 'stage_rotary_furnace', importedCount: 500, stageLabel: 'rotary_furnace', timestamp: '2026-06-20T08:00:00.000Z' });
+  const entries = [mills1, mills2, rotary1].map(importHistoryEntryFromAuditLog).filter((e): e is NonNullable<typeof e> => e !== null);
+  // Sanity: this is exactly the failure mode being fixed - all three share the SAME raw documentId.
+  assert.equal(new Set([mills1, mills2, rotary1].map((l) => l.documentId)).size, 1, "sanity: all three legacy logs share the SAME raw documentId ('excel_import')");
+  const merged = mergeImportHistorySources([], entries);
+  assert.equal(merged.length, 3, 'all three distinct legacy operations survive - none silently overwritten by the next one processed');
+  assert.equal(new Set(merged.map((m) => m.importBatchId)).size, 3, 'each got its own unique (synthetic, never-fabricated) key');
+});
+
+// TEST 3/TEST 10: Mills (tube_ball_mills) is a first-class module, filterable on its own.
+test('TEST 3/TEST 10 - one Mills (tube_ball_mills) BULK_IMPORT record -> one History operation, and the module filter isolates it', () => {
+  const mills = makeLegacyLog({ logId: 'auditdoc-mills-solo', stageCollection: 'stage_tube_ball_mills', importedCount: 60, stageLabel: 'tube_ball_mills' });
+  const entry = importHistoryEntryFromAuditLog(mills)!;
+  assert.equal(entry.stage, 'tube_ball_mills');
+  const all = [entry, importHistoryEntryFromAuditLog(chineseMillsLog)!, importHistoryEntryFromAuditLog(pressingLog)!];
+  assert.equal(filterImportHistory(all, { stage: 'tube_ball_mills' }).length, 1);
+  assert.equal(filterImportHistory(all, { stage: 'tube_ball_mills' })[0].importedCount, 60);
+});
+
+// TEST 12: Import Details must resolve the exact selected ImportId, never a neighboring one - proven by uniqueness of the merge key even under the legacy sentinel collision.
+test('TEST 12 - each operation (including two legacy ones from the same stage) keeps a distinct, individually addressable identity for "View Details"', () => {
+  const a = makeLegacyLog({ logId: 'doc-a', stageCollection: 'stage_mixing', importedCount: 10, stageLabel: 'mixing' });
+  const b = makeLegacyLog({ logId: 'doc-b', stageCollection: 'stage_mixing', importedCount: 20, stageLabel: 'mixing' });
+  const entryA = importHistoryEntryFromAuditLog(a)!;
+  const entryB = importHistoryEntryFromAuditLog(b)!;
+  assert.notEqual(entryA.importBatchId, entryB.importBatchId, 'opening "Details" for A can never resolve to B\'s data');
+  assert.equal(entryA.importedCount, 10);
+  assert.equal(entryB.importedCount, 20);
 });
 
 console.log(`\n${passed} passed, ${failed} failed`);

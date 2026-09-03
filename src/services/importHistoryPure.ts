@@ -36,6 +36,33 @@
 
 export type ImportHistorySource = 'AUDIT_TRAIL' | 'AUDIT_LOG';
 
+/**
+ * AUDIT FINDING (Complete Historical Import History task, §6/§8):
+ * `executeBatchImport` - the GENERIC legacy path used for every historical
+ * import stage EXCEPT Pressing and Chinese Mills (Rotary Furnace, Tube/Ball
+ * Mills "Mills", Mortar/Concrete, Mixing, Lightweight Foam, Sorting; see
+ * historicalImportService.ts) - calls
+ * `logAuditAction('BULK_IMPORT', collectionName, 'excel_import', ...)`.
+ * The THIRD argument (documentId) is the constant string `'excel_import'`
+ * on EVERY SINGLE invocation, for EVERY stage, for ALL TIME - never a real
+ * generated ImportId. The two working paths (Pressing, Chinese Mills) both
+ * generate a real one, always prefixed `HIST-IMP-`.
+ *
+ * The previous version of this module keyed its dedup Map purely by
+ * `importBatchId`, so every legacy-path operation across every stage
+ * collapsed into ONE entry (whichever was processed last), silently hiding
+ * every other legacy import ever run - the exact opposite of the "do not
+ * double-count" requirement, applied backwards. Fixed below by falling back
+ * to the audit log DOCUMENT's own Firestore-assigned id (never fabricated -
+ * it already exists) as the merge key whenever documentId is not a real
+ * ImportId, and flagging the entry so the UI shows "Historical metadata not
+ * recorded" for its ImportId rather than the misleading shared sentinel.
+ */
+const REAL_IMPORT_ID_PREFIX = 'HIST-IMP-';
+export function hasReliableImportId(documentId: string | undefined): boolean {
+  return !!documentId && documentId.startsWith(REAL_IMPORT_ID_PREFIX);
+}
+
 /** The subset of an auditLogs document this module needs. Mirrors auditService.ts's logAuditAction payload. */
 export interface AuditLogLike {
   id?: string;
@@ -71,6 +98,17 @@ export interface ImportHistoryEntryLike {
   backupId?: string;
   metadataSource?: ImportHistorySource;
   rawDetails?: string;
+  /**
+   * False when the ORIGINAL import execution never generated/recorded a
+   * real, unique ImportId (the legacy `executeBatchImport` path - see the
+   * comment on REAL_IMPORT_ID_PREFIX above). `importBatchId` is then a
+   * synthetic-but-never-fabricated key (`LEGACY-<auditLog doc id>`) used
+   * only so this one specific Firestore audit document is never silently
+   * merged with an unrelated one - the UI must show "Historical metadata
+   * not recorded" for the ImportId, never this synthetic value as if it
+   * were real (§6/§10).
+   */
+  hasRecordedImportId?: boolean;
 }
 
 /**
@@ -151,22 +189,42 @@ export function extractCountsFromAuditDetails(details: string | undefined): {
     };
   }
 
+  // Legacy generic path (executeBatchImport, historicalImportService.ts):
+  // "تم استيراد N سجل لمرحلة <stage> من ملف Excel" - only the imported
+  // count was ever recorded; total attempted/failed/skipped were not.
+  const legacy = text.match(/^تم استيراد\s*(\d+)\s*سجل لمرحلة/);
+  if (legacy) {
+    return { importedCount: Number(legacy[1]) };
+  }
+
   return {};
 }
 
-/** Reconstructs one history entry from a readable auditLogs BULK_IMPORT record. Only structurally-certain fields are populated; everything else stays undefined ("not recorded"). */
+/**
+ * Reconstructs one history entry from a readable auditLogs BULK_IMPORT
+ * record. Only structurally-certain fields are populated; everything else
+ * stays undefined ("not recorded"). §6/§8: when the original execution
+ * never recorded a real ImportId (the legacy `'excel_import'` sentinel),
+ * `importBatchId` falls back to this audit log DOCUMENT's own Firestore id
+ * (`log.id`, prefixed `LEGACY-` only so it is visually never mistaken for a
+ * real ImportId) - this keeps every distinct legacy operation as its own
+ * entry instead of silently collapsing them, without ever inventing an
+ * identifier that was not already there.
+ */
 export function importHistoryEntryFromAuditLog(log: AuditLogLike): ImportHistoryEntryLike | null {
   if (!isCompletedImportAuditLog(log)) return null;
   const stage = stageFromAuditCollection(log.collection);
   if (!stage) return null;
   const counts = extractCountsFromAuditDetails(log.details);
+  const hasRecordedImportId = hasReliableImportId(log.documentId);
   return {
-    importBatchId: (log.documentId || '').trim(),
+    importBatchId: hasRecordedImportId ? (log.documentId || '').trim() : `LEGACY-${log.id || log.documentId}`,
     stage,
     performedByName: log.username,
     performedBy: log.userId,
     performedAt: log.timestamp,
     metadataSource: 'AUDIT_LOG',
+    hasRecordedImportId,
     rawDetails: log.details,
     ...counts,
   };
@@ -178,6 +236,13 @@ export function importHistoryEntryFromAuditLog(log: AuditLogLike): ImportHistory
  * reconstructed AUDIT_LOG one for the same ImportId (never merged
  * field-by-field, so a partially-parsed sentence can never overwrite a real
  * recorded value). Sorted newest-first by performedAt.
+ *
+ * §6/§8: importAuditTrail entries ALWAYS carry a real generated ImportId
+ * (both working paths generate one before ever calling
+ * logHistoricalImportExecution), so only auditLogEntries can legitimately
+ * carry a synthetic `LEGACY-` key - each such key is unique per Firestore
+ * audit document by construction, so two genuinely distinct legacy
+ * operations are never accidentally collapsed into one.
  */
 export function mergeImportHistorySources(
   auditTrailEntries: ImportHistoryEntryLike[],
@@ -188,7 +253,7 @@ export function mergeImportHistorySources(
     if (e.importBatchId) byId.set(e.importBatchId, { ...e, metadataSource: 'AUDIT_LOG' });
   }
   for (const e of auditTrailEntries) {
-    if (e.importBatchId) byId.set(e.importBatchId, { ...e, metadataSource: 'AUDIT_TRAIL' });
+    if (e.importBatchId) byId.set(e.importBatchId, { ...e, metadataSource: 'AUDIT_TRAIL', hasRecordedImportId: true });
   }
   return Array.from(byId.values()).sort((a, b) => (b.performedAt || '').localeCompare(a.performedAt || ''));
 }
