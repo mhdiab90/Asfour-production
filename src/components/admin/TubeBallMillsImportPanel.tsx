@@ -12,7 +12,7 @@
  * its pure helpers.
  */
 import React, { useState, useEffect, useMemo, useRef } from 'react';
-import { AlertCircle, AlertTriangle, CheckCircle2, Edit3, Loader2, Upload, Ban, History, X, RotateCcw, FileSpreadsheet } from 'lucide-react';
+import { AlertCircle, AlertTriangle, CheckCircle2, Edit3, Loader2, Upload, Ban, History, X, RotateCcw, FileSpreadsheet, Download, ListChecks } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import { TubeBallMillsImportRow, TubeBallMillsImportSummary } from '../../types';
 import {
@@ -25,10 +25,12 @@ import {
   fetchMasterDataSafe,
   describeMasterDataLoadError,
   getTubeBallMillsImportedRowsByBatch,
+  downloadTubeBallMillsExcelTemplate,
   TUBE_BALL_MILL_MASTER_COLLECTION,
   BUNKER_COLLECTION,
   MasterDataLoadError,
 } from '../../services/tubeBallMillsHistoricalImportService';
+import { extractTubeBallMillsMasterDataGroups, summarizeMasterDataGroup, TubeBallMillsMasterDataExtraction, MasterDataEntityGroup } from '../../services/tubeBallMillsMasterDataExtractionPure';
 import {
   isTubeBallMillsRowWritable,
   isNonOverridableBlockingCondition,
@@ -56,6 +58,7 @@ import { SearchableCombobox, ComboboxOption } from '../common/SearchableCombobox
 import { TubeBallMillsDraft, saveDraft, getDraft, deleteDraft, logDraftOpened } from '../../services/tubeBallMillsDraftStorage';
 
 type FilterTab = 'ALL' | 'VALID' | 'WARNING' | 'DUPLICATE' | 'EXCLUDED';
+type MasterDataEntityGroupTab = 'mill' | 'material' | 'mixture' | 'bunker';
 
 function t(ar: string, en: string, language: 'ar' | 'en'): string {
   return language === 'ar' ? ar : en;
@@ -119,8 +122,17 @@ export const TubeBallMillsImportPanel: React.FC = () => {
   /** Gap-fix §7: session-local "Global Mapping" - a value the user explicitly resolves (accept suggestion / Code New / bunker pick) is remembered for every OTHER row sharing that same raw value for the rest of this session, without a second mapping system (reuses tubeBallMillsResolutionPure.ts's own ManualOverrideMap, already used by the pure resolution engine but never wired into this panel until now). */
   const [manualOverrides, setManualOverrides] = useState<ManualOverrideMap>({});
   /** Gap-fix §1/§2: inline "Code New Mill/Material/Bunker" mini-form target. */
-  const [codeNewTarget, setCodeNewTarget] = useState<{ rowIndex: number; domain: 'mill' | 'material' | 'bunker'; bunkerIndex?: number } | null>(null);
+  const [codeNewTarget, setCodeNewTarget] = useState<
+    | { mode: 'ROW'; rowIndex: number; domain: 'mill' | 'material' | 'bunker'; bunkerIndex?: number }
+    | { mode: 'GLOBAL'; domain: 'mill' | 'material' | 'bunker'; rawValue: string }
+    | null
+  >(null);
   const [codeNewForm, setCodeNewForm] = useState<{ code: string; name: string }>({ code: '', name: '' });
+
+  /** §3/§20: the dedicated Master Data Review Window - opens automatically right after a successful Excel parse (before any row is imported), scanning the WHOLE uploaded dataset for distinct Mill/Material/Mixture/Bunker values needing coding. Firebase-free/no writes - purely aggregates state already computed by parseAndValidateTubeBallMillsExcel. */
+  const [showMasterDataReview, setShowMasterDataReview] = useState(false);
+  const [masterDataReviewTab, setMasterDataReviewTab] = useState<MasterDataEntityGroupTab>('mill');
+  const [expandedMixtureGroups, setExpandedMixtureGroups] = useState<Set<string>>(new Set());
 
   const [reviewWindow, setReviewWindow] = useState<{ mode: 'VALID' | 'READY' | 'CORRECTED' | 'INVALID' | 'ALL'; source: 'LIVE' | 'DRAFT' } | null>(null);
   const [approveAllConfirm, setApproveAllConfirm] = useState<{ scopeRowIndexes: Set<number>; count: number } | null>(null);
@@ -229,6 +241,12 @@ export const TubeBallMillsImportPanel: React.FC = () => {
       const buffer = await uploaded.arrayBuffer();
       const parsed = await parseAndValidateTubeBallMillsExcel(buffer, language);
       setSummary(parsed);
+      // §2/§3: after the full-file scan, open the Master Data Review Window
+      // BEFORE any row is imported - the user reviews/resolves Mills,
+      // Materials, Mixtures, and Bunkers first; nothing is written to
+      // Firestore by parsing or by opening this window.
+      setShowMasterDataReview(true);
+      setMasterDataReviewTab('mill');
       if (canManageImport) {
         setIsCreatingBackup(true);
         try {
@@ -425,7 +443,35 @@ export const TubeBallMillsImportPanel: React.FC = () => {
     overrideKey(domain, normalizeCodeForComparison(rawValue)),
   ];
 
-  /** Mill/Material: resolves ONE row's field to an explicit entity (existing-dropdown pick, accepted suggestion, or a just-coded new record) and immediately re-runs the SAME authoritative revalidation the rest of the pipeline uses, so the matching error/status clear correctly instead of only patching the id/code/name fields. Scoped to this row only - Mill/Material corrections are not propagated session-wide here (see resolveBunkerForRow for the bunker domain, where §7 explicitly asks for that). */
+  /**
+   * The single shared propagation mechanism behind every "Apply to All"
+   * action (§4/§7/§12 of the Master-Data-Extraction task) across all three
+   * domains - Mill, Material, and Bunker. Registers the resolution as a
+   * session-wide manual override (the SAME ManualOverrideMap the Global
+   * Mapping mechanism already uses), then re-runs the authoritative
+   * revalidateTubeBallMillsRowFields on EVERY row. Because a mixture
+   * component's own material is resolved via the identical
+   * resolveMasterDataField('material', ..., manualOverrides) call inside
+   * that same revalidation (see the service's MIXTURE branch), a Material
+   * "Apply to All" correctly resolves BOTH plain-material rows AND every
+   * BOM component sharing that raw name in one pass - no separate
+   * component-patching logic needed (§11).
+   */
+  const applyGlobalResolution = (domain: 'mill' | 'material' | 'bunker', rawValue: string, entity: { id: string; code: string; name: string }, resolutionMethod: 'SUGGESTION_ACCEPTED' | 'MANUAL_SELECTION' | 'NEW_MASTER_DATA' = 'MANUAL_SELECTION') => {
+    const nextOverrides: ManualOverrideMap = { ...manualOverrides };
+    overrideKeysFor(domain, rawValue).forEach((k) => { nextOverrides[k] = entity; });
+    setManualOverrides(nextOverrides);
+    updateRows((rows) =>
+      rows.map((r) => {
+        const fields = extractFieldsFromRow(r);
+        const resolved = revalidateTubeBallMillsRowFields(fields, masterDataBundle, approvedMappings, language, nextOverrides, {}, r.bunkerAllocations);
+        return { ...r, ...resolved, isDuplicate: r.isDuplicate, duplicateType: r.duplicateType };
+      })
+    );
+    // §19: audit every Master Data resolution decision - EntityType/OriginalValue/SelectedMasterDataId/SelectedCode/ResolutionMethod/User/Timestamp (User+Timestamp captured internally by logAuditAction) - reuses the existing bracketed-tag auditLogs convention, never a second audit architecture.
+    logAuditAction('UPDATE', 'stage_tube_ball_mills', entity.id, `[MASTER_DATA_RESOLVED] النوع: ${domain} - القيمة الأصلية: ${rawValue} - المحدد: ${entity.name} (${entity.code}) - الطريقة: ${resolutionMethod}`).catch(() => {});
+  };
+  /** Mill/Material: resolves ONE row's field to an explicit entity (existing-dropdown pick, accepted suggestion, or a just-coded new record) and immediately re-runs the SAME authoritative revalidation the rest of the pipeline uses, so the matching error/status clear correctly instead of only patching the id/code/name fields. Scoped to this row only, via a one-off override never saved to session state - see applyGlobalResolution above for the "Apply to All" variant used by the Master Data Review Window. */
   const resolveFieldForRow = (rowIndex: number, domain: 'mill' | 'material', entity: { id: string; code: string; name: string }) => {
     updateRows((rows) =>
       rows.map((r) => {
@@ -466,21 +512,12 @@ export const TubeBallMillsImportPanel: React.FC = () => {
       })
     );
   };
-  /** Gap-fix §7: bunker resolution DOES propagate - the same raw bunker value ("54") resolves the same way for every row in this session that has it, via the shared manualOverrides map, while a row can still be individually overridden/excluded afterward through the same per-row controls. */
+  /** Gap-fix §7: bunker resolution DOES propagate - the same raw bunker value ("54") resolves the same way for every row in this session that has it, via applyGlobalResolution, while a row can still be individually overridden/excluded afterward through the same per-row controls. */
   const resolveBunkerForRow = (rowIndex: number, bunkerIndex: number, entity: { id: string; code: string; name: string }) => {
     const row = summary?.rows.find((r) => r.rowIndex === rowIndex);
     const bunkerRaw = row?.bunkerAllocations[bunkerIndex]?.bunkerRaw;
     if (!bunkerRaw) return;
-    const nextOverrides: ManualOverrideMap = { ...manualOverrides };
-    overrideKeysFor('bunker', bunkerRaw).forEach((k) => { nextOverrides[k] = entity; });
-    setManualOverrides(nextOverrides);
-    updateRows((rows) =>
-      rows.map((r) => {
-        const fields = extractFieldsFromRow(r);
-        const resolved = revalidateTubeBallMillsRowFields(fields, masterDataBundle, approvedMappings, language, nextOverrides, {}, r.bunkerAllocations);
-        return { ...r, ...resolved, isDuplicate: r.isDuplicate, duplicateType: r.duplicateType };
-      })
-    );
+    applyGlobalResolution('bunker', bunkerRaw, entity);
   };
   const applyBunkerSelection = (rowIndex: number, bunkerIndex: number, option: ComboboxOption | undefined) => {
     if (!option) return;
@@ -499,24 +536,53 @@ export const TubeBallMillsImportPanel: React.FC = () => {
     );
   };
 
-  /** §14: accept the suggested existing mixture rather than creating a duplicate. */
+  /**
+   * §9/§13/§14: accept the suggested existing mixture rather than creating
+   * a duplicate. Propagates to EVERY row sharing the exact same raw mixture
+   * string (§12 "Global Mapping" applied to mixtures) - not just the one
+   * row this action was triggered from, mirroring applyGlobalResolution's
+   * domain-wide propagation for Mill/Material/Bunker.
+   */
   const acceptSuggestedMixture = (rowIndex: number) => {
+    const source = summary?.rows.find((r) => r.rowIndex === rowIndex);
+    if (!source || !source.suggestedMixtureProductId) return;
+    const { suggestedMixtureProductId, suggestedMixtureProductName, materialTypeRaw } = source;
     updateRows((rows) =>
       rows.map((r) => {
-        if (r.rowIndex !== rowIndex || !r.suggestedMixtureProductId) return r;
+        if (r.materialTypeRaw !== materialTypeRaw || !r.isMixture || r.resolvedMixtureProductId) return r;
         const remainingErrors = r.errors.filter((e) => !e.includes('لا توجد خلطة') && !e.toLowerCase().includes('no matching mixture'));
         return {
           ...r,
-          resolvedMixtureProductId: r.suggestedMixtureProductId,
-          resolvedMixtureProductName: r.suggestedMixtureProductName,
+          resolvedMixtureProductId: suggestedMixtureProductId,
+          resolvedMixtureProductName: suggestedMixtureProductName,
           errors: remainingErrors,
           status: remainingErrors.length > 0 ? r.status : 'VALID',
         };
       })
     );
+    logAuditAction('UPDATE', 'stage_tube_ball_mills', suggestedMixtureProductId, `[MASTER_DATA_RESOLVED] النوع: mixture - القيمة الأصلية: ${materialTypeRaw} - المحدد: ${suggestedMixtureProductName} - الطريقة: SUGGESTION_ACCEPTED`).catch(() => {});
   };
 
-  /** §14/§46: creates a new mixture/BOM Product from this row's resolved components - gated on Master Data Add permission, never automatic. */
+  /** §13: "Choose Existing BOM" - an explicit user pick of any existing mixture/BOM Product for this raw mixture string, distinct from acceptSuggestedMixture's auto-computed findEquivalentMixture suggestion. Propagates to every row sharing the exact same raw mixture string, same as the other mixture-level actions. */
+  const chooseExistingMixtureGlobal = (originalMixtureValue: string, option: ComboboxOption | undefined) => {
+    if (!option) return;
+    updateRows((rows) =>
+      rows.map((r) => {
+        if (r.materialTypeRaw !== originalMixtureValue || !r.isMixture) return r;
+        const remainingErrors = r.errors.filter((e) => !e.includes('لا توجد خلطة') && !e.toLowerCase().includes('no matching mixture'));
+        return { ...r, resolvedMixtureProductId: option.id, resolvedMixtureProductCode: option.code, resolvedMixtureProductName: option.name, errors: remainingErrors, status: remainingErrors.length > 0 ? r.status : 'VALID' };
+      })
+    );
+    logAuditAction('UPDATE', 'stage_tube_ball_mills', option.id, `[MASTER_DATA_RESOLVED] النوع: mixture - القيمة الأصلية: ${originalMixtureValue} - المحدد: ${option.name} - الطريقة: MANUAL_SELECTION`).catch(() => {});
+  };
+
+  /**
+   * §9/§12/§14/§46: creates a new mixture/BOM Product from this row's
+   * resolved components - gated on Master Data Add permission, never
+   * automatic - then propagates the newly-created mixture to every OTHER
+   * row sharing the exact same raw mixture string, so a mixture appearing
+   * in hundreds of historical rows is coded once, not once per row.
+   */
   const createMixtureFromRow = async (rowIndex: number) => {
     const row = summary?.rows.find((r) => r.rowIndex === rowIndex);
     if (!row || !row.mixtureComponents) return;
@@ -534,12 +600,13 @@ export const TubeBallMillsImportPanel: React.FC = () => {
         row.materialTypeRaw,
         row.mixtureComponents.map((c) => ({ materialId: c.resolvedMaterialId!, materialCode: c.resolvedMaterialCode, materialName: c.resolvedMaterialName || c.materialNameRaw, quantityKg: c.quantityKg, percentage: c.percentage }))
       );
-      logAuditAction('CREATE', 'products', id, `[MASTER_DATA_CREATED] إنشاء خلطة/BOM جديدة: ${row.materialTypeRaw} - المستخدم: ${adminUser?.email || 'admin'}`).catch(() => {});
+      logAuditAction('CREATE', 'products', id, `[MASTER_DATA_CREATED] إنشاء خلطة/BOM جديدة (خلطات BOM): ${row.materialTypeRaw} - المستخدم: ${adminUser?.email || 'admin'}`).catch(() => {});
+      const materialTypeRaw = row.materialTypeRaw;
       updateRows((rows) =>
         rows.map((r) => {
-          if (r.rowIndex !== rowIndex) return r;
+          if (r.materialTypeRaw !== materialTypeRaw || !r.isMixture || r.resolvedMixtureProductId) return r;
           const remainingErrors = r.errors.filter((e) => !e.includes('لا توجد خلطة') && !e.toLowerCase().includes('no matching mixture'));
-          return { ...r, resolvedMixtureProductId: id, resolvedMixtureProductName: row.materialTypeRaw, errors: remainingErrors, status: remainingErrors.length > 0 ? r.status : 'VALID' };
+          return { ...r, resolvedMixtureProductId: id, resolvedMixtureProductName: materialTypeRaw, errors: remainingErrors, status: remainingErrors.length > 0 ? r.status : 'VALID' };
         })
       );
       await loadMasterData();
@@ -574,7 +641,7 @@ export const TubeBallMillsImportPanel: React.FC = () => {
     return { id, code: trimmedCode, name };
   };
 
-  /** Gap-fix §1/§2/§7: submits the inline "Code New Mill/Material/Bunker" mini-form - creates the record via the existing permission-gated/duplicate-checked/audited codeNewMasterDataItem, then resolves the row (and, for bunkers, every row sharing that raw bunker value this session) to the newly created record - never leaves it dangling after creation. */
+  /** Gap-fix §1/§2/§7, extended by the Master-Data-Extraction task's "Apply to All"/"Create New" for a whole aggregated group: submits the inline "Code New Mill/Material/Bunker" mini-form - creates the record via the existing permission-gated/duplicate-checked/audited codeNewMasterDataItem, then resolves either just the ONE row (mode ROW) or every row sharing that raw value this session (mode GLOBAL, via applyGlobalResolution) - never leaves it dangling after creation. */
   const submitCodeNew = async () => {
     if (!codeNewTarget) return;
     const name = codeNewForm.name.trim();
@@ -584,7 +651,9 @@ export const TubeBallMillsImportPanel: React.FC = () => {
     }
     const created = await codeNewMasterDataItem(codeNewTarget.domain, codeNewForm.code, name);
     if (!created) return;
-    if (codeNewTarget.domain === 'bunker' && codeNewTarget.bunkerIndex !== undefined) {
+    if (codeNewTarget.mode === 'GLOBAL') {
+      applyGlobalResolution(codeNewTarget.domain, codeNewTarget.rawValue, created, 'NEW_MASTER_DATA');
+    } else if (codeNewTarget.domain === 'bunker' && codeNewTarget.bunkerIndex !== undefined) {
       resolveBunkerForRow(codeNewTarget.rowIndex, codeNewTarget.bunkerIndex, created);
     } else if (codeNewTarget.domain === 'mill' || codeNewTarget.domain === 'material') {
       resolveFieldForRow(codeNewTarget.rowIndex, codeNewTarget.domain, created);
@@ -847,6 +916,15 @@ export const TubeBallMillsImportPanel: React.FC = () => {
   const excludedRows = useMemo(() => (summary ? summary.rows.filter((r) => getSelection(r) === 'EXCLUDED') : []), [summary]);
   const pendingRows = useMemo(() => (summary ? summary.rows.filter((r) => r.errors.length > 0) : []), [summary]);
   const selectionCounts = useMemo(() => computeSelectionCounts(summary?.rows || []), [summary]);
+  /** §2/§15: full-file Master Data extraction - deterministic, no Firestore access, recomputed whenever row state changes (a resolution action updates its own group's resolved/suggested fields immediately). */
+  const masterDataExtraction: TubeBallMillsMasterDataExtraction = useMemo(
+    () => extractTubeBallMillsMasterDataGroups(summary?.rows || []),
+    [summary]
+  );
+  const millGroupCounts = useMemo(() => summarizeMasterDataGroup(masterDataExtraction.mills), [masterDataExtraction]);
+  const materialGroupCounts = useMemo(() => summarizeMasterDataGroup(masterDataExtraction.materials), [masterDataExtraction]);
+  const mixtureGroupCounts = useMemo(() => summarizeMasterDataGroup(masterDataExtraction.mixtures), [masterDataExtraction]);
+  const bunkerGroupCounts = useMemo(() => summarizeMasterDataGroup(masterDataExtraction.bunkers), [masterDataExtraction]);
 
   const reviewWindowRows = useMemo(() => {
     if (!reviewWindow || !summary) return [];
@@ -900,10 +978,16 @@ export const TubeBallMillsImportPanel: React.FC = () => {
               <p className="text-sm font-bold text-slate-700">{t('اسحب ملف Excel هنا أو انقر للاختيار', 'Drag an Excel file here or click to select', language)}</p>
               <p className="text-[11px] text-slate-400 mt-1">{getTubeBallMillsImportHeadersDisplay(language)}</p>
             </label>
-            <button type="button" onClick={openHistoryModal} className="ms-3 flex items-center gap-1.5 px-3.5 py-2 text-xs font-bold text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-xl cursor-pointer shrink-0">
-              <History className="w-4 h-4" />
-              <span>{t('سجل عمليات الرفع التاريخية', 'Historical Import History', language)}</span>
-            </button>
+            <div className="ms-3 flex flex-col gap-2 shrink-0">
+              <button type="button" onClick={() => downloadTubeBallMillsExcelTemplate(language)} className="flex items-center gap-1.5 px-3.5 py-2 text-xs font-bold text-emerald-700 bg-emerald-50 hover:bg-emerald-100 rounded-xl cursor-pointer">
+                <Download className="w-4 h-4" />
+                <span>{t('تحميل نموذج Excel', 'Download Excel Template', language)}</span>
+              </button>
+              <button type="button" onClick={openHistoryModal} className="flex items-center gap-1.5 px-3.5 py-2 text-xs font-bold text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-xl cursor-pointer">
+                <History className="w-4 h-4" />
+                <span>{t('سجل عمليات الرفع التاريخية', 'Historical Import History', language)}</span>
+              </button>
+            </div>
           </div>
           {(isParsing || isCreatingBackup) && (
             <div className="flex items-center gap-2 text-xs text-slate-500"><Loader2 className="w-4 h-4 animate-spin" />{isParsing ? t('جاري تحليل الملف...', 'Parsing file...', language) : t('جاري إنشاء نسخة احتياطية وقائية...', 'Creating safety backup...', language)}</div>
@@ -976,6 +1060,13 @@ export const TubeBallMillsImportPanel: React.FC = () => {
           <button type="button" onClick={() => handleBulkSelection('VALID')} className="px-2.5 py-1.5 bg-slate-100 hover:bg-slate-200 rounded-lg cursor-pointer">{t('تحديد الصالح', 'Select Valid', language)}</button>
           <button type="button" onClick={() => handleBulkSelection('READY')} className="px-2.5 py-1.5 bg-slate-100 hover:bg-slate-200 rounded-lg cursor-pointer">{t('تحديد الجاهز', 'Select Ready', language)}</button>
           <button type="button" onClick={() => handleBulkSelection('CORRECTED')} className="px-2.5 py-1.5 bg-slate-100 hover:bg-slate-200 rounded-lg cursor-pointer">{t('تحديد المصحح', 'Select Corrected', language)}</button>
+          <button type="button" onClick={() => setShowMasterDataReview(true)} className="px-2.5 py-1.5 bg-violet-50 hover:bg-violet-100 text-violet-800 rounded-lg cursor-pointer flex items-center gap-1.5">
+            <ListChecks className="w-3.5 h-3.5" />
+            {t('مراجعة البيانات الأساسية', 'Master Data Review', language)}
+            {(millGroupCounts.unresolvedCount + materialGroupCounts.unresolvedCount + mixtureGroupCounts.unresolvedCount + bunkerGroupCounts.unresolvedCount) > 0 && (
+              <span className="px-1.5 py-0.5 bg-red-600 text-white rounded-full text-[10px] font-black">{millGroupCounts.unresolvedCount + materialGroupCounts.unresolvedCount + mixtureGroupCounts.unresolvedCount + bunkerGroupCounts.unresolvedCount}</span>
+            )}
+          </button>
           {canManageImport && <button type="button" onClick={() => setReviewWindow({ mode: 'ALL', source: 'LIVE' })} className="px-2.5 py-1.5 bg-sky-50 hover:bg-sky-100 text-sky-800 rounded-lg cursor-pointer">{t('فتح نافذة المراجعة الكاملة', 'Open Full Review Window', language)}</button>}
           {canManageImport && <button type="button" onClick={() => setReviewWindow({ mode: 'INVALID', source: 'LIVE' })} className="px-2.5 py-1.5 bg-red-50 hover:bg-red-100 text-red-800 rounded-lg cursor-pointer">{t('مراجعة السجلات التي تحتاج مراجعة', 'Review Needs-Review Records', language)}</button>}
           {canManageImport && <button type="button" onClick={handleSaveDraft} className="px-2.5 py-1.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-800 rounded-lg cursor-pointer">{t('حفظ كمسودة', 'Save as Draft', language)}</button>}
@@ -1126,6 +1217,7 @@ export const TubeBallMillsImportPanel: React.FC = () => {
 
       {renderEditRowModal()}
       {renderCodeNewModal()}
+      {renderMasterDataReviewModal()}
       {renderHistoryModal()}
 
       {deleteConfirm && (
@@ -1349,14 +1441,14 @@ export const TubeBallMillsImportPanel: React.FC = () => {
             )}
             <div className="mt-1 flex items-center gap-2 flex-wrap">
               <div className="max-w-xs"><SearchableCombobox options={materials} value={row.resolvedMaterialId} onChange={(_, opt) => applyMaterialSelection(row.rowIndex, opt)} placeholder={t('اختر خامة موجودة...', 'Choose existing material...', language)} /></div>
-              {canAddMasterData && <button type="button" onClick={() => { setCodeNewTarget({ rowIndex: row.rowIndex, domain: 'material' }); setCodeNewForm({ code: '', name: row.materialTypeRaw }); }} className="px-2 py-1 bg-emerald-50 hover:bg-emerald-100 text-emerald-800 rounded cursor-pointer font-bold shrink-0">{t('ترميز خامة جديدة', 'Code New Material', language)}</button>}
+              {canAddMasterData && <button type="button" onClick={() => { setCodeNewTarget({ mode: 'ROW', rowIndex: row.rowIndex, domain: 'material' }); setCodeNewForm({ code: '', name: row.materialTypeRaw }); }} className="px-2 py-1 bg-emerald-50 hover:bg-emerald-100 text-emerald-800 rounded cursor-pointer font-bold shrink-0">{t('ترميز خامة جديدة', 'Code New Material', language)}</button>}
             </div>
           </div>
         )}
         {!row.resolvedMillId && row.millTypeRaw && (
           <div className="flex items-center gap-2 flex-wrap">
             <div className="max-w-xs"><SearchableCombobox options={mills} value={row.resolvedMillId} onChange={(_, opt) => applyMillSelection(row.rowIndex, opt)} placeholder={t('اختر طاحونة موجودة...', 'Choose existing mill...', language)} /></div>
-            {canAddMasterData && <button type="button" onClick={() => { setCodeNewTarget({ rowIndex: row.rowIndex, domain: 'mill' }); setCodeNewForm({ code: '', name: row.millTypeRaw }); }} className="px-2 py-1 bg-emerald-50 hover:bg-emerald-100 text-emerald-800 rounded cursor-pointer font-bold shrink-0">{t('ترميز طاحونة جديدة', 'Code New Mill', language)}</button>}
+            {canAddMasterData && <button type="button" onClick={() => { setCodeNewTarget({ mode: 'ROW', rowIndex: row.rowIndex, domain: 'mill' }); setCodeNewForm({ code: '', name: row.millTypeRaw }); }} className="px-2 py-1 bg-emerald-50 hover:bg-emerald-100 text-emerald-800 rounded cursor-pointer font-bold shrink-0">{t('ترميز طاحونة جديدة', 'Code New Mill', language)}</button>}
           </div>
         )}
         {row.bunkerAllocations.length > 0 && (() => {
@@ -1380,7 +1472,7 @@ export const TubeBallMillsImportPanel: React.FC = () => {
                   ) : (
                     <>
                       <div className="w-40"><SearchableCombobox options={bunkers} value={undefined} onChange={(_, opt) => applyBunkerSelection(row.rowIndex, i, opt)} placeholder={t('اختر بنكر...', 'Choose bunker...', language)} /></div>
-                      {canAddMasterData && <button type="button" onClick={() => { setCodeNewTarget({ rowIndex: row.rowIndex, domain: 'bunker', bunkerIndex: i }); setCodeNewForm({ code: '', name: b.bunkerRaw }); }} className="px-1.5 py-1 bg-emerald-50 hover:bg-emerald-100 text-emerald-800 rounded cursor-pointer font-bold text-[10px] shrink-0">{t('ترميز بنكر جديد', 'Code New Bunker', language)}</button>}
+                      {canAddMasterData && <button type="button" onClick={() => { setCodeNewTarget({ mode: 'ROW', rowIndex: row.rowIndex, domain: 'bunker', bunkerIndex: i }); setCodeNewForm({ code: '', name: b.bunkerRaw }); }} className="px-1.5 py-1 bg-emerald-50 hover:bg-emerald-100 text-emerald-800 rounded cursor-pointer font-bold text-[10px] shrink-0">{t('ترميز بنكر جديد', 'Code New Bunker', language)}</button>}
                     </>
                   )}
                   <input type="number" value={b.allocatedTons} onChange={(e) => applyBunkerAllocationEdit(row.rowIndex, i, Number(e.target.value))} className="w-24 px-2 py-1 border border-slate-300 rounded text-end font-mono" />
@@ -1474,6 +1566,191 @@ export const TubeBallMillsImportPanel: React.FC = () => {
           </div>
         </div>
       </Modal>
+    );
+  }
+
+  /**
+   * §3/§4/§15/§20: the dedicated Master Data Review Window - opens
+   * automatically right after a full-file parse, before any row import.
+   * Four tabs (Mill/Material/Mixture/Bunker), each showing the aggregated,
+   * occurrence-counted groups from masterDataExtraction with Use
+   * Suggestion/Choose Existing/Create New/Apply to All actions - every
+   * action here calls applyGlobalResolution (or the mixture-level
+   * equivalents), which propagate to every row sharing that raw value AND
+   * never perform a Firestore write themselves (only Code New/Create BOM
+   * create Master Data, explicitly gated on canAddMasterData, exactly like
+   * the existing per-row actions).
+   */
+  function renderMasterDataReviewModal() {
+    if (!showMasterDataReview || !summary) return null;
+    const tabs: Array<{ key: MasterDataEntityGroupTab; labelAr: string; labelEn: string; groups: MasterDataEntityGroup[]; counts: { uniqueCount: number; resolvedCount: number; unresolvedCount: number } }> = [
+      { key: 'mill', labelAr: 'الطواحين', labelEn: 'Mills', groups: masterDataExtraction.mills, counts: millGroupCounts },
+      { key: 'material', labelAr: 'الخامات', labelEn: 'Materials', groups: masterDataExtraction.materials, counts: materialGroupCounts },
+      { key: 'mixture', labelAr: 'خلطات BOM', labelEn: 'BOM Mixtures', groups: masterDataExtraction.mixtures, counts: mixtureGroupCounts },
+      { key: 'bunker', labelAr: 'البناكر', labelEn: 'Bunkers', groups: masterDataExtraction.bunkers, counts: bunkerGroupCounts },
+    ];
+    const active = tabs.find((tb) => tb.key === masterDataReviewTab) || tabs[0];
+
+    return (
+      <Modal isOpen onClose={() => setShowMasterDataReview(false)} title={t('مراجعة البيانات الأساسية', 'Master Data Review', language)} maxWidth="4xl">
+        <div className="space-y-3" dir={isRtl ? 'rtl' : 'ltr'}>
+          {/* §15: Master-Data Review Summary */}
+          <div className="grid grid-cols-2 sm:grid-cols-5 gap-2 p-3 bg-slate-50 rounded-xl border border-slate-200 text-[11px]">
+            <div><span className="font-bold text-slate-500 block">{t('إجمالي الصفوف', 'Total Rows', language)}</span><span className="text-sm font-black text-slate-800">{summary.totalRows}</span></div>
+            <div><span className="font-bold text-slate-500 block">{t('جاهزة', 'Ready', language)}</span><span className="text-sm font-black text-emerald-700">{selectionCounts.willImport}</span></div>
+            <div><span className="font-bold text-slate-500 block">{t('مانعة', 'Blocking', language)}</span><span className="text-sm font-black text-red-700">{selectionCounts.blocking}</span></div>
+            <div><span className="font-bold text-slate-500 block">{t('محدد', 'Selected', language)}</span><span className="text-sm font-black text-slate-800">{selectionCounts.selected}</span></div>
+            <div><span className="font-bold text-slate-500 block">{t('مستبعد/متخطى', 'Excluded/Skipped', language)}</span><span className="text-sm font-black text-slate-800">{selectionCounts.excluded}</span></div>
+          </div>
+          <div className="flex flex-wrap gap-2 text-[11px]">
+            {tabs.map((tb) => (
+              <button
+                key={tb.key}
+                type="button"
+                onClick={() => setMasterDataReviewTab(tb.key)}
+                className={`px-3 py-1.5 rounded-lg font-bold cursor-pointer ${masterDataReviewTab === tb.key ? 'bg-violet-600 text-white' : 'bg-slate-100 text-slate-700 hover:bg-slate-200'}`}
+              >
+                {t(tb.labelAr, tb.labelEn, language)} ({tb.counts.resolvedCount}/{tb.counts.uniqueCount})
+              </button>
+            ))}
+          </div>
+          <div className="max-h-[55vh] overflow-y-auto border border-slate-100 rounded-xl p-2">
+            {active.key === 'mixture' ? renderMixtureGroupTable(active.groups) : renderEntityGroupTable(active.key as 'mill' | 'material' | 'bunker', active.groups)}
+          </div>
+          <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-100">
+            <button type="button" onClick={() => setShowMasterDataReview(false)} className="px-4 py-2 text-xs font-black text-white bg-violet-600 hover:bg-violet-700 rounded-lg cursor-pointer">{t('إغلاق ومتابعة المراجعة', 'Close & Continue Review', language)}</button>
+          </div>
+        </div>
+      </Modal>
+    );
+  }
+
+  /** §4/§5/§6/§17: Mill/Material/Bunker aggregated resolution table - one row per distinct value, occurrence count, existing-suggestion, dropdown for Choose Existing, Use Suggestion/Create New (permission-gated) Apply-to-All actions (every action here IS "apply to all" by construction - see applyGlobalResolution). */
+  function renderEntityGroupTable(domain: 'mill' | 'material' | 'bunker', groups: MasterDataEntityGroup[]) {
+    const options = domain === 'mill' ? mills : domain === 'material' ? materials : bunkers;
+    return (
+      <div className="overflow-x-auto">
+        <table className="w-full text-[11px] min-w-[820px]">
+          <thead className="sticky top-0 bg-slate-50 z-10">
+            <tr className="text-slate-500 border-b border-slate-200">
+              <th className="text-start py-1.5 px-2 font-bold">{t('القيمة الأصلية', 'Original Value', language)}</th>
+              <th className="text-end py-1.5 px-2 font-bold">{t('التكرار', 'Occurrences', language)}</th>
+              <th className="text-start py-1.5 px-2 font-bold">{t('المقترح', 'Suggested', language)}</th>
+              <th className="text-start py-1.5 px-2 font-bold">{t('المحدد', 'Selected', language)}</th>
+              <th className="text-start py-1.5 px-2 font-bold">{t('الحالة', 'Status', language)}</th>
+              <th className="text-start py-1.5 px-2 font-bold">{t('إجراءات', 'Action', language)}</th>
+            </tr>
+          </thead>
+          <tbody>
+            {groups.map((g) => (
+              <tr key={g.originalValue} className="border-b border-slate-100 align-top hover:bg-slate-50/40">
+                <td className="py-1.5 px-2 font-bold text-slate-800">{g.originalValue}</td>
+                <td className="py-1.5 px-2 text-end font-mono text-slate-600">{g.occurrences}</td>
+                <td className="py-1.5 px-2">
+                  {g.suggestedId ? <span className="text-sky-700">{g.suggestedName} {g.suggestedConfidence !== undefined ? `(${g.suggestedConfidence}%)` : ''}</span> : <span className="text-slate-300">—</span>}
+                </td>
+                <td className="py-1.5 px-2">
+                  {g.resolved ? (
+                    <span className="text-emerald-700 font-bold">{g.resolvedName}{g.resolvedCode ? ` (${g.resolvedCode})` : ''}</span>
+                  ) : (
+                    <div className="w-40"><SearchableCombobox options={options} value={undefined} onChange={(_, opt) => opt && applyGlobalResolution(domain, g.originalValue, { id: opt.id, code: opt.code, name: opt.name })} placeholder={t('اختر موجود...', 'Choose existing...', language)} /></div>
+                  )}
+                </td>
+                <td className="py-1.5 px-2">
+                  {g.resolved
+                    ? <span className="text-[10px] font-bold px-1.5 py-0.5 rounded border bg-emerald-100 text-emerald-800 border-emerald-300">{t('محلول', 'Resolved', language)}</span>
+                    : <span className="text-[10px] font-bold px-1.5 py-0.5 rounded border bg-red-100 text-red-800 border-red-300">{t('غير محلول', 'Unresolved', language)}</span>}
+                </td>
+                <td className="py-1.5 px-2">
+                  {!g.resolved && (
+                    <div className="flex items-center gap-1 flex-wrap">
+                      {g.suggestedId && <button type="button" onClick={() => applyGlobalResolution(domain, g.originalValue, { id: g.suggestedId!, code: g.suggestedCode || '', name: g.suggestedName || '' }, 'SUGGESTION_ACCEPTED')} className="px-1.5 py-1 bg-sky-600 text-white rounded cursor-pointer font-bold">{t('استخدام الاقتراح', 'Use Suggestion', language)}</button>}
+                      {canAddMasterData && <button type="button" onClick={() => { setCodeNewTarget({ mode: 'GLOBAL', domain, rawValue: g.originalValue }); setCodeNewForm({ code: '', name: g.originalValue }); }} className="px-1.5 py-1 bg-emerald-50 hover:bg-emerald-100 text-emerald-800 rounded cursor-pointer font-bold">{t('إنشاء جديد', 'Create New', language)}</button>}
+                    </div>
+                  )}
+                </td>
+              </tr>
+            ))}
+            {groups.length === 0 && <tr><td colSpan={6} className="text-center py-4 text-slate-400 text-xs">{t('لا توجد قيم لهذا النوع.', 'No values for this type.', language)}</td></tr>}
+          </tbody>
+        </table>
+      </div>
+    );
+  }
+
+  /** §9/§10/§11/§13: BOM Mixtures aggregated table - one entry per distinct raw mixture string, expandable to the full BOM component table (نسبة الخامة بالخلطة/كود الخامة/إسم الخامة/السعر/الإجمالي), Use Suggested BOM / Choose Existing BOM / Create New BOM actions. */
+  function renderMixtureGroupTable(groups: MasterDataEntityGroup[]) {
+    return (
+      <div className="space-y-2">
+        {groups.map((g) => {
+          const sampleRow = summary?.rows.find((r) => r.rowIndex === g.rowIndexes[0]);
+          const isExpanded = expandedMixtureGroups.has(g.originalValue);
+          const allComponentsResolved = !!sampleRow?.mixtureComponents?.every((c) => c.resolvedMaterialId);
+          return (
+            <div key={g.originalValue} className="border border-slate-200 rounded-xl p-2 space-y-1.5">
+              <div className="flex items-center justify-between gap-2 flex-wrap">
+                <div className="flex items-center gap-2 min-w-0">
+                  <button type="button" onClick={() => setExpandedMixtureGroups((prev) => { const next = new Set(prev); if (next.has(g.originalValue)) next.delete(g.originalValue); else next.add(g.originalValue); return next; })} className="px-1.5 py-1 bg-slate-100 hover:bg-slate-200 rounded cursor-pointer font-bold shrink-0">{isExpanded ? '−' : '+'}</button>
+                  <span className="font-bold text-slate-800 truncate">{g.originalValue}</span>
+                  <span className="text-[10px] text-slate-500 shrink-0">{t('تكرار', 'occ.', language)}: {g.occurrences}</span>
+                  {sampleRow?.mixtureTotalQuantityKg !== undefined && <span className="text-[10px] text-slate-500 shrink-0">{sampleRow.mixtureTotalQuantityKg} {t('كجم', 'kg', language)}</span>}
+                </div>
+                <div className="flex items-center gap-1.5 flex-wrap">
+                  {g.resolved ? (
+                    <span className="text-[10px] font-black px-1.5 py-0.5 rounded border bg-emerald-100 text-emerald-800 border-emerald-300">{t('خلطات BOM — محلول', 'BOM Mixture — Resolved', language)}: {g.resolvedName}</span>
+                  ) : (
+                    <>
+                      {g.suggestedId && <button type="button" onClick={() => acceptSuggestedMixture(g.rowIndexes[0])} className="px-1.5 py-1 bg-sky-600 text-white rounded cursor-pointer font-bold">{t('استخدام الخلطة المقترحة', 'Use Suggested BOM', language)}</button>}
+                      <div className="w-44"><SearchableCombobox options={mixtures.map((m) => ({ id: m.id, code: m.code, name: m.name }))} value={undefined} onChange={(_, opt) => chooseExistingMixtureGlobal(g.originalValue, opt)} placeholder={t('اختر خلطة موجودة...', 'Choose existing BOM...', language)} /></div>
+                      {canAddMasterData && <button type="button" disabled={!allComponentsResolved} onClick={() => createMixtureFromRow(g.rowIndexes[0])} className="px-1.5 py-1 bg-emerald-600 text-white rounded cursor-pointer font-bold disabled:opacity-40 disabled:cursor-not-allowed">{t('إنشاء خلطة BOM جديدة', 'Create New BOM', language)}</button>}
+                    </>
+                  )}
+                </div>
+              </div>
+              {isExpanded && sampleRow?.mixtureComponents && (
+                <div className="overflow-x-auto">
+                  <table className="w-full text-[10px] min-w-[560px]">
+                    <thead>
+                      <tr className="text-slate-500 border-b border-slate-200">
+                        <th className="text-start py-1 px-1 font-bold">{t('نسبة الخامة بالخلطة', '% in Mixture', language)}</th>
+                        <th className="text-start py-1 px-1 font-bold">{t('كود الخامة', 'Material Code', language)}</th>
+                        <th className="text-start py-1 px-1 font-bold">{t('إسم الخامة', 'Material Name', language)}</th>
+                        <th className="text-start py-1 px-1 font-bold">{t('السعر', 'Price', language)}</th>
+                        <th className="text-end py-1 px-1 font-bold">{t('الإجمالي', 'Total', language)}</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {sampleRow.mixtureComponents.map((c, i) => (
+                        <tr key={i} className="border-b border-slate-100">
+                          <td className="py-1 px-1 font-mono">{c.percentage.toFixed(1)}%</td>
+                          <td className="py-1 px-1">{c.resolvedMaterialCode || <span className="text-red-600">—</span>}</td>
+                          <td className="py-1 px-1">
+                            {c.resolvedMaterialId ? (
+                              <span className="text-emerald-700 font-bold">{c.resolvedMaterialName}</span>
+                            ) : (
+                              <div className="w-36"><SearchableCombobox options={materials} value={undefined} onChange={(_, opt) => opt && applyGlobalResolution('material', c.materialNameRaw, { id: opt.id, code: opt.code, name: opt.name })} placeholder={t('اختر خامة...', 'Choose material...', language)} /></div>
+                            )}
+                          </td>
+                          <td className="py-1 px-1 text-slate-300">—</td>
+                          <td className="py-1 px-1 text-end font-mono">{c.quantityKg} {t('كجم', 'kg', language)}</td>
+                        </tr>
+                      ))}
+                      <tr className="font-bold text-slate-800">
+                        <td className="py-1 px-1">100.0%</td>
+                        <td className="py-1 px-1"></td>
+                        <td className="py-1 px-1"></td>
+                        <td className="py-1 px-1"></td>
+                        <td className="py-1 px-1 text-end font-mono">{sampleRow.mixtureTotalQuantityKg} {t('كجم', 'kg', language)}</td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+          );
+        })}
+        {groups.length === 0 && <p className="text-center py-4 text-slate-400 text-xs">{t('لا توجد خلطات في هذا الملف.', 'No mixtures in this file.', language)}</p>}
+      </div>
     );
   }
 

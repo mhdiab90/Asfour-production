@@ -83,6 +83,32 @@ export function getTubeBallMillsImportHeaders(language: 'ar' | 'en' = 'ar'): str
   return IMPORT_FIELD_DEFS.map((f) => (language === 'ar' ? f.labelAr : f.labelEn));
 }
 
+/**
+ * Generates the 7-column Tube/Ball Mills Excel template in the requested
+ * language, with one clearly-marked, never-imported sample row - the exact
+ * same pattern as downloadChineseMillsExcelTemplate/pressingHistoricalImportService's
+ * own template generator (same XLSX infra already imported, no new
+ * dependency). The sample row's date cell carries the same
+ * "مثال — لا يتم استيراده" / "SAMPLE — do not import" marker
+ * parseAndValidateTubeBallMillsExcel already recognizes and skips (see its
+ * sampleMarker check), so re-uploading the downloaded template unmodified
+ * produces zero importable rows rather than a phantom sample record.
+ */
+export function downloadTubeBallMillsExcelTemplate(language: 'ar' | 'en' = 'ar'): void {
+  const headers = getTubeBallMillsImportHeaders(language);
+  const sampleRow: Record<string, any> = {};
+  IMPORT_FIELD_DEFS.forEach((f) => {
+    const label = language === 'ar' ? f.labelAr : f.labelEn;
+    sampleRow[label] = f.key === 'date' ? (language === 'ar' ? 'مثال — لا يتم استيراده' : 'SAMPLE — do not import') : f.sample;
+  });
+
+  const ws = XLSX.utils.json_to_sheet([sampleRow], { header: headers });
+  ws['!cols'] = headers.map(() => ({ wch: 20 }));
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, language === 'ar' ? 'قالب_الطواحين_الأنبوبية_والكرات' : 'TubeBallMills_Template');
+  XLSX.writeFile(wb, `ASFOUR_Template_TubeBallMills_${new Date().toISOString().split('T')[0]}.xlsx`);
+}
+
 const FIELD_ALIASES = {
   date: ['التاريخ', 'Date', 'date'],
   millType: ['نوع الطاحونة', 'Mill Type', 'millType'],
