@@ -1550,7 +1550,12 @@ export const TubeBallMillsImportPanel: React.FC = () => {
     const titleAr = codeNewTarget.domain === 'mill' ? 'ترميز طاحونة جديدة' : codeNewTarget.domain === 'material' ? 'ترميز خامة جديدة' : 'ترميز بنكر جديد';
     const titleEn = codeNewTarget.domain === 'mill' ? 'Code New Mill' : codeNewTarget.domain === 'material' ? 'Code New Material' : 'Code New Bunker';
     return (
-      <Modal isOpen onClose={() => setCodeNewTarget(null)} title={t(titleAr, titleEn, language)} maxWidth="sm">
+      // layer="nested": Code New is always launched from a button inside
+      // another already-open Modal (Master Data Review, the Full Review
+      // Window, or a row-detail panel rendered inside either) - it must
+      // always paint above whichever modal triggered it, regardless of
+      // render order (see Modal.tsx's layer prop).
+      <Modal isOpen onClose={() => setCodeNewTarget(null)} title={t(titleAr, titleEn, language)} maxWidth="sm" layer="nested">
         <div className="space-y-3 text-sm" dir={isRtl ? 'rtl' : 'ltr'}>
           <div>
             <label className="block text-[11px] font-bold text-slate-600 mb-1">{t('الكود (اختياري)', 'Code (optional)', language)}</label>

@@ -1,5 +1,17 @@
-import React, { useEffect } from 'react';
+import React, { useEffect, useId } from 'react';
 import { X } from 'lucide-react';
+
+/**
+ * Shared stacking-order registry for every currently-open Modal instance
+ * across the whole app (module-level, not component state - a modal opened
+ * from WITHIN another already-open modal, e.g. a "Create New" dialog
+ * launched from a review window, needs to know about its sibling). Used
+ * only to (a) make Escape close just the TOPMOST open dialog instead of
+ * every open dialog at once, and (b) keep the body scroll lock active as
+ * long as ANY modal remains open, rather than a nested dialog's own close
+ * prematurely unlocking scroll while its parent modal is still open.
+ */
+const openModalStack: string[] = [];
 
 interface ModalProps {
   id?: string;
@@ -9,6 +21,16 @@ interface ModalProps {
   subtitle?: string;
   children: React.ReactNode;
   maxWidth?: 'sm' | 'md' | 'lg' | 'xl' | '2xl' | '4xl';
+  /**
+   * Stacking layer for a dialog that may be opened from WITHIN another
+   * already-open Modal (e.g. a "Create New" mini-form launched from a
+   * review window). Defaults to 'base' - the exact z-50 layer every
+   * existing Modal usage already renders at, so omitting this prop changes
+   * nothing anywhere else in the app. Pass 'nested' only for a dialog whose
+   * own trigger lives inside another Modal's content, so it always paints
+   * above it regardless of DOM/render order.
+   */
+  layer?: 'base' | 'nested';
 }
 
 export const Modal: React.FC<ModalProps> = ({
@@ -19,22 +41,37 @@ export const Modal: React.FC<ModalProps> = ({
   subtitle,
   children,
   maxWidth = 'lg',
+  layer = 'base',
 }) => {
+  const instanceId = useId();
+
   useEffect(() => {
+    if (!isOpen) return;
+    openModalStack.push(instanceId);
+    document.body.style.overflow = 'hidden';
+
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose();
+      // Only the topmost currently-open modal responds to Escape - with two
+      // modals open (e.g. Master Data Review + a nested Create New dialog),
+      // this stops Escape from closing both at once.
+      if (e.key === 'Escape' && openModalStack[openModalStack.length - 1] === instanceId) {
+        onClose();
+      }
     };
-    if (isOpen) {
-      document.body.style.overflow = 'hidden';
-      window.addEventListener('keydown', handleKeyDown);
-    } else {
-      document.body.style.overflow = 'unset';
-    }
+    window.addEventListener('keydown', handleKeyDown);
+
     return () => {
-      document.body.style.overflow = 'unset';
+      const idx = openModalStack.indexOf(instanceId);
+      if (idx !== -1) openModalStack.splice(idx, 1);
       window.removeEventListener('keydown', handleKeyDown);
+      // Only release the body scroll lock once NO modal remains open -
+      // closing a nested dialog must never unlock scrolling while its
+      // parent modal is still open behind it.
+      if (openModalStack.length === 0) {
+        document.body.style.overflow = 'unset';
+      }
     };
-  }, [isOpen, onClose]);
+  }, [isOpen, onClose, instanceId]);
 
   if (!isOpen) return null;
 
@@ -47,10 +84,12 @@ export const Modal: React.FC<ModalProps> = ({
     '4xl': 'max-w-4xl',
   }[maxWidth];
 
+  const zIndexClass = layer === 'nested' ? 'z-[60]' : 'z-50';
+
   return (
     <div
       id={id}
-      className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs animate-in fade-in duration-200"
+      className={`fixed inset-0 ${zIndexClass} flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs animate-in fade-in duration-200`}
       onClick={onClose}
     >
       <div
