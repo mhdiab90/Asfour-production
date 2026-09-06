@@ -10,7 +10,8 @@ import { db, handleFirestoreError, OperationType } from '../config/firebase';
 import { MasterDataTab, BulkImportRow, BulkImportResult, ProductType } from '../types';
 import { logAuditAction } from './auditService';
 import { toWesternDigits } from '../utils/formatters';
-import { fetchProductTypes } from './productTypeService';
+import { fetchProductTypes, checkPrefixDuplicate } from './productTypeService';
+import { checkCodeDuplicate } from './masterDataService';
 import { parseProductCode, normalizeProductCode } from '../utils/productCodeParser';
 import { enrichWithNormalizedFields } from '../utils/searchUtils';
 
@@ -135,6 +136,14 @@ export const MASTER_DATA_SCHEMAS: Record<MasterDataTab, { title: string; fields:
       { key: 'name', label: 'اسم الفرن', required: true, type: 'string', description: 'مثال: فرن النفق الحراري الرئيسي', aliases: ['name', 'اسم الفرن'] },
       { key: 'capacity', label: 'السعة (طن)', required: false, type: 'number', description: 'مثال: 50', aliases: ['capacity', 'السعة'] },
       { key: 'maxTemperature', label: 'أقصى حرارة (مئوية)', required: false, type: 'number', description: 'مثال: 1650', aliases: ['maxTemperature', 'الحرارة'] },
+    ]
+  },
+  mills: {
+    title: 'الطواحين الصينية',
+    fields: [
+      { key: 'code', label: 'كود الطاحونة', required: true, type: 'string', description: 'مثال: 5101', aliases: ['code', 'كود الطاحونة', 'كود'] },
+      { key: 'name', label: 'اسم الطاحونة', required: true, type: 'string', description: 'مثال: طاحونة صينية 1', aliases: ['name', 'اسم الطاحونة', 'الاسم'] },
+      { key: 'model', label: 'الموديل - اختياري', required: false, type: 'string', description: 'مثال: CM-2020', aliases: ['model', 'الموديل'] },
     ]
   },
   furnaceCars: {
@@ -462,11 +471,69 @@ export async function commitBulkImport(
     };
   }
 
+  /**
+   * PHASE 4F - FINAL LIVE DUPLICATE RECHECK, immediately before write.
+   * validateImportData()'s own duplicate check (existingCodesSet) is a
+   * snapshot taken once when the file was first uploaded/parsed - the
+   * user can review the table for an arbitrary length of time before
+   * clicking Confirm (this is the exact TOCTOU gap the Phase 3 audit
+   * found), during which another user/process could create a record
+   * with the same code. This reuses the EXISTING, per-collection
+   * uniqueness rule verbatim - checkPrefixDuplicate() for productTypes,
+   * checkCodeDuplicate() (a narrow where('code','==',...) equality
+   * query, never a full collection scan) for every other collection -
+   * the SAME functions the single-record Add/Edit Master Data flow
+   * already calls immediately before its own write. No universal
+   * uniqueness rule was invented.
+   *
+   * A row a live duplicate is now found for is excluded from the write
+   * and counted in `blockedByFinalRecheckRows` - never poisoning the
+   * rest of the batch, never silently written.
+   */
+  const recheckResults = await Promise.all(
+    rowsToImport.map(async (row) => {
+      const uniqueKey = targetTab === 'productTypes' ? row.data.prefixCode : (row.data.productCode || row.data.code);
+      const codeVal = uniqueKey ? String(uniqueKey).trim().toUpperCase() : '';
+      if (!codeVal) return { row, isDuplicate: false };
+      try {
+        const isDuplicate = targetTab === 'productTypes'
+          ? await checkPrefixDuplicate(codeVal)
+          : await checkCodeDuplicate(collectionName, codeVal);
+        return { row, isDuplicate };
+      } catch (err) {
+        // A failed recheck must never silently write an unverified row,
+        // and must never fall back to a full collection scan or block
+        // unrelated rows - treat this one row as "cannot confirm safety,
+        // skip it" rather than optimistically writing it.
+        console.warn(`Bulk import final duplicate recheck warning (${collectionName}):`, err);
+        return { row, isDuplicate: true };
+      }
+    })
+  );
+
+  const finalRowsToImport = recheckResults.filter((r) => !r.isDuplicate).map((r) => r.row);
+  const blockedByFinalRecheckCount = rowsToImport.length - finalRowsToImport.length;
+  const finalTotal = finalRowsToImport.length;
+
+  if (finalTotal === 0) {
+    return {
+      totalRows: validRows.length,
+      validRows: rowsToImport.length,
+      duplicateRows: duplicateTotal,
+      duplicateInFileRows: duplicateInFileCount,
+      duplicateInFirestoreRows: duplicateInFirestoreCount,
+      unknownTypeRows: unknownTypeCount,
+      errorRows: errorTotal,
+      importedRows: 0,
+      blockedByFinalRecheckRows: blockedByFinalRecheckCount,
+    };
+  }
+
   const CHUNK_SIZE = 400; // Firestore limit is 500 per batch
   let importedCount = 0;
 
-  for (let i = 0; i < total; i += CHUNK_SIZE) {
-    const chunk = rowsToImport.slice(i, i + CHUNK_SIZE);
+  for (let i = 0; i < finalTotal; i += CHUNK_SIZE) {
+    const chunk = finalRowsToImport.slice(i, i + CHUNK_SIZE);
     const batch = writeBatch(db);
 
     chunk.forEach(row => {
@@ -514,7 +581,7 @@ export async function commitBulkImport(
       await batch.commit();
       importedCount += chunk.length;
       if (onProgress) {
-        onProgress(importedCount, total);
+        onProgress(importedCount, finalTotal);
       }
     } catch (error) {
       handleFirestoreError(error, OperationType.WRITE, collectionName);
@@ -527,7 +594,7 @@ export async function commitBulkImport(
     'BULK_IMPORT',
     collectionName,
     '',
-    `استيراد مجمع لعدد ${importedCount} منتج/سجل جديد في مجموعة ${collectionName}`
+    `استيراد مجمع لعدد ${importedCount} منتج/سجل جديد في مجموعة ${collectionName}${blockedByFinalRecheckCount > 0 ? ` (تم تجاوز ${blockedByFinalRecheckCount} عنصر مكرر عند إعادة الفحص النهائي)` : ''}`
   );
 
   return {
@@ -539,6 +606,7 @@ export async function commitBulkImport(
     unknownTypeRows: unknownTypeCount,
     errorRows: errorTotal,
     importedRows: importedCount,
+    blockedByFinalRecheckRows: blockedByFinalRecheckCount,
   };
 }
 

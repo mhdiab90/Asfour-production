@@ -179,6 +179,24 @@ export interface Product {
   active: boolean;
   createdAt?: string;
   updatedAt?: string;
+
+  /**
+   * Mixture/BOM support (Comprehensive Historical Import task, §14) - a
+   * Product can ALSO represent a mixture/BOM composed of existing Material
+   * components, reusing the existing Products/Master Data collection
+   * exactly as the task instructs ("Mixtures must be stored in the existing
+   * Products/Master Data architecture") rather than a new collection.
+   * isMixtureBOM distinguishes the two cases; a plain product never sets it.
+   */
+  isMixtureBOM?: boolean;
+  /** Present only when isMixtureBOM is true. Percentages always sum to 100 (normalized from source quantities - §11/§12, never trusted from embedded text alone). */
+  mixtureComponents?: Array<{
+    materialId: string;
+    materialCode?: string;
+    materialName: string;
+    quantityKg: number;
+    percentage: number;
+  }>;
 }
 
 export interface ProductCodeParseResult {
@@ -259,6 +277,32 @@ export interface Furnace {
   updatedAt?: string;
 }
 
+/** Chinese Mills equipment - mirrors Press exactly. Reuses the existing (previously-unregistered) 'chineseMills' Firestore collection, already populated via Historical Import - no data migration. */
+export interface Mill {
+  id?: string;
+  code: string;
+  name: string;
+  model?: string;
+  status?: 'active' | 'maintenance' | 'inactive';
+  millCodeNormalized?: string;
+  nameNormalized?: string;
+  active: boolean;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+/**
+ * Tube/Ball Mills equipment (Comprehensive Historical Import task) - a
+ * DISTINCT physical equipment type from `Mill` above (Chinese Mills), never
+ * to be confused/merged with it. Mirrors Mill/Press/Furnace's exact shape,
+ * following the SAME evolutionary precedent already established for `Mill`
+ * itself: an equipment master data type that starts life populated only via
+ * Historical Import's own "Code New Mill" action (collection 'tubeBallMills'),
+ * not a dedicated pre-existing admin screen - see masterDataService.ts's
+ * generic fetchMasterData/createMasterDataItem, called directly with this
+ * collection name rather than adding a MasterDataTab entry (out of scope for
+ * this task - see the panel's own comments).
+ */
 export interface TubeBallMill {
   id?: string;
   code: string;
@@ -353,6 +397,8 @@ export interface ProductionRecord extends ProductionFaults {
   
   furnaceCarIds?: string[];
   furnaceCarNumbers?: string[];
+  /** Parallel to furnaceCarIds/furnaceCarNumbers (same index = same car). Transactional data - never stored on the Furnace Car Master Data document. */
+  furnaceCarBrickCounts?: number[];
   carCode?: string;
   carCodes?: string[];
   originalFurnaceCars?: string;
@@ -461,7 +507,20 @@ export interface AuditLog {
     | 'RESTORE_EXECUTE'
     | 'HISTORICAL_IMPORT_COMPLETED'
     | 'UNDO_HISTORICAL_IMPORT'
-    | 'PERMISSION_UPDATE';
+    | 'PERMISSION_UPDATE'
+    | 'TRANSLATION_OVERRIDE_SET'
+    | 'TRANSLATION_OVERRIDE_RESTORE'
+    // System Version Management & Application Rollback (§38) - distinct from
+    // BACKUP_CREATE/RESTORE_EXECUTE above, which govern Firestore DATA, never
+    // the application code/deployment itself.
+    | 'VERSION_CHECKPOINT_CREATED'
+    | 'VERSION_MARKED_KNOWN_GOOD'
+    | 'ROLLBACK_REQUESTED'
+    | 'ROLLBACK_APPROVED'
+    | 'ROLLBACK_STARTED'
+    | 'ROLLBACK_COMPLETED'
+    | 'ROLLBACK_FAILED'
+    | 'ROLLBACK_CANCELLED';
 
   collection: string;
   documentId?: string;
@@ -474,10 +533,11 @@ export type MasterDataTab =
   | 'productTypes'
   | 'employees' 
   | 'departments' 
-  | 'presses' 
-  | 'furnaces' 
-  | 'furnaceCars' 
-  | 'customers' 
+  | 'presses'
+  | 'furnaces'
+  | 'furnaceCars'
+  | 'mills'
+  | 'customers'
   | 'shifts'
   | 'materials'
   | 'machines'
@@ -505,7 +565,10 @@ export type NavigationPage =
   | 'settings' 
   | 'branding'
   | 'user-management'
-  | 'admin-panel';
+  | 'admin-panel'
+  | 'translation-manager'
+  | 'language-audit'
+  | 'ai-provider-management';
 
 export type RecordStatus = 'DRAFT' | 'SUBMITTED' | 'REVIEWED' | 'APPROVED' | 'REJECTED' | 'CORRECTED';
 
@@ -542,6 +605,8 @@ export interface Material {
   reorderLevel?: number;
   costPerUnit?: number;
   notes?: string;
+  /** Optional (Comprehensive Historical Import task, §13) - mirrors Product.aluminaPercentage's exact meaning for a raw material, e.g. detected from an embedded "جريت40%" pattern during import. Never guessed - only set when explicitly present in the source or already on the record. */
+  aluminaPercentage?: number | null;
   materialCodeNormalized?: string;
   nameNormalized?: string;
   active: boolean;
@@ -631,6 +696,10 @@ export interface ChineseMillsRecord {
   customerCode?: string;
   customerName?: string;
   specificationCode?: string;
+  /** Resolved against Master Data Products from the "المواصفة" import column (Master Data Consolidation task) - specification/specificationCode above stay as the original free-text display values. */
+  productId?: string;
+  productCode?: string;
+  productName?: string;
   millType: string;
   shiftType: string;
   quantity: number;
@@ -661,12 +730,24 @@ export interface TubeBallMillsRecord {
   id?: string;
   date: string;
   millType: string;
+  /** Resolved against the 'tubeBallMills' Master Data collection (Comprehensive Historical Import task) - millType above stays the original free-text display value, exactly mirroring ChineseMillsRecord's own millType/millTypeId split. Optional: the existing manual TubeBallMillsEntryForm never resolves this and continues to work unchanged. */
+  millTypeId?: string;
+  millTypeName?: string;
   rawMaterialType: string;
+  /** Resolved against Material Master Data (single material) OR a mixture/BOM Product (isMixtureBOM) - never both. */
+  materialId?: string;
+  materialCode?: string;
+  materialName?: string;
+  isMixtureMaterial?: boolean;
+  /** Only for a single (non-mixture) raw material with an embedded alumina percentage detected during Historical Import (e.g. "جريت40%") - never set for a mixture/BOM row, never invented when not present in the source. */
+  aluminaPercentage?: number | null;
   operatingHours: number;
   tonsPerHour: number;
   storageBunker?: string;
+  /** Per-bunker allocation of totalTons when the Historical Import resolved multiple bunkers (§19-22) - the existing manual entry form's single free-text storageBunker above is always still populated (joined) for backward-compatible display/reporting. */
+  bunkerAllocations?: Array<{ bunkerId?: string; bunkerCode?: string; bunkerNumber: string; allocatedTons: number }>;
   totalTons: number;
-  
+
   status: RecordStatus;
   notes?: string;
   createdBy: string;
@@ -931,6 +1012,8 @@ export interface BulkImportResult {
   duplicateInFileRows?: number;
   duplicateInFirestoreRows?: number;
   importedRows: number;
+  /** Phase 4F: rows that passed preview-time validation but were caught by the final live duplicate recheck immediately before write (a record with the same code was created by someone else during the review window) - never silently written, never counted as imported. */
+  blockedByFinalRecheckRows?: number;
 }
 
 export interface SystemTestStepResult {
@@ -957,6 +1040,11 @@ export interface SystemTestReport {
 
 export type BackupType = 'MANUAL' | 'SCHEDULED' | 'PRE_IMPORT' | 'PRE_MIGRATION' | 'SAFETY_CHECKPOINT';
 export type BackupStatus = 'SUCCESS' | 'FILE_READY_METADATA_FAILED' | 'PARTIAL' | 'FAILED' | 'IN_PROGRESS';
+
+// VALID: calculated SHA-256 matches the stored checksum.
+// INVALID: calculated SHA-256 does NOT match the stored checksum (tampered/corrupted file) - restore MUST NOT proceed.
+// MISSING: the backup metadata has no checksum at all - integrity cannot be fully verified.
+export type ChecksumStatus = 'VALID' | 'INVALID' | 'MISSING';
 
 export interface SystemBackup {
   id: string;
@@ -1004,6 +1092,7 @@ export interface RestoreResult {
   durationMs: number;
   errors: string[];
   timestamp: string;
+  checksumStatus: ChecksumStatus;
 }
 
 export interface RemoteVersionManifest {
@@ -1017,7 +1106,124 @@ export interface RemoteVersionManifest {
   releaseNotes?: string;
 }
 
-export type PressingImportStatus = 
+/**
+ * ASFOUR ERP - System Version Management & Application Rollback.
+ *
+ * CRITICAL DISTINCTION: this governs the APPLICATION CODE / DEPLOYED BUILD
+ * version only - never Firestore data. Firestore data rollback/undo stays
+ * on the EXISTING, separate systems: BackupMetadata/RestoreResult above
+ * (full-database backup/restore), ImportAuditEntry (historical import undo),
+ * RowVersion (per-row import edit history). None of the types below ever
+ * read or write a production/masterData/stage_* collection.
+ */
+export type SystemVersionDeploymentStatus = 'DEPLOYING' | 'HEALTH_CHECK' | 'HEALTHY' | 'FAILED' | 'ROLLED_BACK';
+
+export type SystemVersionHealthStatus = 'HEALTHY' | 'DEGRADED' | 'UNHEALTHY' | 'UNKNOWN';
+
+export interface HealthCheckItemResult {
+  name: string;
+  nameAr: string;
+  nameEn: string;
+  passed: boolean;
+  detail?: string;
+  durationMs?: number;
+}
+
+export interface HealthCheckResult {
+  overall: SystemVersionHealthStatus;
+  checkedAt: string;
+  checks: HealthCheckItemResult[];
+}
+
+export interface SystemVersionRecord {
+  id?: string;
+  versionLabel: string; // semantic MAJOR.MINOR.PATCH where practical (§24)
+  /** Immutable Git commit SHA - the authoritative version identity (§18/§24). Never a branch name or human label alone. */
+  commitSha: string;
+  branch: string;
+  buildId: string;
+  deploymentId?: string;
+  deploymentReference?: string;
+  environment: 'production' | 'staging' | 'development';
+  status: SystemVersionDeploymentStatus;
+  health: SystemVersionHealthStatus;
+  lastHealthCheck?: HealthCheckResult;
+  isKnownGood: boolean;
+  knownGoodBy?: string;
+  knownGoodByName?: string;
+  knownGoodAt?: string;
+  releaseNotes?: string;
+  /** True only for the 3 pre-existing entries seeded from config/appVersion.ts's static changelog, which predate this system and only ever had a human label ("main-v3.2.0") rather than a real commit SHA - never offered as a rollback target (§18 CRITICAL). */
+  isLegacyRecord?: boolean;
+  /** RELEASE = a normal checkpoint (§5); PRE_ROLLBACK_CHECKPOINT = auto-created for the CURRENT version immediately before a rollback executes (§10), linked back via linkedRollbackId. */
+  checkpointType: 'RELEASE' | 'PRE_ROLLBACK_CHECKPOINT';
+  linkedRollbackId?: string;
+  createdBy: string;
+  createdByName?: string;
+  createdAt: string;
+  updatedAt?: string;
+}
+
+export type RollbackStatus = 'REQUESTED' | 'APPROVED' | 'RUNNING' | 'SUCCESS' | 'FAILED' | 'REVERTED' | 'CANCELLED';
+
+export type RollbackReasonCategory =
+  | 'REGRESSION'
+  | 'BROKEN_DEPLOYMENT'
+  | 'INCORRECT_FEATURE'
+  | 'PERFORMANCE_ISSUE'
+  | 'SECURITY_ISSUE'
+  | 'DATA_DISPLAY_ISSUE'
+  | 'OTHER';
+
+export interface RollbackOperation {
+  id?: string; // rollbackId
+  fromVersionId: string;
+  fromVersionLabel: string;
+  fromCommitSha: string;
+  toVersionId: string;
+  toVersionLabel: string;
+  toCommitSha: string;
+  requestedBy: string;
+  requestedByName?: string;
+  approvedBy?: string;
+  approvedByName?: string;
+  /** §14: optional two-person approval - configurable, never a hard blocker when only one SUPER_ADMIN exists (the requester and approver may be the same SUPER_ADMIN in that case). */
+  requiresTwoPersonApproval: boolean;
+  isEmergency: boolean;
+  reason: string;
+  reasonCategory: RollbackReasonCategory;
+  status: RollbackStatus;
+  requestedAt: string;
+  approvedAt?: string;
+  startedAt?: string;
+  completedAt?: string;
+  preRollbackHealthCheck?: HealthCheckResult;
+  postRollbackHealthCheck?: HealthCheckResult;
+  deploymentReference?: string;
+  /** The systemVersions doc id of the PRE_ROLLBACK_CHECKPOINT created for the CURRENT version before this rollback executed (§10/§12's "checkpointReference"). */
+  checkpointVersionId?: string;
+  failureDetails?: string;
+  cancelledBy?: string;
+  cancelledByName?: string;
+  cancelReason?: string;
+}
+
+/**
+ * Furnace Car + Brick Count structured pair, parsed from the new
+ * "CAR-BRICKS/CAR-BRICKS" business format (see multiCodeParser.ts::parseFurnaceCarBrickPairs).
+ * Only `carNumber` is ever a Master Data identity; `brickCount` is always
+ * transactional/import data and must never be treated as a Furnace Car code.
+ */
+export interface FurnaceCarBrickPair {
+  raw: string;
+  carNumber: string;
+  brickCountRaw: string;
+  brickCount: number | null;
+  isValid: boolean;
+  errorReason?: 'MISSING_BRICK_COUNT' | 'INVALID_BRICK_COUNT' | 'MISSING_CAR_NUMBER' | 'MALFORMED';
+}
+
+export type PressingImportStatus =
   | 'NEW'
   | 'VALID'
   | 'WARNING'
@@ -1035,7 +1241,37 @@ export type PressingImportStatus =
   | 'INVALID_NUMBER'
   | 'FAULT_TOTAL_MISMATCH'
   | 'MISSING_PIECE_WEIGHT'
-  | 'INVALID_ROW';
+  | 'INVALID_ROW'
+  | 'DUPLICATE_FURNACE_CAR'
+  | 'INCOMPLETE_FURNACE_CAR_ENTRY'
+  /** Phase 4F.2: the final live pre-write duplicate recheck could not be completed for this row (e.g. a transient Firestore query error) - distinct from DUPLICATE_IN_DATABASE (a CONFIRMED duplicate). Fails closed: the row is blocked from import until it can be successfully re-verified, never silently written. */
+  | 'DUPLICATE_RECHECK_FAILED';
+
+export interface RowFieldChange {
+  fieldName: string;
+  oldValue: any;
+  newValue: any;
+}
+
+/**
+ * One versioned, revertible snapshot of a PressingImportRow's editable data
+ * (§11-16). Append-only - reverting to an earlier version creates a NEW
+ * version with source 'REVERT', it never deletes or rewrites history.
+ */
+export interface RowVersion {
+  editId: string;
+  importId: string;
+  rowId: number;
+  timestamp: string;
+  userId: string;
+  reason: string;
+  source: 'ORIGINAL' | 'FULL_ROW_EDIT' | 'FIELD_EDIT' | 'BULK_REPAIR' | 'REVERT';
+  beforeData: Record<string, any>;
+  afterData: Record<string, any>;
+  changedFields: RowFieldChange[];
+  validationBefore: { status: string; errorCount: number; errors: string[] };
+  validationAfter: { status: string; errorCount: number; errors: string[] };
+}
 
 export interface PressingImportRow {
   rowIndex: number;
@@ -1054,12 +1290,17 @@ export interface PressingImportRow {
   employeeNames?: string[];
   employeeCodes?: string[];
   
-  // Furnace Cars
+  // Furnace Cars + Brick Count (CAR-BRICKS/CAR-BRICKS pair format - see multiCodeParser.ts::parseFurnaceCarBrickPairs)
   furnaceCarsRaw: string;
+  /** Car numbers only (extracted from furnaceCarBrickPairs), kept for any code still comparing plain identifiers. */
   furnaceCarTokens?: string[];
-  resolvedFurnaceCars: Array<{ id?: string; code: string; carNumber: string }>;
+  /** Full parsed CAR-BRICKS pairs for this row, including invalid/incomplete ones for review-matrix display. */
+  furnaceCarBrickPairs?: FurnaceCarBrickPair[];
+  resolvedFurnaceCars: Array<{ id?: string; code: string; carNumber: string; brickCount?: number | null }>;
   furnaceCarNumbers: string[];
   furnaceCarIds: string[];
+  /** Parallel to furnaceCarIds/furnaceCarNumbers - brick count is transactional, never Master Data. */
+  furnaceCarBrickCounts?: number[];
   carCodes: string[];
   
   // Press
@@ -1108,7 +1349,51 @@ export interface PressingImportRow {
   warnings: string[];
   isDuplicate: boolean;
   duplicateType?: 'FILE' | 'DATABASE';
-  
+
+  // Partial-import row selection (orthogonal to `status`/`errors`, which
+  // reflect DATA VALIDITY - this reflects the user's explicit decision on
+  // whether the row participates in the final Firestore write). Undefined
+  // is treated as 'INCLUDED' (opt-out default). `raw` above already serves
+  // as the untouched original Excel row for audit - no separate
+  // originalRowData/correctedRowData copy is needed for this.
+  rowSelection?: 'INCLUDED' | 'EXCLUDED';
+  /** Set only when rowSelection becomes 'EXCLUDED', for audit/report distinction between the three user actions. */
+  exclusionReason?: 'USER_DESELECTED' | 'SKIPPED_ROW' | 'EXCLUDED_ROW';
+  /** Who/when a row was last excluded - for the "Excluded Records" screen. Cleared on re-include. */
+  excludedBy?: string;
+  excludedAt?: string;
+  /** Set once a real Firestore write was attempted for this row in a partial-import run. */
+  importOutcome?: 'IMPORTED' | 'FAILED';
+
+  /**
+   * Snapshot of every field as of the last full-row edit ("Edit Entire Row"),
+   * kept SEPARATE from `raw` (the untouched original Excel row) so the UI can
+   * always show Original vs Current Edited Version without destroying either.
+   * Undefined means the row has never been through the full-row editor.
+   */
+  editedRowData?: Record<string, any>;
+  /** Append-only trail of full-row/field-level correction events for this row, for audit/transparency (distinct from the global auditLogs collection, which only gets a summary entry). */
+  resolutionHistory?: Array<{ timestamp: string; actor: string; action: string; summary: string }>;
+
+  /** Full validation-error text captured at the moment this row most recently became EXCLUDED - stays visible even after later edits/repairs, distinct from the row's live/current `errors`/`status`. Cleared on re-include. */
+  originalExclusionReason?: string;
+
+  /**
+   * Explicit user override of this row's business WARNINGS (§14: mere
+   * inclusion/visibility is never treated as approval). A row with
+   * `warnings.length > 0` is only writable once this is explicitly true -
+   * see isRowWritable(). Reset to false whenever the row's data changes and
+   * a NEW warning set is computed, so a stale override can never silently
+   * carry over to a different warning.
+   */
+  warningsAccepted?: boolean;
+  warningOverrideBy?: string;
+  warningOverrideAt?: string;
+  /** Machine-readable codes parallel to `warnings` (from businessValidationRules.ts), for the override audit trail (§17). */
+  warningCodes?: string[];
+  /** Versioned, revertible edit history - see RowVersion. Empty/undefined until the row's first manual edit. */
+  rowVersions?: RowVersion[];
+
   // Smart Fuzzy Matching Proposals & Human Review
   proposedMatches?: Array<{
     fieldDomain: string; // 'press' | 'employee1' | 'employee2' | 'product' | 'customer' | 'shift' | 'furnaceCar'
@@ -1125,6 +1410,15 @@ export interface PressingImportRow {
     decision: 'PENDING' | 'ACCEPTED' | 'REJECTED' | 'MANUAL';
     manualId?: string;
     manualName?: string;
+    /**
+     * The user's manually typed correction of the imported value, kept
+     * SEPARATE from `importedValue` (the original, never overwritten) and
+     * from `manualName`/`resolvedEntityValue` (the final resolved Master
+     * Data record). Only set when the user used "Manual Edit" to retype the
+     * value before searching/selecting/adding - absent for a direct
+     * "Choose Existing" selection of the unedited original value.
+     */
+    manualEditedValue?: string;
     candidates?: Array<{
       id: string;
       code: string;
@@ -1154,6 +1448,252 @@ export interface PressingImportSummary {
   rows: PressingImportRow[];
 }
 
+/**
+ * Chinese Mills Historical Import - stage-specific parallel to
+ * PressingImportRow/PressingImportSummary above, reusing the same generic
+ * RowVersion/RowFieldChange history types. Deliberately does NOT reuse
+ * PressingImportRow itself: Chinese Mills has its own real fields (Mill
+ * Type, Number of Bags, Operating Minutes, Fault Type, Weight Class,
+ * Theoretical/Actual Rate) and none of Pressing's Furnace Car + Brick Count
+ * concept.
+ */
+export type ChineseMillsImportStatus =
+  | 'NEW'
+  | 'VALID'
+  | 'WARNING'
+  | 'DUPLICATE_IN_FILE'
+  | 'DUPLICATE_IN_DATABASE'
+  | 'UNKNOWN_CUSTOMER'
+  | 'UNKNOWN_MILL'
+  | 'UNKNOWN_FAULT_TYPE'
+  | 'UNKNOWN_SPECIFICATION'
+  | 'INVALID_SHIFT'
+  | 'INVALID_DATE'
+  | 'INVALID_NUMBER'
+  | 'INVALID_ROW';
+
+export interface ChineseMillsImportRow {
+  rowIndex: number;
+  raw: Record<string, any>;
+  date: string;
+
+  // Customer (§2-5: may be created Name-only, no invented code)
+  customerNameRaw: string;
+  /** Only recognized if the uploaded file happens to carry an extra "Customer Code" column - not part of the official 17-column template, but the future-code-update proposal (§5) needs somewhere to read an imported code from. */
+  customerCodeRaw?: string;
+  resolvedCustomerId?: string;
+  resolvedCustomerName?: string;
+  resolvedCustomerCode?: string;
+  /** True when "Add" created this customer with no business code (name-only), per §2/§6.2. */
+  customerCreatedNameOnly?: boolean;
+  /** §5: existing customer has an empty code AND this row's file carries a Customer Code value - never auto-applied. */
+  customerCodeUpdateProposal?: {
+    currentCode: string;
+    proposedCode: string;
+    decision: 'PENDING' | 'ACCEPTED' | 'REJECTED';
+  };
+
+  // Specification Code - §33: NEVER blocking by itself
+  specificationCodeRaw: string;
+
+  // Mill Type (§7-8: matches ONLY Chinese Mills Master Data, never unrelated numeric entities)
+  millTypeRaw: string;
+  resolvedMillId?: string;
+  resolvedMillCode?: string;
+  resolvedMillName?: string;
+
+  // Shift (§9: all of 1/2/3 valid)
+  shiftRaw: string | number;
+  resolvedShiftNumber?: 1 | 2 | 3;
+  resolvedShiftId?: string;
+  resolvedShiftName?: string;
+
+  // Quantities & durations (§10-16)
+  productionQuantity: number; // tons
+  numberOfBags: number;
+  rejectedQuantity: number;
+  operatingMinutes: number;
+  operatingHours: number;
+  /** operatingHours + operatingMinutes/60 - a DERIVED value used only for the Actual Rate suggestion (§15/§22); the two original fields are never collapsed/overwritten. */
+  totalOperatingTimeHours: number;
+  downtimeHours: number;
+
+  // Fault Type (§17: reuse Fault Type Master Data when available)
+  faultTypeRaw?: string;
+  resolvedFaultTypeId?: string;
+  resolvedFaultTypeName?: string;
+
+  // Specification ("المواصفة") - Chinese Mills' Product Code identity field
+  // (Master Data Consolidation task), resolved against Master Data Products
+  // the SAME way millType resolves against Chinese Mills - separate from
+  // Specification Code ("كود المواصفة" / specificationCodeRaw above), which
+  // stays untouched free text exactly as before (§18/§33).
+  specification?: string;
+  resolvedProductId?: string;
+  resolvedProductCode?: string;
+  resolvedProductName?: string;
+
+  // Weight Class (§19: transactional kg value, not Master Data - avoids a duplicate data architecture)
+  weightClassKg?: number;
+  /** §20: bag-count x weight-class vs production-quantity consistency check result. */
+  bagWeightExpectedTons?: number;
+  bagWeightMismatch?: boolean;
+
+  // Rates (§21-23)
+  theoreticalRate?: number;
+  /** The value exactly as imported - never silently altered. */
+  actualRateImported?: number;
+  /** Calculated from productionQuantity / totalOperatingTimeHours when there's enough data - never auto-applied. */
+  actualRateSuggested?: number;
+  actualRateDecision: 'PENDING' | 'ACCEPTED' | 'REJECTED' | 'NOT_APPLICABLE';
+  /** The value actually written to Firestore on import: importedValue unless the user explicitly Accepted the suggestion. */
+  actualRateFinal?: number;
+
+  notes?: string;
+
+  // Status & diagnostics
+  status: ChineseMillsImportStatus;
+  errors: string[];
+  warnings: string[];
+  warningCodes?: string[];
+  isDuplicate: boolean;
+  duplicateType?: 'FILE' | 'DATABASE';
+
+  // Partial-import row selection (§34-38) - same convention as PressingImportRow,
+  // extended with 'PENDING' (Row-Based Review Part 6): a row that currently
+  // has a BLOCKING error is parked here automatically rather than being lost
+  // or silently sitting unusable in the main list - distinct from EXCLUDED
+  // (a deliberate user decision to leave a row out) and from INCLUDED
+  // (actively selected for import). Undefined is treated as 'INCLUDED'.
+  rowSelection?: 'INCLUDED' | 'EXCLUDED' | 'PENDING';
+  exclusionReason?: 'USER_DESELECTED' | 'SKIPPED_ROW' | 'EXCLUDED_ROW';
+  excludedBy?: string;
+  excludedAt?: string;
+  importOutcome?: 'IMPORTED' | 'FAILED';
+
+  // Full row edit + history (§29-30, §46)
+  editedRowData?: Record<string, any>;
+  resolutionHistory?: Array<{ timestamp: string; actor: string; action: string; summary: string }>;
+  originalExclusionReason?: string;
+
+  // Warning override (§31-32)
+  warningsAccepted?: boolean;
+  warningOverrideBy?: string;
+  warningOverrideAt?: string;
+  rowVersions?: RowVersion[];
+
+  /**
+   * Approval (Approve Invalid Records task): an explicit administrative
+   * decision that an authorized user reviewed a BLOCKING/NEEDS_REVIEW row
+   * and accepted it for import despite its current overridable errors -
+   * NEVER a correction (originalRowData/errors/warnings are all preserved
+   * exactly as-is; see isNonOverridableBlockingCondition in
+   * chineseMillsSelectionPure.ts for which errors approval can and cannot
+   * override). Cleared automatically whenever the row is edited/revalidated
+   * afterward - an approval decision is tied to the specific errors it was
+   * made against, never silently carried forward onto a materially changed
+   * row.
+   */
+  approved?: boolean;
+  approvedBy?: string;
+  approvedAt?: string;
+  approvalMethod?: 'INDIVIDUAL' | 'BULK';
+
+  /**
+   * Global Ready-to-Import Override task: a DISTINCT, explicit "I want this
+   * record in the final import" decision, deliberately layered ON TOP of the
+   * existing writability mechanism rather than replacing it - marking a row
+   * Ready to Import never changes its validationStatus (status/errors/
+   * warnings are all untouched); for a row that still has overridable
+   * errors or an unaccepted warning it also sets approved/warningsAccepted
+   * (reusing those EXACT existing mechanisms, never a parallel one) so the
+   * row is genuinely writable, not just labeled so. Distinct from `approved`
+   * (§16): a row can be APPROVED without being marked Ready, and marking
+   * Ready implies approving where needed but is tracked separately so the
+   * UI can show "Validation: BLOCKING / Decision: READY_TO_IMPORT" without
+   * ever implying the original validation passed. Does NOT gate
+   * isChineseMillsRowWritable - a plain valid/selected row that was never
+   * explicitly marked stays importable exactly as before this task (see
+   * chineseMillsSelectionPure.ts's canMarkReadyToImport/
+   * computeMarkReadyPatch for the full reasoning).
+   */
+  readyToImport?: boolean;
+  readyToImportBy?: string;
+  readyToImportAt?: string;
+  readyToImportMethod?: 'INDIVIDUAL' | 'BULK_SELECTED' | 'BULK_ALL';
+  /** Snapshot of the row's selection/approval/warning-acceptance state taken immediately before marking it Ready, so "Remove Ready-to-Import Decision" (§15) restores the row's actual PRIOR decision instead of guessing a default. */
+  preReadyToImportState?: {
+    rowSelection?: 'INCLUDED' | 'EXCLUDED' | 'PENDING';
+    exclusionReason?: 'USER_DESELECTED' | 'SKIPPED_ROW' | 'EXCLUDED_ROW';
+    approved?: boolean;
+    approvedBy?: string;
+    approvedAt?: string;
+    approvalMethod?: 'INDIVIDUAL' | 'BULK';
+    warningsAccepted?: boolean;
+  };
+
+  // Smart matching proposals (§25-28) - customer/millType/faultType/specification
+  proposedMatches?: Array<{
+    fieldDomain: 'customer' | 'millType' | 'faultType' | 'specification';
+    fieldNameAr: string;
+    fieldNameEn: string;
+    importedValue: string;
+    suggestedId?: string;
+    suggestedCode?: string;
+    suggestedName?: string;
+    confidence: number;
+    matchType: string;
+    reasonAr: string;
+    reasonEn: string;
+    decision: 'PENDING' | 'ACCEPTED' | 'REJECTED' | 'MANUAL';
+    manualId?: string;
+    manualName?: string;
+    manualEditedValue?: string;
+    candidates?: Array<{ id: string; code: string; name: string; confidence: number; matchType: string; reasonAr: string; reasonEn: string }>;
+  }>;
+}
+
+export interface ChineseMillsImportSummary {
+  totalRows: number;
+  validRows: number;
+  warningRows: number;
+  errorRows: number;
+  duplicateRows: number;
+  unknownCustomersCount: number;
+  unknownMillsCount: number;
+  unknownFaultTypesCount: number;
+  shiftErrorsCount: number;
+  bagWeightMismatchCount: number;
+  actualRateSuggestionsCount: number;
+  rows: ChineseMillsImportRow[];
+  /** Master Data collections (Customer/Chinese Mill/Fault Type/Specification-Product) that failed to load for THIS parse - never thrown past the parser (§8), surfaced here so the UI can show a controlled "Permission Error" banner instead of crashing or silently importing with broken matching. */
+  masterDataLoadErrors?: Array<{ domain: 'customer' | 'millType' | 'faultType' | 'specification'; labelAr: string; labelEn: string; isPermissionDenied: boolean }>;
+}
+
+// ============================================================================
+// Tube/Ball Mills Historical Import (Comprehensive Historical Import task) -
+// mirrors ChineseMillsImportRow/ChineseMillsImportSummary's exact shape and
+// conventions (row-based review, rowSelection/approved/readyToImport,
+// resolutionHistory) rather than a second import architecture. Domain-
+// specific additions are limited to what this stage's own Excel columns and
+// business rules genuinely require: Mill/Material/Mixture/Bunker resolution.
+// ============================================================================
+
+export type TubeBallMillsImportStatus =
+  | 'VALID'
+  | 'WARNING'
+  | 'UNKNOWN_MILL'
+  | 'UNKNOWN_MATERIAL'
+  | 'UNRESOLVED_MIXTURE_COMPONENT'
+  | 'UNKNOWN_BUNKER'
+  | 'INVALID_BUNKER_ALLOCATION'
+  | 'INVALID_DATE'
+  | 'INVALID_NUMBER'
+  | 'DUPLICATE_IN_FILE'
+  | 'DUPLICATE_IN_DATABASE'
+  | 'INVALID_ROW';
+
+/** One resolved (or unresolved) component of a detected mixture - §11/§12/§16. Quantities are the source of truth for the ratio; percentage is always DERIVED (quantityKg / mixtureTotalQuantityKg × 100), never trusted from embedded text. */
 export interface TubeBallMillsMixtureComponent {
   materialNameRaw: string;
   quantityKg: number;

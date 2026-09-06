@@ -6,7 +6,7 @@
  * - Robust date normalization (Excel date serials, ISO dates, DD/MM/YYYY, Arabic numerals).
  * - Multi-worker resolution (Worker 1 required, Worker 2 optional) stored in structured arrays.
  * - Multi-furnace car parsing supporting separators (- , * , / , ,).
- * - Master Data matching for Presses, Shifts (strict 1/2 rule), Products, and Employees.
+ * - Master Data matching for Presses, Shifts (1/2/3 - see utils/shiftUtils.ts), Products, and Employees.
  * - Product Code Intelligence (Smart code auto-derivation vs numeric manual codes).
  * - Fault breakdown & downtime verification with calculated total comparison against Excel total.
  * - Deep duplicate detection (In-File and In-Database against Firestore production collection).
@@ -14,25 +14,28 @@
  * - Historical tagging (sourceType: 'HISTORICAL_IMPORT', isHistoricalImport: true, preserved historical date).
  */
 import * as XLSX from 'xlsx';
-import { 
-  collection, 
-  getDocs, 
-  writeBatch, 
-  doc, 
-  serverTimestamp 
+import {
+  collection,
+  getDocs,
+  query,
+  where,
+  writeBatch,
+  doc,
+  serverTimestamp
 } from 'firebase/firestore';
 import { db, auth } from '../config/firebase';
-import { 
-  Employee, 
-  Product, 
-  Customer, 
-  Shift, 
-  Press, 
-  FurnaceCar, 
+import {
+  Employee,
+  Product,
+  Customer,
+  Shift,
+  Press,
+  FurnaceCar,
   ProductionRecord,
   PressingImportRow,
   PressingImportSummary,
-  PressingImportStatus
+  PressingImportStatus,
+  FurnaceCarBrickPair
 } from '../types';
 import { fetchMasterData } from './masterDataService';
 import { fetchProductTypes } from './productTypeService';
@@ -42,13 +45,20 @@ import { safeBatchSet } from '../utils/firestoreSanitizer';
 import { calculateProductionMetrics } from './productionService';
 import { toWesternDigits } from '../utils/formatters';
 import { findBestFuzzyCandidates, ProposedMatchCandidate } from '../utils/fuzzyMatching';
+import {
+  buildPressingDuplicateKey,
+  pressingIdentityFromRow,
+  pressingIdentityFromFirestoreDoc,
+} from './pressingDuplicateIdentityPure';
 import { 
   loadApprovedMappings, 
   getDomainApprovedMappings, 
   logHistoricalImportExecution, 
   saveApprovedMappingBatch 
 } from './importMappingService';
-import { parseMultiCodeValue } from '../utils/multiCodeParser';
+import { parseMultiCodeValue, parseFurnaceCarBrickPairs } from '../utils/multiCodeParser';
+import { parseShiftNumber, isValidShiftNumber, buildShiftDisplayName, buildShiftCode } from '../utils/shiftUtils';
+import { evaluateProductionWarnings, buildInvalidShiftMessage } from '../utils/businessValidationRules';
 
 /**
  * EXACT 21 Columns required in this exact order for Pressing Historical Import
@@ -270,18 +280,13 @@ export async function parseAndValidatePressingExcel(
 
   // Build In-Database index for duplicate detection
   // Composite Key: date + shift + press + product + order + worker1 + furnaceCars
+  // (PHASE 4F: now built via the shared pure helper - see
+  // pressingDuplicateIdentityPure.ts - reused verbatim by the final live
+  // recheck below, instead of two separately-maintained copies of this logic.)
   const dbRecordSet = new Set<string>();
   existingProdSnap.docs.forEach((docSnap: any) => {
     const d = docSnap.data() as ProductionRecord;
-    const date = d.date || '';
-    const shift = d.shiftCode || d.shiftName || d.shiftId || '';
-    const press = d.pressCode || d.pressName || d.pressId || '';
-    const prod = d.productCode || d.productId || '';
-    const order = d.customerOrderNumber || '';
-    const w1 = d.employeeCodes?.[0] || d.employeeNames?.[0] || d.employeeId || '';
-    const cars = (d.furnaceCarNumbers || []).sort().join('-');
-    const key = `${date}#${shift}#${press}#${prod}#${order}#${w1}#${cars}`.toLowerCase();
-    dbRecordSet.add(key);
+    dbRecordSet.add(buildPressingDuplicateKey(pressingIdentityFromFirestoreDoc(d)));
   });
 
   const inMemoryFileKeySet = new Set<string>();
@@ -515,23 +520,68 @@ export async function parseAndValidatePressingExcel(
     const employeeNames = productionEmployees.map(e => e.name);
     const employeeCodes = productionEmployees.map(e => e.code);
 
-    // 4. FURNACE CARS (Separators: - , * , / , , ; | etc.)
+    // 4. FURNACE CARS + BRICK COUNT
+    // NEW business format: "CAR-BRICKS/CAR-BRICKS/..." - '/' separates car
+    // records, '-' separates a car's number from its brick count within one
+    // record. Only carNumber is ever Master Data; brickCount is transactional.
+    // This intentionally does NOT use the old flat multi-code splitter -
+    // "278-453/254-880" now means 2 cars, never 4 independent codes.
     const furnaceCarsRaw = String(row['رقم العربات'] || row['العربات'] || row['رقم العربة'] || '').trim();
-    const parsedCarsResult = parseMultiCodeValue(furnaceCarsRaw, 'furnaceCars');
-    const rawCarParts = parsedCarsResult.tokens;
+    const furnaceCarBrickPairs: FurnaceCarBrickPair[] = parseFurnaceCarBrickPairs(furnaceCarsRaw);
+    const rawCarParts = furnaceCarBrickPairs.map(p => p.carNumber).filter(Boolean);
 
-    const resolvedFurnaceCars: Array<{ id?: string; code: string; carNumber: string }> = [];
+    const resolvedFurnaceCars: Array<{ id?: string; code: string; carNumber: string; brickCount?: number | null }> = [];
     const furnaceCarNumbers: string[] = [];
     const furnaceCarIds: string[] = [];
+    const furnaceCarBrickCounts: number[] = [];
     const carCodes: string[] = [];
 
-    if (parsedCarsResult.isMulti) {
-      rowWarnings.push(`تم تقسيم البيان إلى ${parsedCarsResult.tokenCount} عربات منفصلة.`);
+    if (furnaceCarBrickPairs.length > 1) {
+      rowWarnings.push(`تم تقسيم البيان إلى ${furnaceCarBrickPairs.length} عربة/عربات منفصلة.`);
     }
 
-    for (const carCodeStr of rawCarParts) {
+    // Incomplete/malformed pairs (#6) - never silently discarded.
+    const errorReasonMessage: Record<NonNullable<FurnaceCarBrickPair['errorReason']>, string> = {
+      MISSING_BRICK_COUNT: 'عدد الطوب مفقود',
+      INVALID_BRICK_COUNT: 'عدد الطوب غير صالح (يجب أن يكون رقماً صحيحاً غير سالب)',
+      MISSING_CAR_NUMBER: 'رقم العربة مفقود',
+      MALFORMED: 'صيغة غير صالحة',
+    };
+    for (const pair of furnaceCarBrickPairs) {
+      if (!pair.isValid) {
+        rowErrors.push(`إدخال عربة فرن غير مكتمل: "${pair.raw}" - ${errorReasonMessage[pair.errorReason || 'MALFORMED']}.`);
+        if (rowStatus === 'NEW') rowStatus = 'INCOMPLETE_FURNACE_CAR_ENTRY';
+      }
+    }
+
+    // Duplicate car number within the SAME row (#7) - never silently merged;
+    // both occurrences stay visible in the review matrix so the operator can
+    // see exactly which brick counts are in conflict and resolve explicitly.
+    const carNumberOccurrences = new Map<string, number>();
+    for (const pair of furnaceCarBrickPairs) {
+      if (!pair.isValid || !pair.carNumber) continue;
+      const norm = pair.carNumber.toLowerCase();
+      carNumberOccurrences.set(norm, (carNumberOccurrences.get(norm) || 0) + 1);
+    }
+    const duplicateCarNumbersFlagged = new Set<string>();
+    for (const pair of furnaceCarBrickPairs) {
+      if (!pair.isValid || !pair.carNumber) continue;
+      const norm = pair.carNumber.toLowerCase();
+      if ((carNumberOccurrences.get(norm) || 0) > 1 && !duplicateCarNumbersFlagged.has(norm)) {
+        duplicateCarNumbersFlagged.add(norm);
+        rowErrors.push(`العربة ${pair.carNumber} مكررة بأكثر من عدد طوب. / Furnace Car ${pair.carNumber} appears more than once with different brick counts.`);
+        if (rowStatus === 'NEW') rowStatus = 'DUPLICATE_FURNACE_CAR';
+      }
+    }
+
+    for (const pair of furnaceCarBrickPairs) {
+      if (!pair.isValid) continue; // already reported as an incomplete entry above
+
+      const carCodeStr = pair.carNumber;
       const normCar = carCodeStr.toLowerCase();
-      let matchedCar = furnaceCars.find(c => 
+      // Master Data matching is performed ONLY against the car number -
+      // never against the "CAR-BRICKS" combined string.
+      let matchedCar = furnaceCars.find(c =>
         (c.carNumber && c.carNumber.toLowerCase() === normCar) ||
         (c.code && c.code.toLowerCase() === normCar) ||
         (c.carCodeNormalized && c.carCodeNormalized === normCar) ||
@@ -548,9 +598,11 @@ export async function parseAndValidatePressingExcel(
           id: matchedCar.id,
           code: matchedCar.code || carCodeStr,
           carNumber: matchedCar.carNumber || carCodeStr,
+          brickCount: pair.brickCount,
         });
         furnaceCarNumbers.push(matchedCar.carNumber || carCodeStr);
         if (matchedCar.id) furnaceCarIds.push(matchedCar.id);
+        furnaceCarBrickCounts.push(pair.brickCount ?? 0);
         carCodes.push(matchedCar.code || carCodeStr);
       } else {
         const carCandidates = findBestFuzzyCandidates(carCodeStr, furnaceCars, {
@@ -584,9 +636,11 @@ export async function parseAndValidatePressingExcel(
               id: top.id,
               code: top.code,
               carNumber: top.name,
+              brickCount: pair.brickCount,
             });
             furnaceCarNumbers.push(top.name);
             if (top.id) furnaceCarIds.push(top.id);
+            furnaceCarBrickCounts.push(pair.brickCount ?? 0);
             carCodes.push(top.code);
             rowWarnings.push(`مطابقة ذكية لعربة الفرن: "${carCodeStr}" -> "${top.name}" (${top.confidence}%)`);
           } else {
@@ -701,20 +755,15 @@ export async function parseAndValidatePressingExcel(
       }
     }
 
-    // 7. SHIFT RESOLUTION (Strictly 1 or 2)
+    // 7. SHIFT RESOLUTION (1, 2, or 3 - all equally valid, see utils/shiftUtils.ts)
     const shiftRaw = row['رقم الوردية'] ?? row['الوردية'] ?? row['shift'] ?? '';
     const shiftStr = toWesternDigits(String(shiftRaw)).trim();
     let resolvedShift: { id: string; name: string; code: string; hours?: number } | undefined = undefined;
 
-    let shiftNum: number | null = null;
-    if (shiftStr === '1' || shiftStr.includes('1') || shiftStr.includes('الأولى') || shiftStr.toLowerCase().includes('first')) {
-      shiftNum = 1;
-    } else if (shiftStr === '2' || shiftStr.includes('2') || shiftStr.includes('الثانية') || shiftStr.toLowerCase().includes('second')) {
-      shiftNum = 2;
-    }
+    const shiftNum = parseShiftNumber(shiftRaw);
 
-    if (shiftNum !== 1 && shiftNum !== 2) {
-      rowErrors.push(`رقم الوردية (${shiftRaw || 'فارغ'}) غير صالح. المسموح به فقط الوردية 1 أو الوردية 2.`);
+    if (!isValidShiftNumber(shiftNum)) {
+      rowErrors.push(buildInvalidShiftMessage(shiftRaw, 'ar'));
       if (rowStatus === 'NEW') rowStatus = 'INVALID_SHIFT';
       shiftErrorsCount++;
     } else {
@@ -723,18 +772,19 @@ export async function parseAndValidatePressingExcel(
         const sName = String(s.name || '').toLowerCase();
         if (shiftNum === 1 && (sCode.includes('1') || sCode.includes('a') || sName.includes('1') || sName.includes('أولى') || sName.includes('صباحية'))) return true;
         if (shiftNum === 2 && (sCode.includes('2') || sCode.includes('b') || sName.includes('2') || sName.includes('ثانية') || sName.includes('مسائية'))) return true;
+        if (shiftNum === 3 && (sCode.includes('3') || sCode.includes('c') || sName.includes('3') || sName.includes('ثالثة') || sName.includes('ليلية'))) return true;
         return false;
       }) || shifts[shiftNum - 1] || {
         id: `shift-${shiftNum}`,
-        code: `SHIFT-${shiftNum}`,
-        name: `الوردية ${shiftNum === 1 ? 'الأولى' : 'الثانية'}`,
+        code: buildShiftCode(shiftNum),
+        name: buildShiftDisplayName(shiftNum, 'ar'),
         hours: 8
       };
 
       resolvedShift = {
         id: matchedShift.id || `shift-${shiftNum}`,
-        name: matchedShift.name || `الوردية ${shiftNum === 1 ? 'الأولى' : 'الثانية'}`,
-        code: matchedShift.code || `SHIFT-${shiftNum}`,
+        name: matchedShift.name || buildShiftDisplayName(shiftNum, 'ar'),
+        code: matchedShift.code || buildShiftCode(shiftNum),
         hours: matchedShift.hours || 8,
       };
     }
@@ -901,8 +951,11 @@ export async function parseAndValidatePressingExcel(
       if (rowStatus === 'NEW') rowStatus = 'INVALID_NUMBER';
     }
 
-    if (wasteQuantity > productionQuantity && productionQuantity > 0) {
-      rowWarnings.push(`تنبيه: كمية الهالك (${wasteQuantity}) أكبر من كمية الإنتاج (${productionQuantity})`);
+    // Business (non-blocking) warnings - centrally defined in businessValidationRules.ts
+    // so the same rule codes/messages apply identically here, in DataImportView's
+    // full-row editor, and in direct Production Entry.
+    for (const w of evaluateProductionWarnings({ productionQuantity, wasteQuantity }, 'ar')) {
+      rowWarnings.push(`تنبيه: ${w.message}`);
     }
 
     const goodQuantity = Math.max(0, productionQuantity - wasteQuantity);
@@ -928,6 +981,10 @@ export async function parseAndValidatePressingExcel(
 
     const calculatedTotalFaults = mechanicalFaults + electricalFaults + workshopFaults + rawMaterialFaults + otherFaults;
 
+    for (const w of evaluateProductionWarnings({ productionQuantity, wasteQuantity, calculatedTotalFaults, shiftHours: resolvedShift?.hours }, 'ar')) {
+      if (w.code === 'HIGH_DOWNTIME') rowWarnings.push(`تنبيه: ${w.message}`);
+    }
+
     const excelTotalRaw = row['إجمالي الأعطال'] ?? row['إجمالي التوقف'] ?? row['التوقفات'];
     let excelTotalFaults: number | undefined = undefined;
     if (excelTotalRaw !== undefined && excelTotalRaw !== '') {
@@ -946,13 +1003,18 @@ export async function parseAndValidatePressingExcel(
 
     // 13. DUPLICATE DETECTION
     // Key: date + shift + press + product + order + worker1 + furnaceCars
-    const shiftKeyPart = resolvedShift?.code || shiftStr || '';
-    const pressKeyPart = resolvedPress?.code || pressRaw || '';
-    const prodKeyPart = resolvedProduct?.code || prodCodeRaw || '';
-    const w1KeyPart = resolvedWorker1?.code || w1CodeRaw || w1NameRaw || '';
-    const carsKeyPart = furnaceCarNumbers.sort().join('-');
-
-    const duplicateCompositeKey = `${dateStr}#${shiftKeyPart}#${pressKeyPart}#${prodKeyPart}#${customerOrder}#${w1KeyPart}#${carsKeyPart}`.toLowerCase();
+    // (PHASE 4F: built via the shared pure helper - see
+    // pressingDuplicateIdentityPure.ts - identical field/fallback order as
+    // before, now also reused by the final live recheck.)
+    const duplicateCompositeKey = buildPressingDuplicateKey({
+      date: dateStr,
+      shiftKeyPart: resolvedShift?.code || shiftStr || '',
+      pressKeyPart: resolvedPress?.code || pressRaw || '',
+      productKeyPart: resolvedProduct?.code || prodCodeRaw || '',
+      customerOrder,
+      worker1KeyPart: resolvedWorker1?.code || w1CodeRaw || w1NameRaw || '',
+      furnaceCarNumbers,
+    });
 
     if (inMemoryFileKeySet.has(duplicateCompositeKey)) {
       isDuplicate = true;
@@ -1000,9 +1062,11 @@ export async function parseAndValidatePressingExcel(
       
       furnaceCarsRaw,
       furnaceCarTokens: rawCarParts,
+      furnaceCarBrickPairs,
       resolvedFurnaceCars,
       furnaceCarNumbers,
       furnaceCarIds,
+      furnaceCarBrickCounts,
       carCodes,
       
       pressRaw,
@@ -1067,6 +1131,140 @@ export async function parseAndValidatePressingExcel(
 }
 
 /**
+ * PHASE 4F - FINAL LIVE DUPLICATE RECHECK.
+ *
+ * parseAndValidatePressingExcel()'s duplicate check above is a SNAPSHOT
+ * taken once when the file was first uploaded/reviewed. Between that
+ * moment and the user finally clicking "Execute Import" (which may be
+ * minutes or longer - the user can review, correct, and re-review rows in
+ * between), another user or process could have written a matching
+ * production record. This closes that TOCTOU gap immediately before
+ * writing, WITHOUT re-downloading the whole `production` collection again
+ * (that would double the exact expensive full-collection read Phase 4C/4D
+ * worked to reduce, for a collection this codebase's own audits already
+ * flagged as large). Instead: group the candidate rows by their (date,
+ * resolved product code) anchor - both fields are guaranteed present on
+ * any row that reached this stage (a row with no resolved product would
+ * already have a blocking UNKNOWN_PRODUCT error and never be writable) -
+ * and issue ONE narrow, two-equality-filter query per DISTINCT anchor
+ * pair (`where('date','==',...)`, `where('productCode','==',...)` - both
+ * equality filters, so this is served by Firestore's automatic
+ * single-field indexes, never a composite index). Each query typically
+ * returns a handful of documents (same day, same product), not the whole
+ * collection. The FULL 7-field composite key (shared with the parse-time
+ * check via pressingDuplicateIdentityPure.ts) is then matched in-memory
+ * only against that narrow result set, so correctness is identical to
+ * the parse-time check, just re-verified live.
+ *
+ * RESIDUAL RISK (disclosed, not silently accepted): this anchors on
+ * `productCode`, the field this importer and the manual entry form both
+ * always write. A hypothetical existing document written by some other,
+ * long-superseded path that stored the product only under `productId`
+ * (never `productCode`) would not be found by this narrow query. Since
+ * this recheck exists specifically to catch a record created DURING the
+ * short review window (necessarily by a CURRENT writer, which always
+ * populates `productCode`), this is judged an acceptable, narrow scope
+ * limitation - the original parse-time full-snapshot check (which does
+ * use the same code||id fallback as every other document field) already
+ * covers the broader legacy-data case moments earlier.
+ *
+ * A row a newly-discovered live duplicate is found for is pushed a NEW
+ * blocking error (not merely a warning) - unlike the parse-time
+ * DUPLICATE_IN_DATABASE case (a warning the user can knowingly accept),
+ * the user never had a chance to review THIS specific new information, so
+ * it must not be silently overridable. Deliberately does NOT set
+ * rowSelection to any kind of "pending/needs re-review" sentinel -
+ * pressingSelectionPure.ts's computePressingBulkOutcome explicitly
+ * documents that Pressing (unlike Chinese Mills) has no such state:
+ * "every row gets an explicit INCLUDED/EXCLUDED decision... blocking rows
+ * are still gated by isRowReadyToImport() ... never by being excluded
+ * from selection itself." Adding a new sentinel here would silently
+ * contradict that existing, deliberate design choice - pushing the error
+ * alone is sufficient: isRowWritable() already gates on
+ * `errors.length === 0` regardless of `rowSelection`.
+ *
+ * PHASE 4F.2 - FAILS CLOSED: if an anchor group's narrow query itself
+ * fails (e.g. a transient network/permission error), every row in that
+ * group is marked `DUPLICATE_RECHECK_FAILED` (a NEW, distinct status -
+ * never mislabeled as the CONFIRMED `DUPLICATE_IN_DATABASE`) and blocked
+ * from import via the same `errors` mechanism - never silently allowed
+ * through un-verified. Rows in a different, successfully-queried anchor
+ * group are entirely unaffected, so this can never poison an unrelated
+ * valid row; it can only ever narrow the writable set further, never
+ * widen it.
+ */
+export async function recheckPressingDatabaseDuplicates(
+  rowsToCheck: PressingImportRow[]
+): Promise<PressingImportRow[]> {
+  // Group rows by (date, productCode) anchor so identical anchors share one query.
+  const anchorGroups = new Map<string, { date: string; productCode: string; rows: PressingImportRow[] }>();
+  for (const row of rowsToCheck) {
+    const identity = pressingIdentityFromRow(row);
+    if (!identity.date || !identity.productKeyPart) continue; // defensive - should not happen for a writable row
+    const anchorKey = `${identity.date}#${identity.productKeyPart}`.toLowerCase();
+    const group = anchorGroups.get(anchorKey);
+    if (group) {
+      group.rows.push(row);
+    } else {
+      anchorGroups.set(anchorKey, { date: identity.date, productCode: identity.productKeyPart, rows: [row] });
+    }
+  }
+
+  // One narrow query per distinct (date, productCode) pair - never a full collection scan.
+  const liveDuplicateKeys = new Set<string>();
+  // PHASE 4F.2 - FAIL CLOSED: if an anchor group's query itself cannot be
+  // completed, every row in that group is unverifiable and must NOT be
+  // written - never silently allowed through (that would reopen the exact
+  // TOCTOU gap this recheck exists to close), and never mislabeled as a
+  // CONFIRMED duplicate (it might not be one - the check simply couldn't
+  // run). Rows belonging to a DIFFERENT, successfully-queried anchor group
+  // are entirely unaffected.
+  const recheckFailedRowIndexes = new Set<number>();
+  await Promise.all(
+    Array.from(anchorGroups.values()).map(async ({ date, productCode, rows }) => {
+      try {
+        const snap = await getDocs(
+          query(collection(db, 'production'), where('date', '==', date), where('productCode', '==', productCode))
+        );
+        snap.forEach((docSnap) => {
+          const d = docSnap.data() as ProductionRecord;
+          liveDuplicateKeys.add(buildPressingDuplicateKey(pressingIdentityFromFirestoreDoc(d)));
+        });
+      } catch (err) {
+        console.warn('Pressing final duplicate recheck query warning (failing closed for this anchor group):', err);
+        rows.forEach((r) => recheckFailedRowIndexes.add(r.rowIndex));
+      }
+    })
+  );
+
+  return rowsToCheck.map((row) => {
+    if (row.duplicateType === 'DATABASE') return row; // already flagged at parse time, no need to re-flag
+    if (recheckFailedRowIndexes.has(row.rowIndex)) {
+      return {
+        ...row,
+        status: 'DUPLICATE_RECHECK_FAILED' as PressingImportStatus,
+        errors: [
+          ...row.errors,
+          'تعذر التحقق النهائي من عدم تكرار هذا الصف قبل الاستيراد - لن يتم استيراده الآن حفاظاً على سلامة البيانات. يرجى إعادة المحاولة.',
+        ],
+      };
+    }
+    const key = buildPressingDuplicateKey(pressingIdentityFromRow(row));
+    if (!liveDuplicateKeys.has(key)) return row;
+    return {
+      ...row,
+      isDuplicate: true,
+      duplicateType: 'DATABASE' as const,
+      status: 'DUPLICATE_IN_DATABASE' as PressingImportStatus,
+      errors: [
+        ...row.errors,
+        'تم استيراد سجل مطابق إلى قاعدة البيانات منذ مراجعة هذا الملف - لن يتم استيراده مرة أخرى.',
+      ],
+    };
+  });
+}
+
+/**
  * Execute Safe Batch Import for Pressing Records
  * Commits up to 400 documents per batch with audit logging and backup association
  */
@@ -1111,8 +1309,8 @@ export async function executePressingBatchImport(
         
         // Shift
         shiftId: row.resolvedShift?.id || 'default-shift-1',
-        shiftName: row.resolvedShift?.name || (row.shiftRaw == 2 ? 'الوردية الثانية' : 'الوردية الأولى'),
-        shiftCode: row.resolvedShift?.code || (row.shiftRaw == 2 ? 'SHIFT-2' : 'SHIFT-1'),
+        shiftName: row.resolvedShift?.name || buildShiftDisplayName(parseShiftNumber(row.shiftRaw) || 1, 'ar'),
+        shiftCode: row.resolvedShift?.code || buildShiftCode(parseShiftNumber(row.shiftRaw) || 1),
         
         // Workers & Team
         employeeId: row.resolvedWorker1?.id || row.employeeIds?.[0] || 'default-emp',
@@ -1128,6 +1326,10 @@ export async function executePressingBatchImport(
         
         furnaceCarIds: row.furnaceCarIds || [],
         furnaceCarNumbers: row.furnaceCarNumbers || [],
+        // Parallel to furnaceCarIds/furnaceCarNumbers (same index = same car).
+        // Brick count is transactional data, never stored on the Furnace Car
+        // Master Data document.
+        furnaceCarBrickCounts: row.furnaceCarBrickCounts || [],
         carCodes: row.carCodes || [],
         carCode: row.furnaceCarsRaw || undefined,
         originalFurnaceCars: row.furnaceCarsRaw || undefined,
