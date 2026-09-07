@@ -20,9 +20,9 @@ import {
 } from 'firebase/firestore';
 import { db, auth, handleFirestoreError, OperationType } from '../config/firebase';
 import { safeAddDoc, safeUpdateDoc, sanitizeForFirestore } from '../utils/firestoreSanitizer';
-import { 
-  ProductionStageType, 
-  RecordStatus, 
+import {
+  ProductionStageType,
+  RecordStatus,
   UniversalStageRecord,
   RecordAuditLog,
   RotaryFurnaceRecord,
@@ -35,17 +35,21 @@ import {
   MultiDimensionFilter
 } from '../types';
 import { logAuditAction } from './auditService';
+import {
+  STAGE_COLLECTION_NAMES,
+  resolveStageQueryBounds,
+  StageQueryBounds,
+  isStageQueryCacheEligible,
+  buildStageQueryCacheKey
+} from './stageQueryBoundsPure';
+import { runCacheFirstRead } from './localCacheStore';
 
-export const STAGE_COLLECTION_NAMES: Record<ProductionStageType, string> = {
-  pressing: 'production',
-  rotary_furnace: 'stage_rotary_furnace',
-  chinese_mills: 'stage_chinese_mills',
-  tube_ball_mills: 'stage_tube_ball_mills',
-  mortar_concrete: 'stage_mortar_concrete',
-  mixing: 'stage_mixing',
-  lightweight_foam: 'stage_lightweight_foam',
-  sorting: 'stage_sorting',
-};
+// Re-exported verbatim (defined in stageQueryBoundsPure.ts, which has zero
+// Firebase dependency and is directly unit-testable) so every existing
+// importer of STAGE_COLLECTION_NAMES/resolveStageQueryBounds from this file
+// is unaffected by the move - see that file's own docblock.
+export { STAGE_COLLECTION_NAMES, resolveStageQueryBounds };
+export type { StageQueryBounds };
 
 export const STAGE_DISPLAY_NAMES: Record<ProductionStageType, string> = {
   pressing: 'التشكيل والمكابس',
@@ -248,9 +252,43 @@ export async function fetchRecordAuditHistory(recordId: string): Promise<RecordA
 }
 
 /**
- * Fetch all records across all or selected stages and normalize into UniversalStageRecord
+ * Fetch all records across all or selected stages and normalize into UniversalStageRecord.
+ *
+ * PHASE 4A: when `filters.startDate`/`filters.endDate` are supplied, each
+ * stage collection's read is now bounded server-side via Firestore
+ * `where('date', >=/<=, ...)` on the SAME field (never a composite index -
+ * two inequality clauses on one field use Firestore's automatic
+ * single-field index, confirmed safe to deploy without any index change).
+ * The date-window client-side check below is kept as-is for callers that
+ * omit these filters (unchanged, fully backward compatible) and as a
+ * harmless no-op safety net when they are supplied (already-bounded
+ * results trivially still pass the same check). No `limit()` is applied -
+ * an arbitrary limit could silently drop valid report rows for a wide
+ * date range, which is explicitly out of scope for this phase.
  */
-export async function fetchUniversalStageRecords(
+/**
+ * PHASE 4B - scopes the new bounded-stage-query cache to the signed-in
+ * user, identical in shape and intent to masterDataService.ts's own
+ * `currentCacheUserScope()` (same `auth.currentUser?.uid || 'anonymous'`
+ * convention, kept as its own local copy here rather than importing that
+ * one so this file's Firestore-record caching stays independent of
+ * Master Data's - they already have separate, independent cache
+ * lifecycles going back to the Phase 2 audit's "NO CHANGE NEEDED"
+ * conclusion for unrelated collections).
+ */
+function currentCacheUserScope(): string {
+  return auth.currentUser?.uid || 'anonymous';
+}
+
+/**
+ * PHASE 4B - the exact Phase 4A fetch-and-normalize logic, unchanged,
+ * extracted into an internal helper so it can be called either directly
+ * (uncached path, for queries that are not cache-eligible) or wrapped by
+ * `runCacheFirstRead` (cached path, for bounded queries) from the same
+ * source of truth - no duplicated query/normalization logic between the
+ * two paths.
+ */
+async function fetchUniversalStageRecordsUncached(
   filters?: MultiDimensionFilter
 ): Promise<UniversalStageRecord[]> {
   const stagesToFetch: ProductionStageType[] = filters?.stageType && filters.stageType !== 'all'
@@ -266,12 +304,25 @@ export async function fetchUniversalStageRecords(
         'sorting'
       ];
 
+  const bounds = resolveStageQueryBounds(filters);
   const results: UniversalStageRecord[] = [];
 
   for (const st of stagesToFetch) {
     const colName = STAGE_COLLECTION_NAMES[st];
     try {
-      const snap = await getDocs(collection(db, colName));
+      // Same try/catch-and-skip pattern as before (one inaccessible/errored
+      // stage collection never aborts the others) - never a "bounded query
+      // fails, fall back to unbounded" ladder, which would reintroduce the
+      // exact full-collection read this phase removes.
+      let snap;
+      if (bounds.useServerSideDateBound) {
+        const constraints = [];
+        if (bounds.startDate) constraints.push(where('date', '>=', bounds.startDate));
+        if (bounds.endDate) constraints.push(where('date', '<=', bounds.endDate));
+        snap = await getDocs(query(collection(db, colName), ...constraints));
+      } else {
+        snap = await getDocs(collection(db, colName));
+      }
       snap.forEach(docSnap => {
         const d = docSnap.data();
         
@@ -398,4 +449,75 @@ export async function fetchUniversalStageRecords(
   // Sort descending by date
   results.sort((a, b) => new Date(b.date || b.createdAt).getTime() - new Date(a.date || a.createdAt).getTime());
   return results;
+}
+
+/**
+ * PHASE 4B - CACHE BOUNDED STAGE RESULTS.
+ *
+ * Public entry point, signature unchanged from Phase 4A so every existing
+ * caller (Dashboard/DashboardBuilderView, ReportsView, Suggested
+ * Analytics, Data Review, the AI analytics/business-insights/stage-report
+ * tools) keeps working with zero changes on their side.
+ *
+ * Caches ONLY queries with a valid, well-formed, non-inverted
+ * [startDate, endDate] range (`isStageQueryCacheEligible`) - reusing the
+ * existing `runCacheFirstRead` orchestration from localCacheStore.ts
+ * completely unchanged, exactly as masterDataService.fetchMasterData
+ * already does, by passing a deterministic synthetic string
+ * (`buildStageQueryCacheKey`, encoding stageType+startDate+endDate) as its
+ * `collectionName`. `collectionName` there is only ever used as an opaque
+ * cache-key component (see localCacheStore.ts), never validated against a
+ * real Firestore collection name, so this is a legitimate reuse rather
+ * than a hack.
+ *
+ * Every other call shape - no dates, only one of startDate/endDate, or an
+ * invalid/inverted range - calls the internal helper directly and is
+ * byte-identical to today's uncached Phase 4A behavior. This is what
+ * keeps Dashboard/DashboardBuilderView's intentionally unbounded calls
+ * (no arguments at all) from ever being cached as if they were bounded.
+ *
+ * CACHE FAILURE SAFETY: `runCacheFirstRead`'s own cache get/set calls
+ * (LocalCacheStore.get/save) never throw - any IndexedDB failure or
+ * corrupt/undecodable entry is swallowed internally and treated as a
+ * cache miss (see localCacheStore.ts). That means a cache failure here
+ * can only ever fall through to `readFromSource`, i.e. this file's own
+ * BOUNDED `fetchUniversalStageRecordsUncached(filters)` call - never an
+ * unbounded Firestore read. No extra error handling is added here beyond
+ * what `runCacheFirstRead` already guarantees, since adding a redundant
+ * try/catch around it would only ever catch a bug in `readFromSource`
+ * itself (the same bounded fetch either path would use).
+ *
+ * INVALIDATION: intentionally NOT implemented on stage-record writes
+ * (createStageRecord/updateStageRecord/setRecordApprovalStatus, all
+ * unchanged in this phase). Unlike Master Data - where one write maps
+ * cleanly to one collection name to invalidate - a single stage-record
+ * write's `date` could fall inside an unbounded number of different
+ * already-cached date-range keys (e.g. "this week", "Q1 2026", "last
+ * month" could all be independently cached and all legitimately include
+ * that date). There is no simple 1:1 write-to-cache-key mapping the way
+ * there is for Master Data, and building one (e.g. tracking every cached
+ * range and testing each new/edited record's date against it) would be a
+ * broad architectural change, not the smallest safe fix. Per this phase's
+ * own explicit instruction, this finding is reported rather than acted
+ * on: freshness instead relies solely on the existing 5-minute TTL
+ * (`MASTER_DATA_CACHE_TTL_MS`, reused unchanged) expiring the entry.
+ *
+ * DISCLOSED STALE-CACHE RISK: a stage record created, edited, or
+ * approved/rejected after a matching bounded query has already been
+ * cached may not appear in that query's result for up to 5 minutes, until
+ * the cache entry expires and the next call re-reads Firestore. This is
+ * an accepted, disclosed tradeoff for this phase, not a silent gap.
+ */
+export async function fetchUniversalStageRecords(
+  filters?: MultiDimensionFilter
+): Promise<UniversalStageRecord[]> {
+  if (!isStageQueryCacheEligible(filters)) {
+    return fetchUniversalStageRecordsUncached(filters);
+  }
+
+  return runCacheFirstRead<UniversalStageRecord>({
+    userScope: currentCacheUserScope(),
+    collectionName: buildStageQueryCacheKey(filters as MultiDimensionFilter),
+    readFromSource: () => fetchUniversalStageRecordsUncached(filters),
+  });
 }

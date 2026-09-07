@@ -16,8 +16,9 @@ import {
   onSnapshot, 
   serverTimestamp 
 } from 'firebase/firestore';
-import { db, handleFirestoreError, OperationType } from '../config/firebase';
+import { db, auth, handleFirestoreError, OperationType } from '../config/firebase';
 import { safeAddDoc, safeUpdateDoc } from '../utils/firestoreSanitizer';
+import { setCachedCollection, invalidateCachedCollection, runCacheFirstRead } from './localCacheStore';
 import { 
   Employee, 
   Department, 
@@ -43,12 +44,23 @@ export const MASTER_DATA_COLLECTIONS: Record<MasterDataTab, string> = {
   presses: 'presses',
   furnaces: 'furnaces',
   furnaceCars: 'furnaceCars',
+  // Reuses the existing 'chineseMills' Firestore collection (previously
+  // unregistered, populated only via Historical Import - see
+  // chineseMillsHistoricalImportService.ts's CHINESE_MILLS_MASTER_COLLECTION)
+  // rather than a new collection name, so existing mill master records are
+  // never orphaned by giving them a proper Master Data tab.
+  mills: 'chineseMills',
   customers: 'customers',
   shifts: 'shifts',
   materials: 'materials',
   machines: 'machines',
   stages: 'stages',
 };
+
+/** Scopes the local cache to the signed-in user (Phase 1 Local Cache Foundation) - mirrors the existing per-user localStorage-key convention already used by the Historical Import draft services (e.g. tubeBallMillsDraftPure.ts's storageKey), just keyed by uid here since that is already read via `auth` elsewhere in this codebase (e.g. auditService.ts). Never a new tenant/permission concept. */
+function currentCacheUserScope(): string {
+  return auth.currentUser?.uid || 'anonymous';
+}
 
 // Check if a code already exists in the collection to prevent duplicates
 export async function checkCodeDuplicate(
@@ -70,22 +82,66 @@ export async function checkCodeDuplicate(
   }
 }
 
-// Generic Fetch All
+/**
+ * Generic Fetch All - CACHE-FIRST (Phase 1 Local Cache Foundation).
+ *
+ * Checks the local IndexedDB-backed cache first; on a fresh hit, returns
+ * immediately with ZERO Firestore reads. On a miss (empty, expired,
+ * schema-version bump, or cache genuinely unavailable in this browser),
+ * behaves EXACTLY as before: reads Firestore and returns the result - the
+ * only addition is writing that result into the cache afterward so the
+ * next call within the freshness window is a hit. If the cache backend is
+ * unavailable or corrupted, getCachedCollection resolves null (never
+ * throws), so this function's behavior and error handling toward the
+ * caller are unchanged from before this cache existed.
+ *
+ * `skipCache` lets a caller force a fresh Firestore read when it genuinely
+ * needs the latest data before the freshness window would normally expire
+ * (e.g. immediately after a write it just made elsewhere) - optional and
+ * defaults to using the cache, so no existing call site's behavior changes
+ * unless it opts in.
+ *
+ * The actual cache-then-source sequence is delegated to
+ * runCacheFirstRead (localCacheStore.ts) - a pure extraction of this same
+ * logic, kept separate so it can be verified with a fake Firestore reader
+ * in tests (see scripts/tests/masterDataCacheVerification.test.ts) without
+ * this function's own behavior changing at all. runCacheFirstRead also
+ * de-duplicates concurrent calls for the same collection while the cache
+ * is empty/expired, so `Promise.all([fetchMasterData(...), ...])` for the
+ * same collection never causes a Firestore read storm.
+ */
 export async function fetchMasterData<T extends { id?: string; code?: string }>(
-  collectionName: string
+  collectionName: string,
+  options?: { skipCache?: boolean }
 ): Promise<T[]> {
   try {
-    const snapshot = await getDocs(collection(db, collectionName));
-    return snapshot.docs.map(doc => ({
-      id: doc.id,
-      ...doc.data()
-    })) as T[];
+    return await runCacheFirstRead<T>({
+      userScope: currentCacheUserScope(),
+      collectionName,
+      skipCache: options?.skipCache,
+      readFromSource: async () => {
+        const snapshot = await getDocs(collection(db, collectionName));
+        return snapshot.docs.map(doc => ({
+          id: doc.id,
+          ...doc.data()
+        })) as T[];
+      },
+    });
   } catch (error) {
     handleFirestoreError(error, OperationType.LIST, collectionName);
   }
 }
 
-// Real-time listener
+/**
+ * Real-time listener - UNCHANGED live behavior (still always subscribes,
+ * still always delivers every Firestore update immediately to `onData`).
+ * The only addition (Phase 1 Local Cache Foundation, §9 "use existing
+ * listener updates to keep the cache synchronized") is a fire-and-forget
+ * write-through into the same local cache fetchMasterData reads from, so a
+ * screen already live-subscribed to a collection keeps that collection's
+ * cache warm for OTHER screens/forms that call fetchMasterData for it -
+ * without adding a second listener or any extra Firestore read.
+ */
 export function subscribeMasterData<T>(
   collectionName: string,
   onData: (items: T[]) => void,
@@ -99,6 +155,7 @@ export function subscribeMasterData<T>(
         ...doc.data()
       })) as T[];
       onData(items);
+      void setCachedCollection(currentCacheUserScope(), collectionName, items);
     },
     (error) => {
       console.warn(`Master data subscription snapshot notice for ${collectionName}:`, error);
@@ -175,6 +232,7 @@ export async function createMasterDataItem<T extends Record<string, any>>(
 
   try {
     const docRef = await safeAddDoc(collection(db, collectionName), payload);
+    await invalidateCachedCollection(currentCacheUserScope(), collectionName);
     await logAuditAction('CREATE', collectionName, docRef.id, `إضافة سجل جديد بكود: ${itemData.code || docRef.id}`);
     return docRef.id;
   } catch (error) {
@@ -241,6 +299,7 @@ export async function updateMasterDataItem<T extends Record<string, any>>(
   try {
     const docRef = doc(db, collectionName, id);
     await safeUpdateDoc(docRef, payload);
+    await invalidateCachedCollection(currentCacheUserScope(), collectionName);
     await logAuditAction('UPDATE', collectionName, id, `تعديل بيانات السجل: ${itemData.code || id}`);
   } catch (error) {
     handleFirestoreError(error, OperationType.UPDATE, `${collectionName}/${id}`);
@@ -261,8 +320,9 @@ export async function toggleMasterDataActive(
       updatedAt: new Date().toISOString(),
       serverUpdatedAt: serverTimestamp(),
     });
+    await invalidateCachedCollection(currentCacheUserScope(), collectionName);
     await logAuditAction(
-      newStatus ? 'ACTIVATE' : 'DEACTIVATE', 
+      newStatus ? 'ACTIVATE' : 'DEACTIVATE',
       collectionName, 
       id, 
       `${newStatus ? 'تفعيل' : 'تعطيل'} السجل`
@@ -281,6 +341,7 @@ export async function deleteMasterDataItem(
   try {
     const docRef = doc(db, collectionName, id);
     await deleteDoc(docRef);
+    await invalidateCachedCollection(currentCacheUserScope(), collectionName);
     await logAuditAction('DELETE', collectionName, id, `حذف السجل: ${itemCode || id}`);
   } catch (error) {
     handleFirestoreError(error, OperationType.DELETE, `${collectionName}/${id}`);

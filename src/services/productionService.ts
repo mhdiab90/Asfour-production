@@ -30,6 +30,7 @@ import { logAuditAction } from './auditService';
 import { matchesSearch, enrichWithNormalizedFields } from '../utils/searchUtils';
 import { calculatePieceBasedProduction } from '../utils/productionCalculations';
 import { safeBatchSet, safeUpdateDoc, sanitizeForFirestore } from '../utils/firestoreSanitizer';
+import { resolveProductionQueryBounds } from './productionQueryBoundsPure';
 
 // Pure Production Calculation Engine (Factory Standard: TON is primary, COUNT is operational)
 export function calculateProductionMetrics(
@@ -182,7 +183,9 @@ export async function createProductionRecord(
     });
   }
 
-  // 3. Production furnace cars mapping
+  // 3. Production furnace cars mapping (each car keeps its own transactional
+  // Brick Count, parallel-indexed with furnaceCarIds - never stored on the
+  // Furnace Car Master Data document itself).
   if (data.furnaceCarIds && data.furnaceCarIds.length > 0) {
     data.furnaceCarIds.forEach((carId, idx) => {
       if (!carId) return;
@@ -191,6 +194,7 @@ export async function createProductionRecord(
         productionId,
         furnaceCarId: carId,
         carNumber: data.furnaceCarNumbers?.[idx] || '',
+        brickCount: data.furnaceCarBrickCounts?.[idx] ?? null,
         ...(data.furnaceId ? { furnaceId: data.furnaceId } : {}),
         date: data.date,
         createdAt: new Date().toISOString(),
@@ -286,10 +290,32 @@ export async function deleteProductionRecord(id: string, recordName?: string): P
   }
 }
 
-// Fetch all production records
-export async function fetchProductionRecords(): Promise<ProductionRecord[]> {
+/**
+ * PHASE 4C - fetch Production (Pressing) records, optionally bounded
+ * server-side by date. Signature is additive (`filters` is optional) so
+ * every pre-existing zero-argument caller (DataQualityModal.tsx's
+ * explicit, documented full-history data-quality scan) is unaffected and
+ * stays exactly as unbounded as before.
+ *
+ * `orderBy('date', 'desc')` is kept unconditionally, including alongside
+ * the new `where('date', ...)` constraints - a range filter and a sort on
+ * the SAME field is served by Firestore's automatic single-field index,
+ * never a composite index (verified, not assumed - this is the one
+ * documented exception to "inequality filter + orderBy requires a
+ * composite index on the combined fields"). No `limit()` is applied - see
+ * stageRecordService.ts's identical Phase 4A reasoning.
+ */
+export async function fetchProductionRecords(
+  filters?: Pick<ProductionFilter, 'startDate' | 'endDate'>
+): Promise<ProductionRecord[]> {
   try {
-    const q = query(collection(db, 'production'), orderBy('date', 'desc'));
+    const bounds = resolveProductionQueryBounds(filters);
+    const constraints = [];
+    if (bounds.useServerSideDateBound) {
+      if (bounds.startDate) constraints.push(where('date', '>=', bounds.startDate));
+      if (bounds.endDate) constraints.push(where('date', '<=', bounds.endDate));
+    }
+    const q = query(collection(db, 'production'), ...constraints, orderBy('date', 'desc'));
     const snapshot = await getDocs(q);
     return snapshot.docs.map(doc => ({
       id: doc.id,
@@ -300,12 +326,27 @@ export async function fetchProductionRecords(): Promise<ProductionRecord[]> {
   }
 }
 
-// Real-time subscription to production records
+/**
+ * PHASE 4C - real-time subscription to Production records, optionally
+ * bounded server-side by date via a new, additive, optional third
+ * parameter - the existing 2-argument call in ProductionRecordsView.tsx
+ * (before this phase) continues to compile and behave identically
+ * (`filters` undefined -> unbounded, exactly as before). Same
+ * where('date',...)+orderBy('date','desc') single-field-index reasoning
+ * as fetchProductionRecords() above.
+ */
 export function subscribeProductionRecords(
   onData: (records: ProductionRecord[]) => void,
-  onError?: (err: any) => void
+  onError?: (err: any) => void,
+  filters?: Pick<ProductionFilter, 'startDate' | 'endDate'>
 ) {
-  const q = query(collection(db, 'production'), orderBy('date', 'desc'));
+  const bounds = resolveProductionQueryBounds(filters);
+  const constraints = [];
+  if (bounds.useServerSideDateBound) {
+    if (bounds.startDate) constraints.push(where('date', '>=', bounds.startDate));
+    if (bounds.endDate) constraints.push(where('date', '<=', bounds.endDate));
+  }
+  const q = query(collection(db, 'production'), ...constraints, orderBy('date', 'desc'));
   return onSnapshot(
     q,
     (snapshot) => {

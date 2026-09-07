@@ -18,6 +18,7 @@ import { doc, getDoc, updateDoc, serverTimestamp } from 'firebase/firestore';
 import { auth, db } from '../config/firebase';
 import { AdminUser, UserRole, NavigationPage } from '../types';
 import { logAuditAction } from '../services/auditService';
+import { clearLocalCacheForUser } from '../services/localCacheStore';
 import { GranularPermissions, PermissionKey } from '../types/permissions';
 import { resolveUserPermissions, hasPermission as checkPermission, canAccessPage as checkPageAccess } from '../utils/permissions';
 
@@ -244,6 +245,11 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           currentUser.uid,
           `تسجيل خروج المستخدم: ${adminUser?.fullName || currentUser.email}`
         );
+        // Local Cache Foundation (Phase 1, §10/§12) - clears only this
+        // user's cached Master Data, never another user's, so the next
+        // sign-in (same device, different account) never serves stale
+        // data belonging to whoever was signed in before.
+        await clearLocalCacheForUser(currentUser.uid).catch(() => {});
       }
       await firebaseSignOut(auth).catch(() => {});
 
