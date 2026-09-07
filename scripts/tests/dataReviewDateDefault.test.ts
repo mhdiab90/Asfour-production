@@ -283,14 +283,20 @@ test('12b. Phase 5E.2 cache-key contract is untouched by this phase', () => {
   assert.match(boundsPure, /if \(!startDate \|\| !endDate\) return false;/);
 });
 
-test('12c. other screens\' read paths were not modified by this phase', () => {
-  // DataQualityModal keeps its deliberate full-history scan (Phase 5C).
-  assert.match(read('src/components/admin/DataQualityModal.tsx'), /await fetchProductionRecords\(\);/);
-  // Dashboard/Builder keep their Phase 5B bounded calls.
-  assert.match(read('src/components/dashboard/DashboardView.tsx'), /fetchUniversalStageRecords\(\{ startDate: resolvedDate\.startDate, endDate: resolvedDate\.endDate \}\)/);
-  assert.match(read('src/components/dashboard/DashboardBuilderView.tsx'), /fetchUniversalStageRecords\(\{ startDate: range\.startDate, endDate: range\.endDate \}\)/);
-  // Reports keeps passing its own filters object.
-  assert.match(read('src/components/reports/ReportsView.tsx'), /fetchUniversalStageRecords\(filters\)/);
+test('12c. this phase touches no other screen\'s read path', () => {
+  // Scoped deliberately to the files THIS release ships. An earlier version
+  // of this test also asserted on DataQualityModal / DashboardView /
+  // DashboardBuilderView / ReportsView, but those belong to Phase 5B/5C and
+  // are not part of this release - so those assertions passed only in a
+  // working tree that happened to contain that unreleased work, and failed
+  // on a clean checkout. A guard for those screens belongs with the release
+  // that ships them, not here.
+  //
+  // What IS verifiable from inside this release: Data Review reads through
+  // the one shared service and adds no read path of its own.
+  assert.match(viewCode, /import \{[\s\S]*?fetchUniversalStageRecords[\s\S]*?\} from '\.\.\/\.\.\/services\/stageRecordService'/);
+  assert.equal(/fetchProductionRecords/.test(viewCode), false, 'Data Review must not reach into the Pressing-only production reader');
+  assert.equal(/collection\(|getDocs\(|onSnapshot\(/.test(viewCode), false, 'Data Review must not build its own Firestore query');
 });
 
 test('12d. the component builds no Firestore query and no second cache of its own', () => {
