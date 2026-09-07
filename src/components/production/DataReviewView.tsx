@@ -45,7 +45,28 @@ import {
   fetchRecordAuditHistory,
   STAGE_DISPLAY_NAMES 
 } from '../../services/stageRecordService';
+import {
+  resolveDashboardDateSelection,
+  type DashboardDatePreset,
+  type DashboardDateSelection,
+} from '../../services/dashboardPeriodPure';
+import { todayLocalIso, resolveNamedMonthRange } from '../../assistant/tools/dateRangeResolver';
+import { filterDataReviewRecords } from '../../services/dataReviewSearchPure';
 import * as XLSX from 'xlsx';
+
+/**
+ * PHASE 5E.3 - Data Review opens on the last 30 days.
+ *
+ * This is a deliberate, user-visible product decision, not a hidden cap: the
+ * active period is rendered on screen, the matching preset button is
+ * highlighted, and "كل الفترات (All Time)" sits next to it as an explicit
+ * one-click choice. Declared as a named constant so the default is stated in
+ * exactly one place and can be asserted by the tests.
+ */
+export const DATA_REVIEW_DEFAULT_DATE_PRESET: DashboardDatePreset = 'last30days';
+
+/** The two presets this screen exposes as buttons; manual date entry produces 'custom'. */
+export const DATA_REVIEW_DATE_PRESETS: DashboardDatePreset[] = ['last30days', 'all'];
 
 export const DataReviewView: React.FC = () => {
   const { adminUser } = useAuth();
@@ -56,8 +77,48 @@ export const DataReviewView: React.FC = () => {
   // Filters
   const [selectedStage, setSelectedStage] = useState<ProductionStageType | 'all'>('all');
   const [selectedStatus, setSelectedStatus] = useState<RecordStatus | 'all'>('all');
-  const [startDate, setStartDate] = useState('');
-  const [endDate, setEndDate] = useState('');
+  /**
+   * PHASE 5E.3 - the date range is now a PRESET SELECTION rather than two
+   * free-floating strings that both defaulted to ''.
+   *
+   * Before this change the screen opened with startDate/endDate both empty,
+   * which resolveStageQueryBounds() reads as "no bound" - so the very first
+   * load read every stage collection in full, and (because Phase 4B's cache
+   * requires BOTH dates) could never be cached. The default is now a real
+   * bounded LAST 30 DAYS window, which is both server-side bounded and
+   * cache-eligible.
+   *
+   * Full history is NOT removed - it becomes an EXPLICIT, labelled choice
+   * ("كل الفترات / All Time"), which is the only UI path that intentionally
+   * produces an unbounded query. Previously "all time" was reachable only by
+   * the unlabelled empty-input state, which no user could distinguish from
+   * "no filter applied yet".
+   *
+   * Reuses the application's existing period vocabulary
+   * (services/dashboardPeriodPure.ts, Phase 5B) rather than introducing a
+   * second date-range framework - same resolver, same injected-"today"
+   * convention, same empty-bounds meaning for the all-time preset.
+   */
+  const [dateSelection, setDateSelection] = useState<DashboardDateSelection>({
+    preset: DATA_REVIEW_DEFAULT_DATE_PRESET,
+  });
+
+  const resolvedDates = useMemo(
+    () => resolveDashboardDateSelection(dateSelection, {
+      today: todayLocalIso(),
+      resolveNamedMonth: (year, month) => {
+        const r = resolveNamedMonthRange(year, month);
+        return { startDate: r.startDate, endDate: r.endDate };
+      },
+    }),
+    [dateSelection]
+  );
+
+  // The exact strings sent to the service and shown in the two date inputs.
+  // For the 'all' preset these are '' - the existing, unchanged service
+  // semantics for an unbounded query.
+  const startDate = resolvedDates.startDate;
+  const endDate = resolvedDates.endDate;
 
   // Selected Record for Modal Inspection / Correction / Audit History
   const [selectedRecord, setSelectedRecord] = useState<UniversalStageRecord | null>(null);
@@ -92,7 +153,12 @@ export const DataReviewView: React.FC = () => {
         status: selectedStatus,
         startDate: startDate || undefined,
         endDate: endDate || undefined,
-        searchQuery: searchQuery || undefined,
+        // F-02: `searchQuery` is deliberately NOT sent to the service.
+        // It is applied client-side below instead (see `visibleRecords`), so
+        // `records` always holds the complete set for the selected
+        // date/stage/status scope. Sending it here would narrow the cached
+        // dataset by a term this effect does not re-run on, and clearing the
+        // search box could then never restore the rows it had removed.
       });
 
       // Permission filter: if normal user only has read.own
@@ -110,8 +176,18 @@ export const DataReviewView: React.FC = () => {
   };
 
   useEffect(() => {
+    // PHASE 5E.3 - an incomplete or inverted CUSTOM range must not query at
+    // all. resolveDashboardDateSelection() reports those as invalid with
+    // empty bounds, and empty bounds mean UNBOUNDED to the service - so
+    // without this guard a mid-edit date would silently trigger exactly the
+    // full-history read this phase removes. Explicit "All Time" remains the
+    // only path that intentionally produces an unbounded query.
+    if (resolvedDates.invalid) {
+      setIsLoading(false);
+      return;
+    }
     loadRecords();
-  }, [selectedStage, selectedStatus, startDate, endDate]);
+  }, [selectedStage, selectedStatus, startDate, endDate, resolvedDates.invalid]);
 
   const openRecordDetails = async (rec: UniversalStageRecord) => {
     setSelectedRecord(rec);
@@ -182,8 +258,22 @@ export const DataReviewView: React.FC = () => {
     }
   };
 
+  /**
+   * F-02 - the records actually shown, derived from the canonical `records`
+   * state. Zero Firestore reads: this filters the already-loaded, already
+   * date/stage/status-bounded dataset, so it updates on every keystroke
+   * without a network round-trip. `records` itself is never mutated or
+   * overwritten, so clearing the box restores the full filtered set.
+   */
+  const visibleRecords = useMemo(
+    () => filterDataReviewRecords(records, searchQuery),
+    [records, searchQuery]
+  );
+
   const exportToExcel = () => {
-    const exportData = records.map(r => ({
+    // Exports exactly what the table shows, search included - otherwise a
+    // filtered view would silently export unfiltered rows.
+    const exportData = visibleRecords.map(r => ({
       'كود السجل': r.id,
       'المرحلة': r.stageNameAr,
       'التاريخ': r.date,
@@ -249,6 +339,44 @@ export const DataReviewView: React.FC = () => {
         </div>
       </div>
 
+      {/* PHASE 5E.3 - Review period selector. The active scope is always
+          stated on screen; "All Time" is an explicit, labelled choice rather
+          than the old unlabelled empty-date state. */}
+      <div className="bg-white p-3 rounded-2xl border border-slate-200 shadow-xs flex flex-wrap items-center gap-2">
+        <span className="text-xs font-black text-slate-800 flex items-center gap-1.5">
+          <Calendar className="w-4 h-4 text-slate-500" />
+          فترة المراجعة (Review Period):
+        </span>
+
+        <div className="flex items-center gap-1 bg-slate-100 p-1 rounded-xl text-[11px] font-bold">
+          {DATA_REVIEW_DATE_PRESETS.map((p) => (
+            <button
+              key={p}
+              type="button"
+              onClick={() => setDateSelection({ preset: p })}
+              className={`px-3 py-1.5 rounded-lg transition-colors cursor-pointer ${dateSelection.preset === p ? 'bg-white text-red-600 shadow-xs' : 'text-slate-500 hover:text-slate-800'}`}
+            >
+              {p === 'last30days' ? 'آخر 30 يوم (Last 30 Days)' : null}
+              {p === 'all' ? 'كل الفترات (All Time)' : null}
+            </button>
+          ))}
+        </div>
+
+        {resolvedDates.invalid ? (
+          <span className="px-2.5 py-1 rounded-lg bg-red-50 text-red-700 border border-red-200 text-[11px] font-bold">
+            نطاق تاريخ غير صالح - تاريخ البداية يجب أن يسبق تاريخ النهاية أو يساويه. لم يتم تحديث السجلات.
+          </span>
+        ) : dateSelection.preset === 'all' ? (
+          <span className="px-2.5 py-1 rounded-lg bg-amber-50 text-amber-800 border border-amber-200 text-[11px] font-bold">
+            يتم عرض كامل السجل التاريخي لكل المراحل (All Time - full history)
+          </span>
+        ) : (
+          <span className="px-2.5 py-1 rounded-lg bg-slate-100 text-slate-700 border border-slate-200 text-[11px] font-bold">
+            {startDate} → {endDate}
+          </span>
+        )}
+      </div>
+
       {/* Multi-Filter Bar */}
       <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-xs grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3">
         {/* Search */}
@@ -293,13 +421,17 @@ export const DataReviewView: React.FC = () => {
           </select>
         </div>
 
-        {/* Start Date */}
+        {/* Start Date - PHASE 5E.3: editing either input switches the
+            selection to an explicit CUSTOM range and carries the other end
+            over unchanged, so a manual range is used verbatim and survives
+            stage/status filter changes. */}
         <div>
           <input
             type="date"
             value={startDate}
-            onChange={(e) => setStartDate(e.target.value)}
-            className="w-full px-3 py-2 text-xs bg-slate-50 border border-slate-300 rounded-xl outline-none"
+            aria-invalid={resolvedDates.invalid}
+            onChange={(e) => setDateSelection({ preset: 'custom', startDate: e.target.value, endDate })}
+            className={`w-full px-3 py-2 text-xs bg-slate-50 border rounded-xl outline-none ${resolvedDates.invalid ? 'border-red-400' : 'border-slate-300'}`}
             placeholder="من تاريخ"
           />
         </div>
@@ -309,8 +441,9 @@ export const DataReviewView: React.FC = () => {
           <input
             type="date"
             value={endDate}
-            onChange={(e) => setEndDate(e.target.value)}
-            className="w-full px-3 py-2 text-xs bg-slate-50 border border-slate-300 rounded-xl outline-none"
+            aria-invalid={resolvedDates.invalid}
+            onChange={(e) => setDateSelection({ preset: 'custom', startDate, endDate: e.target.value })}
+            className={`w-full px-3 py-2 text-xs bg-slate-50 border rounded-xl outline-none ${resolvedDates.invalid ? 'border-red-400' : 'border-slate-300'}`}
             placeholder="إلى تاريخ"
           />
         </div>
@@ -323,7 +456,7 @@ export const DataReviewView: React.FC = () => {
             <Loader2 className="w-8 h-8 animate-spin text-red-600" />
             <span>جاري تحميل سجلات الإنتاج للتدقيق والمراجعة...</span>
           </div>
-        ) : records.length === 0 ? (
+        ) : visibleRecords.length === 0 ? (
           <div className="p-12 text-center text-slate-500 text-sm">
             لا توجد سجلات تطابق الفلاتر المحددة حالياً.
           </div>
@@ -343,7 +476,7 @@ export const DataReviewView: React.FC = () => {
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
-                {records.map((rec) => (
+                {visibleRecords.map((rec) => (
                   <tr key={rec.id} className="hover:bg-slate-50/80 transition-colors">
                     <td className="px-4 py-3 font-mono font-bold text-slate-700 whitespace-nowrap">
                       {rec.date}

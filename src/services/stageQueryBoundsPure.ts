@@ -135,7 +135,68 @@ export function isStageQueryCacheEligible(filters?: MultiDimensionFilter): boole
  * Only called when `isStageQueryCacheEligible(filters)` is true, so
  * startDate/endDate are guaranteed present and well-formed here.
  */
+/**
+ * PHASE 5E.2 - CACHE IDENTITY CORRECTNESS.
+ *
+ * The v1 key encoded only stageType/startDate/endDate. That was safe while
+ * every caller passed only those three, but fetchUniversalStageRecordsUncached
+ * ALSO applies status/productId/customerId/employeeId/searchQuery as
+ * client-side filters INSIDE the cached function (stageRecordService.ts
+ * lines 424-431), so the cached payload is already narrowed by dimensions the
+ * v1 key did not record. Two logically different queries could therefore
+ * collide on one key and the narrower cached payload could be served as if it
+ * were the wider result set - silent under-reporting, not a stale-data blip.
+ *
+ * Concretely, on the Data Review screen (the only caller that passes `status`
+ * and `searchQuery`): filtering to status=SUBMITTED over a date range cached
+ * the SUBMITTED-only subset; switching the dropdown back to "all" over the
+ * same range hit the same key and re-displayed that subset as the complete
+ * data. Reachable today by any user who fills in both date inputs.
+ *
+ * WHICH DIMENSIONS ARE INCLUDED, and why exactly these: every field the
+ * cached function actually reads, and no others. `stageType` selects which
+ * collections are read (line 294); `startDate`/`endDate`/`status`/
+ * `productId`/`customerId`/`employeeId`/`searchQuery` each filter the
+ * returned records (lines 424-431). MultiDimensionFilter also declares
+ * departmentId, shiftId, productTypeId, pressId, furnaceId and machineId -
+ * these are DELIBERATELY EXCLUDED because stageRecordService never reads
+ * them, so they cannot change the payload; including them would only
+ * fragment the cache into entries that hold identical data.
+ *
+ * NORMALIZATION follows the service's own semantics exactly, so that inputs
+ * which produce an identical payload also produce an identical key (no
+ * needless fragmentation) while any input that can change the payload
+ * changes the key:
+ *   - status: falsy OR the literal 'all' both mean "no status filter"
+ *     (line 426 short-circuits on both) -> all collapse to `all`.
+ *   - productId/customerId/employeeId/searchQuery: falsy means "no filter"
+ *     (each guard is a plain truthiness check) -> undefined and '' collapse.
+ *   - searchQuery is lower-cased by the service before matching (line 431),
+ *     so 'ABC' and 'abc' return identical payloads -> lower-cased here too.
+ *     It is deliberately NOT trimmed, because the service does not trim and
+ *     ' abc' genuinely matches differently from 'abc'.
+ *
+ * Values are percent-encoded so free-text input (searchQuery especially)
+ * can never inject the `::` or `=` separators and forge another query's key.
+ *
+ * The version prefix moves v1 -> v2 so payloads cached under the old,
+ * ambiguous key format can never be read back through the new one.
+ */
 export function buildStageQueryCacheKey(filters: MultiDimensionFilter): string {
+  const enc = (value?: string) => encodeURIComponent(value || '');
   const stageType = filters.stageType && filters.stageType !== 'all' ? filters.stageType : 'all';
-  return `stageRecords::v1::stage=${stageType}::start=${filters.startDate}::end=${filters.endDate}`;
+  const status = filters.status && filters.status !== 'all' ? filters.status : 'all';
+
+  return [
+    'stageRecords',
+    'v2',
+    `stage=${enc(stageType)}`,
+    `start=${enc(filters.startDate)}`,
+    `end=${enc(filters.endDate)}`,
+    `status=${enc(status)}`,
+    `product=${enc(filters.productId)}`,
+    `customer=${enc(filters.customerId)}`,
+    `employee=${enc(filters.employeeId)}`,
+    `search=${enc((filters.searchQuery || '').toLowerCase())}`,
+  ].join('::');
 }
