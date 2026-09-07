@@ -21,6 +21,12 @@ import { RawMaterialsView } from './components/admin/RawMaterialsView';
 import { BackupRestoreView } from './components/admin/BackupRestoreView';
 import { SystemHealthView } from './components/admin/SystemHealthView';
 import { AIAssistantView } from './components/ai/AIAssistantView';
+import { AIProviderManagementView } from './components/admin/AIProviderManagementView';
+import { GlobalAssistant } from './components/assistant/GlobalAssistant';
+import { AssistantSelectionProvider } from './context/AssistantSelectionContext';
+import { setRuntimeActiveProvider } from './assistant/providerRuntime';
+import { AI_PROVIDER, AIProviderId } from './assistant/config';
+import { subscribeActiveProviderConfig } from './services/aiProviderConfigService';
 import { MasterDataView } from './components/masterData/MasterDataView';
 import { UserManagementView } from './components/users/UserManagementView';
 import { BulkEntryView } from './components/bulk/BulkEntryView';
@@ -47,6 +53,32 @@ const MainAppContent: React.FC = () => {
   const [isProfileModalOpen, setIsProfileModalOpen] = useState<boolean>(false);
   const [connectionStatus, setConnectionStatus] = useState<'online' | 'offline' | 'syncing'>('online');
   const [showLoginSplash, setShowLoginSplash] = useState<boolean>(true);
+
+  // Central AI Provider Manager - load the admin-selected active provider from
+  // Firestore once signed in and keep it live-synced (one shared listener), so
+  // the Global Assistant never uses a provider that is not really active.
+  // Cleared on sign-out so an unauthenticated session never inherits a stale choice.
+  const [activeProviderId, setActiveProviderId] = useState<AIProviderId>(AI_PROVIDER);
+  useEffect(() => {
+    if (!isAuthenticated) {
+      setRuntimeActiveProvider(null);
+      setActiveProviderId(AI_PROVIDER);
+      return;
+    }
+    const unsubscribe = subscribeActiveProviderConfig(
+      (config) => {
+        const resolved = config?.activeProvider ?? null;
+        setRuntimeActiveProvider(resolved);
+        setActiveProviderId(resolved ?? AI_PROVIDER);
+      },
+      () => {
+        setRuntimeActiveProvider(null);
+        setActiveProviderId(AI_PROVIDER);
+      }
+    );
+    return () => unsubscribe();
+  }, [isAuthenticated]);
+
 
   // Synchronize route with browser URL / hash if /production requested
   useEffect(() => {
@@ -298,6 +330,11 @@ const MainAppContent: React.FC = () => {
                 <SystemHealthView initialTab="history" />
               )}
 
+              {/* Central AI Provider Manager */}
+              {currentPage === 'ai-provider-management' && (
+                <AIProviderManagementView />
+              )}
+
               {/* AI Factory Assistant */}
               {currentPage === 'ai-assistant' && (
                 <AIAssistantView />
@@ -366,6 +403,9 @@ const MainAppContent: React.FC = () => {
 
       {/* System Version & Changelog Modal */}
       <VersionModal />
+
+      {/* Global AI Assistant (persistent floating icon, authenticated screens only) */}
+      <GlobalAssistant currentPage={currentPage} onNavigate={handleNavigate} activeProviderId={activeProviderId} />
     </div>
   );
 };
@@ -377,7 +417,9 @@ export default function App() {
         <AuthProvider>
           <BrandingProvider>
             <UpdateProvider>
-              <MainAppContent />
+              <AssistantSelectionProvider>
+                <MainAppContent />
+              </AssistantSelectionProvider>
             </UpdateProvider>
           </BrandingProvider>
         </AuthProvider>

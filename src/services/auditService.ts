@@ -2,7 +2,7 @@
  * Audit Logging Service
  * Records administrative and operational actions to the `auditLogs` collection in Firestore.
  */
-import { collection, addDoc, serverTimestamp, query, orderBy, limit, getDocs, onSnapshot } from 'firebase/firestore';
+import { collection, addDoc, serverTimestamp, query, orderBy, limit, getDocs, onSnapshot, where } from 'firebase/firestore';
 import { db, auth, handleFirestoreError, OperationType } from '../config/firebase';
 import { AuditLog } from '../types';
 
@@ -44,6 +44,30 @@ export async function fetchRecentAuditLogs(maxCount = 100): Promise<AuditLog[]> 
     }));
   } catch (error) {
     handleFirestoreError(error, OperationType.LIST, 'auditLogs');
+  }
+}
+
+/**
+ * Master Data Edit History (§17/§28) - reuses the EXISTING auditLogs
+ * collection (every masterDataService/productTypeService mutation already
+ * writes here) rather than a new collection/schema. Deliberately a single
+ * equality `where` (auto-indexed by Firestore with no composite index setup
+ * required) + client-side collection-match + sort, instead of a compound
+ * server-side query, so this needs no Firestore config changes.
+ */
+export async function fetchAuditLogsForDocument(targetCollection: string, documentId: string, maxCount = 50): Promise<AuditLog[]> {
+  if (!documentId) return [];
+  try {
+    const q = query(collection(db, 'auditLogs'), where('documentId', '==', documentId), limit(200));
+    const snapshot = await getDocs(q);
+    return snapshot.docs
+      .map((doc) => ({ id: doc.id, ...(doc.data() as Omit<AuditLog, 'id'>) }))
+      .filter((log) => log.collection === targetCollection)
+      .sort((a, b) => (b.timestamp || '').localeCompare(a.timestamp || ''))
+      .slice(0, maxCount);
+  } catch (error) {
+    handleFirestoreError(error, OperationType.LIST, 'auditLogs');
+    return [];
   }
 }
 

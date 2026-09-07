@@ -31,28 +31,31 @@ import {
   PlusCircle,
   HelpCircle,
   Info,
-  ShieldCheck
+  ShieldCheck,
+  Wrench
 } from 'lucide-react';
-import { 
-  MasterDataTab, 
-  Employee, 
-  Department, 
-  Press, 
-  Furnace, 
-  FurnaceCar, 
-  Product, 
+import {
+  MasterDataTab,
+  Employee,
+  Department,
+  Press,
+  Furnace,
+  FurnaceCar,
+  Mill,
+  Product,
   ProductType,
-  Customer, 
+  Customer,
   Shift,
   NavigationPage
 } from '../../types';
-import { 
-  fetchMasterData, 
-  subscribeMasterData, 
-  createMasterDataItem, 
-  updateMasterDataItem, 
-  toggleMasterDataActive, 
-  deleteMasterDataItem 
+import {
+  fetchMasterData,
+  subscribeMasterData,
+  createMasterDataItem,
+  updateMasterDataItem,
+  toggleMasterDataActive,
+  deleteMasterDataItem,
+  MASTER_DATA_COLLECTIONS
 } from '../../services/masterDataService';
 import {
   subscribeProductTypes,
@@ -63,6 +66,8 @@ import {
 import { parseProductCode, normalizeProductCode } from '../../utils/productCodeParser';
 import { enrichWithNormalizedFields } from '../../utils/searchUtils';
 import { DataQualityModal } from '../admin/DataQualityModal';
+import { MasterDataQualityReportModal } from './MasterDataQualityReportModal';
+import { CostCenterHierarchyPanel } from './CostCenterHierarchyPanel';
 import { exportMasterDataToExcel } from '../../services/exportService';
 import { Badge } from '../common/Badge';
 import { Modal } from '../common/Modal';
@@ -70,6 +75,34 @@ import { db } from '../../config/firebase';
 import { writeBatch, doc, serverTimestamp } from 'firebase/firestore';
 import { logAuditAction } from '../../services/auditService';
 import { toWesternDigits } from '../../utils/formatters';
+import { useLanguage } from '../../i18n/LanguageContext';
+
+/**
+ * Phase 4 completion - "افتح المكبس 2000" / "افتح العربة 209" navigation.
+ * Same session-local handoff pattern ReportsView.tsx already established
+ * (REPORT_PREFILL_KEY) - selects the right tab and pre-fills the search box
+ * so the resolved record is immediately visible, WITHOUT auto-opening the
+ * edit modal (opening a record for editing is a separate, deliberate user
+ * action, not implied by "open"/"show").
+ */
+export const MASTER_DATA_PREFILL_KEY = 'asfour_master_data_prefill';
+export const MASTER_DATA_PREFILL_EVENT = 'asfour:master-data-prefill-update';
+
+export interface MasterDataPrefill {
+  tab?: MasterDataTab;
+  query?: string;
+}
+
+function readMasterDataPrefill(): MasterDataPrefill | null {
+  try {
+    const raw = sessionStorage.getItem(MASTER_DATA_PREFILL_KEY);
+    if (!raw) return null;
+    sessionStorage.removeItem(MASTER_DATA_PREFILL_KEY);
+    return JSON.parse(raw);
+  } catch {
+    return null;
+  }
+}
 
 interface CodeAnalysisItem {
   product: Product;
@@ -97,15 +130,30 @@ interface MasterDataViewProps {
 }
 
 export const MasterDataView: React.FC<MasterDataViewProps> = ({ onNavigate }) => {
-  const [activeTab, setActiveTab] = useState<MasterDataTab>('products');
+  const { language, isRtl } = useLanguage();
+  const [prefill] = useState<MasterDataPrefill | null>(() => readMasterDataPrefill());
+  const [activeTab, setActiveTab] = useState<MasterDataTab>(prefill?.tab || 'products');
   const [items, setItems] = useState<any[]>([]);
   const [productTypes, setProductTypes] = useState<ProductType[]>([]);
   const [departments, setDepartments] = useState<Department[]>([]);
   const [furnaces, setFurnaces] = useState<Furnace[]>([]);
   const [isLoading, setIsLoading] = useState<boolean>(true);
-  const [searchQuery, setSearchQuery] = useState<string>('');
+  const [searchQuery, setSearchQuery] = useState<string>(prefill?.query || '');
   const [statusFilter, setStatusFilter] = useState<'all' | 'active' | 'inactive'>('all');
   const [prefixFilter, setPrefixFilter] = useState<string>('all');
+
+  // Phase 4 completion - apply a prefill update live, without requiring a
+  // remount (same reasoning as ReportsView's REPORT_PREFILL_EVENT).
+  useEffect(() => {
+    function handlePrefillUpdate(e: Event) {
+      const detail = (e as CustomEvent<MasterDataPrefill>).detail;
+      if (!detail) return;
+      if (detail.tab) setActiveTab(detail.tab);
+      if (detail.query !== undefined) setSearchQuery(detail.query || '');
+    }
+    window.addEventListener(MASTER_DATA_PREFILL_EVENT, handlePrefillUpdate as EventListener);
+    return () => window.removeEventListener(MASTER_DATA_PREFILL_EVENT, handlePrefillUpdate as EventListener);
+  }, []);
 
   // Modal States
   const [isModalOpen, setIsModalOpen] = useState<boolean>(false);
@@ -128,20 +176,23 @@ export const MasterDataView: React.FC<MasterDataViewProps> = ({ onNavigate }) =>
   // Analyze Existing Product Codes Modal State
   const [isAnalyzeModalOpen, setIsAnalyzeModalOpen] = useState<boolean>(false);
   const [isQualityModalOpen, setIsQualityModalOpen] = useState<boolean>(false);
+  const [isQualityReportOpen, setIsQualityReportOpen] = useState<boolean>(false);
+  const [isHierarchyPanelOpen, setIsHierarchyPanelOpen] = useState<boolean>(false);
   const [analyzedItems, setAnalyzedItems] = useState<CodeAnalysisItem[]>([]);
   const [isApplyingAnalysis, setIsApplyingAnalysis] = useState<boolean>(false);
   const [analysisAppliedMessage, setAnalysisAppliedMessage] = useState<string | null>(null);
 
   const tabs: { id: MasterDataTab; label: string; icon: React.ElementType }[] = [
-    { id: 'products', label: 'المنتجات الحرارية', icon: Box },
-    { id: 'productTypes', label: 'تصنيفات المنتجات (Prefixes)', icon: Layers },
-    { id: 'employees', label: 'العمال والموظفون', icon: Users },
-    { id: 'presses', label: 'المكابس', icon: Cpu },
-    { id: 'furnaces', label: 'الأفران', icon: Flame },
-    { id: 'furnaceCars', label: 'عربات الأفران', icon: Truck },
-    { id: 'customers', label: 'العملاء', icon: Building },
-    { id: 'departments', label: 'الأقسام', icon: Building2 },
-    { id: 'shifts', label: 'ورديات العمل', icon: Clock },
+    { id: 'products', label: language === 'ar' ? 'المنتجات الحرارية' : 'Products', icon: Box },
+    { id: 'productTypes', label: language === 'ar' ? 'تصنيفات المنتجات' : 'Product Types', icon: Layers },
+    { id: 'employees', label: language === 'ar' ? 'العمال والموظفون' : 'Employees', icon: Users },
+    { id: 'presses', label: language === 'ar' ? 'المكابس' : 'Presses', icon: Cpu },
+    { id: 'furnaces', label: language === 'ar' ? 'الأفران' : 'Furnaces', icon: Flame },
+    { id: 'furnaceCars', label: language === 'ar' ? 'عربات الأفران' : 'Furnace Cars', icon: Truck },
+    { id: 'mills', label: language === 'ar' ? 'الطواحين الصينية' : 'Chinese Mills', icon: Wrench },
+    { id: 'customers', label: language === 'ar' ? 'العملاء' : 'Customers', icon: Building },
+    { id: 'departments', label: language === 'ar' ? 'الأقسام' : 'Departments', icon: Building2 },
+    { id: 'shifts', label: language === 'ar' ? 'ورديات العمل' : 'Shifts', icon: Clock },
   ];
 
   // Subscribe to Product Types (always kept live for parser)
@@ -157,7 +208,7 @@ export const MasterDataView: React.FC<MasterDataViewProps> = ({ onNavigate }) =>
   useEffect(() => {
     setIsLoading(true);
     const unsubscribe = subscribeMasterData<any>(
-      activeTab,
+      MASTER_DATA_COLLECTIONS[activeTab],
       (data) => {
         setItems(data);
         setIsLoading(false);
@@ -306,6 +357,8 @@ export const MasterDataView: React.FC<MasterDataViewProps> = ({ onNavigate }) =>
       setFormData({ code: '', name: '', jobTitle: '', departmentId: '', departmentName: '', phone: '', active: true });
     } else if (activeTab === 'presses') {
       setFormData({ code: '', name: '', tonnage: 1200, model: '', status: 'active', active: true });
+    } else if (activeTab === 'mills') {
+      setFormData({ code: '', name: '', model: '', status: 'active', active: true });
     } else if (activeTab === 'furnaces') {
       setFormData({ code: '', name: '', capacity: 50, maxTemperature: 1650, status: 'active', active: true });
     } else if (activeTab === 'furnaceCars') {
@@ -337,13 +390,13 @@ export const MasterDataView: React.FC<MasterDataViewProps> = ({ onNavigate }) =>
       if (activeTab === 'productTypes') {
         const prefix = (formData.prefixCode || '').trim().toUpperCase();
         if (!/^[A-Z0-9]{3}$/.test(prefix)) {
-          throw new Error('بادئة الكود (Prefix Code) يجب أن تتكون من 3 أحرف باللغة الإنجليزية بالضبط (مثال: BAR, BHA).');
+          throw new Error(language === 'ar' ? 'بادئة الكود (Prefix Code) يجب أن تتكون من 3 أحرف باللغة الإنجليزية بالضبط (مثال: BAR, BHA).' : 'The prefix code must be exactly 3 English characters (e.g. BAR, BHA).');
         }
         if (!formData.nameEn || !formData.nameEn.trim()) {
-          throw new Error('الاسم باللغة الإنجليزية إلزامي لتصنيف المنتج.');
+          throw new Error(language === 'ar' ? 'الاسم باللغة الإنجليزية إلزامي لتصنيف المنتج.' : 'The English name is required for the product type.');
         }
         if (!formData.nameAr || !formData.nameAr.trim()) {
-          throw new Error('الاسم باللغة العربية إلزامي لتصنيف المنتج.');
+          throw new Error(language === 'ar' ? 'الاسم باللغة العربية إلزامي لتصنيف المنتج.' : 'The Arabic name is required for the product type.');
         }
 
         if (editingItem && editingItem.id) {
@@ -371,10 +424,10 @@ export const MasterDataView: React.FC<MasterDataViewProps> = ({ onNavigate }) =>
       if (activeTab === 'products') {
         const normalizedCode = normalizeProductCode(formData.code || '');
         if (!normalizedCode) {
-          throw new Error('حقل كود المنتج إلزامي.');
+          throw new Error(language === 'ar' ? 'حقل كود المنتج إلزامي.' : 'Product code is required.');
         }
         if (!formData.name || !formData.name.trim()) {
-          throw new Error('حقل اسم المنتج إلزامي.');
+          throw new Error(language === 'ar' ? 'حقل اسم المنتج إلزامي.' : 'Product name is required.');
         }
 
         const parseResult = parseProductCode(normalizedCode, productTypes);
@@ -387,7 +440,7 @@ export const MasterDataView: React.FC<MasterDataViewProps> = ({ onNavigate }) =>
         if (formData.aluminaPercentage !== undefined && formData.aluminaPercentage !== null && String(formData.aluminaPercentage).trim() !== '') {
           const aluminaNum = Number(formData.aluminaPercentage);
           if (isNaN(aluminaNum) || aluminaNum < 0 || aluminaNum > 100) {
-            throw new Error('نسبة الألومينا يجب أن تكون رقماً بين 0% و 100%.');
+            throw new Error(language === 'ar' ? 'نسبة الألومينا يجب أن تكون رقماً بين 0% و 100%.' : 'Alumina percentage must be a number between 0% and 100%.');
           }
           formData.aluminaPercentage = aluminaNum;
         } else {
@@ -398,7 +451,7 @@ export const MasterDataView: React.FC<MasterDataViewProps> = ({ onNavigate }) =>
         if (formData.pieceWeight !== undefined && formData.pieceWeight !== null && String(formData.pieceWeight).trim() !== '') {
           const weightNum = Number(formData.pieceWeight);
           if (isNaN(weightNum) || weightNum <= 0) {
-            throw new Error('وزن القطعة (كجم) يجب أن يكون قيمة رقمية أكبر من الصفر.');
+            throw new Error(language === 'ar' ? 'وزن القطعة (كجم) يجب أن يكون قيمة رقمية أكبر من الصفر.' : 'Piece weight (kg) must be a number greater than zero.');
           }
           formData.pieceWeight = weightNum;
           formData.pieceWeightKg = weightNum;
@@ -431,10 +484,10 @@ export const MasterDataView: React.FC<MasterDataViewProps> = ({ onNavigate }) =>
       }
 
       if (!formData.code || !formData.code.trim()) {
-        throw new Error('حقل الكود إلزامي.');
+        throw new Error(language === 'ar' ? 'حقل الكود إلزامي.' : 'Code is required.');
       }
       if (!formData.name && activeTab !== 'furnaceCars') {
-        throw new Error('حقل الاسم إلزامي.');
+        throw new Error(language === 'ar' ? 'حقل الاسم إلزامي.' : 'Name is required.');
       }
 
       // Fill auxiliary names if needed
@@ -448,14 +501,14 @@ export const MasterDataView: React.FC<MasterDataViewProps> = ({ onNavigate }) =>
       }
 
       if (editingItem && editingItem.id) {
-        await updateMasterDataItem(activeTab, editingItem.id, formData);
+        await updateMasterDataItem(MASTER_DATA_COLLECTIONS[activeTab], editingItem.id, formData);
       } else {
-        await createMasterDataItem(activeTab, formData);
+        await createMasterDataItem(MASTER_DATA_COLLECTIONS[activeTab], formData);
       }
 
       setIsModalOpen(false);
     } catch (err: any) {
-      setFormError(err.message || 'حدث خطأ أثناء حفظ البيانات.');
+      setFormError(err.message || (language === 'ar' ? 'حدث خطأ أثناء حفظ البيانات.' : 'An error occurred while saving the data.'));
     } finally {
       setIsSaving(false);
     }
@@ -466,7 +519,7 @@ export const MasterDataView: React.FC<MasterDataViewProps> = ({ onNavigate }) =>
       if (activeTab === 'productTypes') {
         await toggleProductTypeActive(item.id, item.active !== false, item.prefixCode);
       } else {
-        await toggleMasterDataActive(activeTab, item.id, item.active !== false);
+        await toggleMasterDataActive(MASTER_DATA_COLLECTIONS[activeTab], item.id, item.active !== false);
       }
     } catch (err) {
       console.error('Error toggling status:', err);
@@ -479,7 +532,7 @@ export const MasterDataView: React.FC<MasterDataViewProps> = ({ onNavigate }) =>
       if (activeTab === 'productTypes') {
         await toggleProductTypeActive(deleteConfirmItem.id, true, deleteConfirmItem.prefixCode);
       } else {
-        await deleteMasterDataItem(activeTab, deleteConfirmItem.id, deleteConfirmItem.code || deleteConfirmItem.name);
+        await deleteMasterDataItem(MASTER_DATA_COLLECTIONS[activeTab], deleteConfirmItem.id, deleteConfirmItem.code || deleteConfirmItem.name);
       }
       setDeleteConfirmItem(null);
     } catch (err) {
@@ -492,7 +545,7 @@ export const MasterDataView: React.FC<MasterDataViewProps> = ({ onNavigate }) =>
     setQuickTypePrefix(prefix.toUpperCase());
     setQuickTypeNameEn('');
     setQuickTypeNameAr('');
-    setQuickTypeDescription(`تصنيف نوع المنتج للبادئة (${prefix.toUpperCase()})`);
+    setQuickTypeDescription(language === 'ar' ? `تصنيف نوع المنتج للبادئة (${prefix.toUpperCase()})` : `Product type classification for prefix (${prefix.toUpperCase()})`);
     setQuickTypeError(null);
     setIsQuickTypeModalOpen(true);
   };
@@ -505,10 +558,10 @@ export const MasterDataView: React.FC<MasterDataViewProps> = ({ onNavigate }) =>
     try {
       const prefix = quickTypePrefix.trim().toUpperCase();
       if (!/^[A-Z0-9]{3}$/.test(prefix)) {
-        throw new Error('بادئة الكود يجب أن تتكون من 3 أحرف باللغة الإنجليزية بالضبط.');
+        throw new Error(language === 'ar' ? 'بادئة الكود يجب أن تتكون من 3 أحرف باللغة الإنجليزية بالضبط.' : 'The prefix code must be exactly 3 English characters.');
       }
-      if (!quickTypeNameEn.trim()) throw new Error('الاسم بالإنجليزية إلزامي.');
-      if (!quickTypeNameAr.trim()) throw new Error('الاسم بالعربية إلزامي.');
+      if (!quickTypeNameEn.trim()) throw new Error(language === 'ar' ? 'الاسم بالإنجليزية إلزامي.' : 'The English name is required.');
+      if (!quickTypeNameAr.trim()) throw new Error(language === 'ar' ? 'الاسم بالعربية إلزامي.' : 'The Arabic name is required.');
 
       const newId = await createProductType({
         prefixCode: prefix,
@@ -536,7 +589,7 @@ export const MasterDataView: React.FC<MasterDataViewProps> = ({ onNavigate }) =>
 
       setIsQuickTypeModalOpen(false);
     } catch (err: any) {
-      setQuickTypeError(err.message || 'فشل حفظ نوع المنتج الجديد.');
+      setQuickTypeError(err.message || (language === 'ar' ? 'فشل حفظ نوع المنتج الجديد.' : 'Failed to save the new product type.'));
     } finally {
       setIsQuickTypeSaving(false);
     }
@@ -716,7 +769,7 @@ export const MasterDataView: React.FC<MasterDataViewProps> = ({ onNavigate }) =>
   };
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-6" dir={isRtl ? 'rtl' : 'ltr'}>
       {/* Master Data Tabs Bar */}
       <div className="bg-white rounded-2xl p-2 border border-slate-200 shadow-xs flex items-center gap-1.5 overflow-x-auto">
         {tabs.map((tab) => {
@@ -751,6 +804,25 @@ export const MasterDataView: React.FC<MasterDataViewProps> = ({ onNavigate }) =>
             </button>
           );
         })}
+
+        {/*
+          Cost Center Hierarchy - a distinct, additive Master Data section
+          (Phase 5), visually separated from the flat-CRUD tabs above by the
+          divider since it is NOT wired into activeTab/MASTER_DATA_COLLECTIONS/
+          fetchMasterData - it opens its own self-contained, Firestore-free
+          browsing panel instead. Every existing tab above is untouched.
+        */}
+        <div className="w-px h-6 bg-slate-200 shrink-0 mx-0.5" />
+        <button
+          id="master-data-cost-center-hierarchy-btn"
+          type="button"
+          onClick={() => setIsHierarchyPanelOpen(true)}
+          className="flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-bold transition-all shrink-0 cursor-pointer text-amber-800 bg-amber-50 border border-amber-200 hover:bg-amber-100"
+          title={language === 'ar' ? 'استعراض التسلسل الهرمي الجديد لمراكز التكلفة (بيانات محلية - لا يتطلب Firestore)' : 'Browse the new cost center hierarchy (local data - no Firestore required)'}
+        >
+          <Layers className="w-4 h-4 text-amber-600" />
+          <span>{language === 'ar' ? 'التسلسل الهرمي لمراكز التكلفة' : 'Cost Center Hierarchy'}</span>
+        </button>
       </div>
 
       {/* Control Bar: Search, Filters, Add Button, Bulk Import Link, Excel Export */}
@@ -768,10 +840,10 @@ export const MasterDataView: React.FC<MasterDataViewProps> = ({ onNavigate }) =>
               onChange={(e) => setSearchQuery(e.target.value)}
               placeholder={
                 activeTab === 'products'
-                  ? 'البحث بالكود الذكي (مثال: BAR25)، البادئة، نسبة الألومينا، أو الاسم...'
+                  ? (language === 'ar' ? 'البحث بالكود الذكي (مثال: BAR25)، البادئة، نسبة الألومينا، أو الاسم...' : 'Search by smart code (e.g. BAR25), prefix, alumina %, or name...')
                   : activeTab === 'productTypes'
-                  ? 'البحث بالبادئة (BAR, BHA) أو الاسم بالإنجليزية/العربية...'
-                  : 'البحث بالكود، الاسم، أو التصنيف...'
+                  ? (language === 'ar' ? 'البحث بالبادئة (BAR, BHA) أو الاسم بالإنجليزية/العربية...' : 'Search by prefix (BAR, BHA) or English/Arabic name...')
+                  : (language === 'ar' ? 'البحث بالكود، الاسم، أو التصنيف...' : 'Search by code, name, or category...')
               }
               className="w-full bg-slate-50 border border-slate-200 rounded-xl pr-9 pl-4 py-2 text-xs text-slate-800 placeholder:text-slate-400 focus:outline-none focus:border-amber-500 focus:bg-white transition-colors"
             />
@@ -784,7 +856,7 @@ export const MasterDataView: React.FC<MasterDataViewProps> = ({ onNavigate }) =>
               onChange={(e) => setPrefixFilter(e.target.value)}
               className="bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs text-slate-700 font-bold focus:outline-none focus:border-amber-500"
             >
-              <option value="all">جميع البادئات ({productTypes.length})</option>
+              <option value="all">{language === 'ar' ? `جميع البادئات (${productTypes.length})` : `All Prefixes (${productTypes.length})`}</option>
               {productTypes.map((pt) => (
                 <option key={pt.prefixCode} value={pt.prefixCode}>
                   {pt.prefixCode} - {pt.nameAr || pt.nameEn}
@@ -801,7 +873,7 @@ export const MasterDataView: React.FC<MasterDataViewProps> = ({ onNavigate }) =>
                 statusFilter === 'all' ? 'bg-white text-slate-900 shadow-xs' : 'text-slate-600 hover:text-slate-900'
               }`}
             >
-              الكل ({items.length})
+              {language === 'ar' ? `الكل (${items.length})` : `All (${items.length})`}
             </button>
             <button
               type="button"
@@ -810,7 +882,7 @@ export const MasterDataView: React.FC<MasterDataViewProps> = ({ onNavigate }) =>
                 statusFilter === 'active' ? 'bg-white text-emerald-700 shadow-xs' : 'text-slate-600 hover:text-slate-900'
               }`}
             >
-              النشط
+              {language === 'ar' ? 'النشط' : 'Active'}
             </button>
             <button
               type="button"
@@ -819,7 +891,7 @@ export const MasterDataView: React.FC<MasterDataViewProps> = ({ onNavigate }) =>
                 statusFilter === 'inactive' ? 'bg-white text-rose-700 shadow-xs' : 'text-slate-600 hover:text-slate-900'
               }`}
             >
-              المعطل
+              {language === 'ar' ? 'المعطل' : 'Inactive'}
             </button>
           </div>
         </div>
@@ -831,10 +903,21 @@ export const MasterDataView: React.FC<MasterDataViewProps> = ({ onNavigate }) =>
             type="button"
             onClick={() => setIsQualityModalOpen(true)}
             className="flex items-center gap-1.5 px-3 py-2 text-xs font-bold text-emerald-850 bg-emerald-50 border border-emerald-300 hover:bg-emerald-100 rounded-xl transition-colors cursor-pointer"
-            title="فحص شامل لسلامة وتناسق البيانات واكتشاف الأكواد المكررة وتصنيفات الأكواد الرقمية"
+            title={language === 'ar' ? 'فحص شامل لسلامة وتناسق البيانات واكتشاف الأكواد المكررة وتصنيفات الأكواد الرقمية' : 'Comprehensive data integrity check - detects duplicate codes and numeric code classifications'}
           >
             <ShieldCheck className="w-3.5 h-3.5 text-emerald-600" />
-            <span>فحص جودة البيانات</span>
+            <span>{language === 'ar' ? 'فحص جودة البيانات' : 'Data Quality Check'}</span>
+          </button>
+
+          <button
+            id="master-data-quality-report-btn"
+            type="button"
+            onClick={() => setIsQualityReportOpen(true)}
+            className="flex items-center gap-1.5 px-3 py-2 text-xs font-bold text-purple-800 bg-purple-50 border border-purple-300 hover:bg-purple-100 rounded-xl transition-colors cursor-pointer"
+            title={language === 'ar' ? 'اكتشاف الأكواد المكررة، الأسماء المتشابهة، فجوات التسلسل، وحذف/أرشفة آمنة للسجلات المشبوهة' : 'Detect duplicate codes, similar names, sequence gaps, and safely delete/archive suspicious records'}
+          >
+            <ShieldCheck className="w-3.5 h-3.5 text-purple-600" />
+            <span>{language === 'ar' ? 'تقرير جودة البيانات الأساسية' : 'Master Data Quality Report'}</span>
           </button>
 
           {activeTab === 'products' && (
@@ -843,10 +926,10 @@ export const MasterDataView: React.FC<MasterDataViewProps> = ({ onNavigate }) =>
               type="button"
               onClick={handleOpenAnalyzeCodes}
               className="flex items-center gap-1.5 px-3 py-2 text-xs font-bold text-indigo-800 bg-indigo-50 border border-indigo-200 hover:bg-indigo-100 rounded-xl transition-colors cursor-pointer"
-              title="فحص واستخراج الحقول المشتقة لمنتجات قاعدة البيانات الحالية دون المساس بالأوزان أو الأبعاد"
+              title={language === 'ar' ? 'فحص واستخراج الحقول المشتقة لمنتجات قاعدة البيانات الحالية دون المساس بالأوزان أو الأبعاد' : "Inspect and derive fields for the current database's products without touching weights or dimensions"}
             >
               <Sparkles className="w-3.5 h-3.5 text-indigo-600" />
-              <span>تحليل الأكواد الحالية</span>
+              <span>{language === 'ar' ? 'تحليل الأكواد الحالية' : 'Analyze Current Codes'}</span>
             </button>
           )}
 
@@ -858,7 +941,7 @@ export const MasterDataView: React.FC<MasterDataViewProps> = ({ onNavigate }) =>
             className="flex items-center gap-1.5 px-3 py-2 text-xs font-bold text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-xl transition-colors disabled:opacity-50 cursor-pointer"
           >
             <Download className="w-3.5 h-3.5" />
-            <span>تصدير Excel</span>
+            <span>{language === 'ar' ? 'تصدير Excel' : 'Export Excel'}</span>
           </button>
 
           {activeTab !== 'productTypes' && (
@@ -869,7 +952,7 @@ export const MasterDataView: React.FC<MasterDataViewProps> = ({ onNavigate }) =>
               className="flex items-center gap-1.5 px-3 py-2 text-xs font-bold text-slate-700 bg-amber-50 border border-amber-200 hover:bg-amber-100 rounded-xl transition-colors cursor-pointer"
             >
               <UploadCloud className="w-3.5 h-3.5 text-amber-700" />
-              <span>استيراد مجمع</span>
+              <span>{language === 'ar' ? 'استيراد مجمع' : 'Bulk Import'}</span>
             </button>
           )}
 
@@ -881,7 +964,9 @@ export const MasterDataView: React.FC<MasterDataViewProps> = ({ onNavigate }) =>
           >
             <Plus className="w-4 h-4" />
             <span>
-              {activeTab === 'productTypes' ? 'إضافة تصنيف جديد (Prefix)' : 'إضافة سجل جديد'}
+              {activeTab === 'productTypes'
+                ? (language === 'ar' ? 'إضافة تصنيف جديد' : 'Add New Type')
+                : (language === 'ar' ? 'إضافة سجل جديد' : 'Add New Record')}
             </span>
           </button>
         </div>
@@ -892,87 +977,93 @@ export const MasterDataView: React.FC<MasterDataViewProps> = ({ onNavigate }) =>
         {isLoading ? (
           <div className="py-16 text-center text-slate-400">
             <RefreshCw className="w-6 h-6 animate-spin mx-auto mb-2 text-amber-500" />
-            <p className="text-xs font-semibold">جارٍ تحميل البيانات من Firestore...</p>
+            <p className="text-xs font-semibold">{language === 'ar' ? 'جارٍ تحميل البيانات من Firestore...' : 'Loading data from Firestore...'}</p>
           </div>
         ) : filteredItems.length === 0 ? (
           <div className="py-16 text-center text-slate-400">
             <AlertCircle className="w-8 h-8 mx-auto mb-2 text-slate-300" />
-            <p className="text-sm font-bold text-slate-700">لا توجد سجلات مطابقة</p>
+            <p className="text-sm font-bold text-slate-700">{language === 'ar' ? 'لا توجد سجلات مطابقة' : 'No matching records'}</p>
             <p className="text-xs text-slate-400 mt-1">
-              يمكنك إضافة سجل جديد أو استخدام الاستيراد المجمع لرفع ملفات Excel.
+              {language === 'ar' ? 'يمكنك إضافة سجل جديد أو استخدام الاستيراد المجمع لرفع ملفات Excel.' : 'You can add a new record or use Bulk Import to upload Excel files.'}
             </p>
           </div>
         ) : (
-          <div className="overflow-x-auto">
+          <div className="overflow-x-auto max-h-[calc(100vh-360px)] lg:max-h-[calc(100vh-320px)] overflow-y-auto">
             <table className="w-full text-right text-xs">
-              <thead className="bg-slate-50 border-b border-slate-200 text-slate-600 font-bold">
+              <thead className="bg-slate-50 border-b border-slate-200 text-slate-600 font-bold sticky top-0 z-10">
                 <tr>
                   {activeTab === 'productTypes' ? (
                     <>
-                      <th className="px-4 py-3.5">البادئة (Prefix)</th>
-                      <th className="px-4 py-3.5">الاسم بالإنجليزية (Name EN)</th>
-                      <th className="px-4 py-3.5">الاسم بالعربية (Name AR)</th>
-                      <th className="px-4 py-3.5">الوصف والبيان</th>
+                      <th className="px-4 py-3.5">{language === 'ar' ? 'البادئة (Prefix)' : 'Prefix'}</th>
+                      <th className="px-4 py-3.5">{language === 'ar' ? 'الاسم بالإنجليزية (Name EN)' : 'Name (EN)'}</th>
+                      <th className="px-4 py-3.5">{language === 'ar' ? 'الاسم بالعربية (Name AR)' : 'Name (AR)'}</th>
+                      <th className="px-4 py-3.5">{language === 'ar' ? 'الوصف والبيان' : 'Description'}</th>
                     </>
                   ) : (
                     <>
-                      <th className="px-4 py-3.5">الكود</th>
-                      <th className="px-4 py-3.5">الاسم / البيان</th>
+                      <th className="px-4 py-3.5">{language === 'ar' ? 'الكود' : 'Code'}</th>
+                      <th className="px-4 py-3.5">{language === 'ar' ? 'الاسم / البيان' : 'Name / Description'}</th>
                     </>
                   )}
 
                   {activeTab === 'products' && (
                     <>
-                      <th className="px-4 py-3.5">نوع المنتج / البادئة</th>
-                      <th className="px-4 py-3.5">نسبة الألومينا</th>
-                      <th className="px-4 py-3.5">المعرف الداخلي</th>
-                      <th className="px-4 py-3.5">وزن القطعة (كجم)</th>
-                      <th className="px-4 py-3.5">الأبعاد</th>
+                      <th className="px-4 py-3.5">{language === 'ar' ? 'نوع المنتج / البادئة' : 'Product Type / Prefix'}</th>
+                      <th className="px-4 py-3.5">{language === 'ar' ? 'نسبة الألومينا' : 'Alumina Percentage'}</th>
+                      <th className="px-4 py-3.5">{language === 'ar' ? 'المعرف الداخلي' : 'Internal ID'}</th>
+                      <th className="px-4 py-3.5">{language === 'ar' ? 'وزن القطعة (كجم)' : 'Piece Weight (kg)'}</th>
+                      <th className="px-4 py-3.5">{language === 'ar' ? 'الأبعاد' : 'Dimensions'}</th>
                     </>
                   )}
                   {activeTab === 'employees' && (
                     <>
-                      <th className="px-4 py-3.5">المسمى الوظيفي</th>
-                      <th className="px-4 py-3.5">القسم</th>
-                      <th className="px-4 py-3.5">الهاتف</th>
+                      <th className="px-4 py-3.5">{language === 'ar' ? 'المسمى الوظيفي' : 'Job Title'}</th>
+                      <th className="px-4 py-3.5">{language === 'ar' ? 'القسم' : 'Department'}</th>
+                      <th className="px-4 py-3.5">{language === 'ar' ? 'الهاتف' : 'Phone'}</th>
                     </>
                   )}
                   {activeTab === 'presses' && (
                     <>
-                      <th className="px-4 py-3.5">الحمولة</th>
-                      <th className="px-4 py-3.5">الموديل</th>
-                      <th className="px-4 py-3.5">الحالة التشغيلية</th>
+                      <th className="px-4 py-3.5">{language === 'ar' ? 'الحمولة' : 'Tonnage'}</th>
+                      <th className="px-4 py-3.5">{language === 'ar' ? 'الموديل' : 'Model'}</th>
+                      <th className="px-4 py-3.5">{language === 'ar' ? 'الحالة التشغيلية' : 'Operating Status'}</th>
+                    </>
+                  )}
+                  {activeTab === 'mills' && (
+                    <>
+                      <th className="px-4 py-3.5">{language === 'ar' ? 'الموديل' : 'Model'}</th>
+                      <th className="px-4 py-3.5">{language === 'ar' ? 'الحالة التشغيلية' : 'Operating Status'}</th>
                     </>
                   )}
                   {activeTab === 'furnaces' && (
                     <>
-                      <th className="px-4 py-3.5">السعة (طن)</th>
-                      <th className="px-4 py-3.5">أقصى حرارة</th>
-                      <th className="px-4 py-3.5">الحالة</th>
+                      <th className="px-4 py-3.5">{language === 'ar' ? 'السعة (طن)' : 'Capacity (t)'}</th>
+                      <th className="px-4 py-3.5">{language === 'ar' ? 'أقصى حرارة' : 'Max Temperature'}</th>
+                      <th className="px-4 py-3.5">{language === 'ar' ? 'الحالة' : 'Status'}</th>
                     </>
                   )}
                   {activeTab === 'furnaceCars' && (
                     <>
-                      <th className="px-4 py-3.5">رقم العربة</th>
-                      <th className="px-4 py-3.5">الفرن المخصص</th>
-                      <th className="px-4 py-3.5">السعة</th>
+                      <th className="px-4 py-3.5">{language === 'ar' ? 'رقم العربة' : 'Car Number'}</th>
+                      <th className="px-4 py-3.5">{language === 'ar' ? 'الفرن المخصص' : 'Assigned Furnace'}</th>
+                      <th className="px-4 py-3.5">{language === 'ar' ? 'السعة' : 'Capacity'}</th>
                     </>
                   )}
                   {activeTab === 'customers' && (
                     <>
-                      <th className="px-4 py-3.5">الشركة</th>
-                      <th className="px-4 py-3.5">الهاتف</th>
-                      <th className="px-4 py-3.5">البريد</th>
+                      <th className="px-4 py-3.5">{language === 'ar' ? 'الشركة' : 'Company'}</th>
+                      <th className="px-4 py-3.5">{language === 'ar' ? 'الهاتف' : 'Phone'}</th>
+                      <th className="px-4 py-3.5">{language === 'ar' ? 'البريد' : 'Email'}</th>
                     </>
                   )}
                   {activeTab === 'shifts' && (
                     <>
-                      <th className="px-4 py-3.5">ساعات العمل</th>
-                      <th className="px-4 py-3.5">المواعيد</th>
+                      <th className="px-4 py-3.5">{language === 'ar' ? 'ساعات العمل' : 'Working Hours'}</th>
+                      <th className="px-4 py-3.5">{language === 'ar' ? 'المواعيد' : 'Timing'}</th>
                     </>
                   )}
-                  <th className="px-4 py-3.5">حالة التفعيل</th>
-                  <th className="px-4 py-3.5 text-center">الإجراءات</th>
+                  <th className="px-4 py-3.5">{language === 'ar' ? 'حالة التفعيل' : 'Active Status'}</th>
+                  <th className="px-4 py-3.5 text-center">{language === 'ar' ? 'الإجراءات' : 'Actions'}</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100 font-medium text-slate-700">
@@ -1020,21 +1111,21 @@ export const MasterDataView: React.FC<MasterDataViewProps> = ({ onNavigate }) =>
                               </span>
                             </div>
                           ) : (
-                            <span className="text-slate-400 text-[11px]">تصنيف يدوي / سابق</span>
+                            <span className="text-slate-400 text-[11px]">{language === 'ar' ? 'تصنيف يدوي / سابق' : 'Manual / Legacy'}</span>
                           )}
                         </td>
                         <td className="px-4 py-3">
                           {item.aluminaPercentage !== undefined && item.aluminaPercentage !== null ? (
-                            <Badge variant="amber">{item.aluminaPercentage}% ألومينا</Badge>
+                            <Badge variant="amber">{item.aluminaPercentage}% {language === 'ar' ? 'ألومينا' : 'Alumina'}</Badge>
                           ) : (
-                            <span className="text-slate-400 text-xs">غير محدد</span>
+                            <span className="text-slate-400 text-xs">{language === 'ar' ? 'غير محدد' : 'Unspecified'}</span>
                           )}
                         </td>
                         <td className="px-4 py-3 font-mono text-slate-600">
                           {item.productIdentifier || (item.code && item.code.length > 5 ? item.code.substring(5) : '-')}
                         </td>
                         <td className="px-4 py-3 font-bold text-slate-900">
-                          {item.pieceWeight || item.pieceWeightKg ? `${item.pieceWeight || item.pieceWeightKg} كجم` : <span className="text-slate-400 text-xs">-</span>}
+                          {item.pieceWeight || item.pieceWeightKg ? `${item.pieceWeight || item.pieceWeightKg} ${language === 'ar' ? 'كجم' : 'kg'}` : <span className="text-slate-400 text-xs">-</span>}
                         </td>
                         <td className="px-4 py-3 font-mono text-slate-500">{item.dimensions || '-'}</td>
                       </>
@@ -1052,11 +1143,31 @@ export const MasterDataView: React.FC<MasterDataViewProps> = ({ onNavigate }) =>
                     {/* Presses details */}
                     {activeTab === 'presses' && (
                       <>
-                        <td className="px-4 py-3 font-bold">{item.tonnage ? `${item.tonnage} طن` : '-'}</td>
+                        <td className="px-4 py-3 font-bold">{item.tonnage ? `${item.tonnage} ${language === 'ar' ? 'طن' : 't'}` : '-'}</td>
                         <td className="px-4 py-3 text-slate-600">{item.model || '-'}</td>
                         <td className="px-4 py-3">
                           <Badge variant={item.status === 'active' ? 'success' : item.status === 'maintenance' ? 'warning' : 'danger'}>
-                            {item.status === 'active' ? 'جاهز للعمل' : item.status === 'maintenance' ? 'صيانة' : 'معطل'}
+                            {item.status === 'active'
+                              ? (language === 'ar' ? 'جاهز للعمل' : 'Ready')
+                              : item.status === 'maintenance'
+                              ? (language === 'ar' ? 'صيانة' : 'Maintenance')
+                              : (language === 'ar' ? 'معطل' : 'Inactive')}
+                          </Badge>
+                        </td>
+                      </>
+                    )}
+
+                    {/* Chinese Mills details */}
+                    {activeTab === 'mills' && (
+                      <>
+                        <td className="px-4 py-3 text-slate-600">{item.model || '-'}</td>
+                        <td className="px-4 py-3">
+                          <Badge variant={item.status === 'active' ? 'success' : item.status === 'maintenance' ? 'warning' : 'danger'}>
+                            {item.status === 'active'
+                              ? (language === 'ar' ? 'جاهز للعمل' : 'Ready')
+                              : item.status === 'maintenance'
+                              ? (language === 'ar' ? 'صيانة' : 'Maintenance')
+                              : (language === 'ar' ? 'معطل' : 'Inactive')}
                           </Badge>
                         </td>
                       </>
@@ -1065,11 +1176,11 @@ export const MasterDataView: React.FC<MasterDataViewProps> = ({ onNavigate }) =>
                     {/* Furnaces details */}
                     {activeTab === 'furnaces' && (
                       <>
-                        <td className="px-4 py-3 font-bold">{item.capacity ? `${item.capacity} طن` : '-'}</td>
+                        <td className="px-4 py-3 font-bold">{item.capacity ? `${item.capacity} ${language === 'ar' ? 'طن' : 't'}` : '-'}</td>
                         <td className="px-4 py-3 text-rose-700 font-bold">{item.maxTemperature ? `${item.maxTemperature} °C` : '-'}</td>
                         <td className="px-4 py-3">
                           <Badge variant={item.status === 'active' ? 'success' : 'warning'}>
-                            {item.status === 'active' ? 'يعمل' : 'صيانة'}
+                            {item.status === 'active' ? (language === 'ar' ? 'يعمل' : 'Running') : (language === 'ar' ? 'صيانة' : 'Maintenance')}
                           </Badge>
                         </td>
                       </>
@@ -1080,7 +1191,7 @@ export const MasterDataView: React.FC<MasterDataViewProps> = ({ onNavigate }) =>
                       <>
                         <td className="px-4 py-3 font-mono font-bold text-slate-900">{item.carNumber}</td>
                         <td className="px-4 py-3 text-slate-600">{item.furnaceName || '-'}</td>
-                        <td className="px-4 py-3">{item.capacity ? `${item.capacity} قطعة` : '-'}</td>
+                        <td className="px-4 py-3">{item.capacity ? `${item.capacity} ${language === 'ar' ? 'قطعة' : 'pcs'}` : '-'}</td>
                       </>
                     )}
 
@@ -1096,7 +1207,7 @@ export const MasterDataView: React.FC<MasterDataViewProps> = ({ onNavigate }) =>
                     {/* Shifts details */}
                     {activeTab === 'shifts' && (
                       <>
-                        <td className="px-4 py-3 font-bold">{item.hours} ساعات</td>
+                        <td className="px-4 py-3 font-bold">{item.hours} {language === 'ar' ? 'ساعات' : 'hrs'}</td>
                         <td className="px-4 py-3 font-mono text-slate-500">
                           {item.startTime} &rarr; {item.endTime}
                         </td>
@@ -1109,12 +1220,12 @@ export const MasterDataView: React.FC<MasterDataViewProps> = ({ onNavigate }) =>
                         type="button"
                         onClick={() => handleToggleStatus(item)}
                         className="cursor-pointer"
-                        title={item.active !== false ? 'تعطيل السجل' : 'تفعيل السجل'}
+                        title={item.active !== false ? (language === 'ar' ? 'تعطيل السجل' : 'Deactivate record') : (language === 'ar' ? 'تفعيل السجل' : 'Activate record')}
                       >
                         {item.active !== false ? (
-                          <Badge variant="success">نشط</Badge>
+                          <Badge variant="success">{language === 'ar' ? 'نشط' : 'Active'}</Badge>
                         ) : (
-                          <Badge variant="danger">معطل</Badge>
+                          <Badge variant="danger">{language === 'ar' ? 'معطل' : 'Inactive'}</Badge>
                         )}
                       </button>
                     </td>
@@ -1126,7 +1237,7 @@ export const MasterDataView: React.FC<MasterDataViewProps> = ({ onNavigate }) =>
                           type="button"
                           onClick={() => handleOpenEdit(item)}
                           className="w-7 h-7 rounded-lg flex items-center justify-center text-slate-500 hover:text-slate-900 hover:bg-slate-100 transition-colors"
-                          title="تعديل"
+                          title={language === 'ar' ? 'تعديل' : 'Edit'}
                         >
                           <Edit className="w-3.5 h-3.5" />
                         </button>
@@ -1134,7 +1245,7 @@ export const MasterDataView: React.FC<MasterDataViewProps> = ({ onNavigate }) =>
                           type="button"
                           onClick={() => setDeleteConfirmItem(item)}
                           className="w-7 h-7 rounded-lg flex items-center justify-center text-slate-400 hover:text-rose-600 hover:bg-rose-50 transition-colors"
-                          title="حذف"
+                          title={language === 'ar' ? 'حذف' : 'Delete'}
                         >
                           <Trash2 className="w-3.5 h-3.5" />
                         </button>
@@ -1154,10 +1265,10 @@ export const MasterDataView: React.FC<MasterDataViewProps> = ({ onNavigate }) =>
         onClose={() => setIsModalOpen(false)}
         title={
           editingItem
-            ? `تعديل سجل في ${tabs.find((t) => t.id === activeTab)?.label}`
-            : `إضافة سجل جديد في ${tabs.find((t) => t.id === activeTab)?.label}`
+            ? (language === 'ar' ? `تعديل سجل في ${tabs.find((t) => t.id === activeTab)?.label}` : `Edit Record in ${tabs.find((t) => t.id === activeTab)?.label}`)
+            : (language === 'ar' ? `إضافة سجل جديد في ${tabs.find((t) => t.id === activeTab)?.label}` : `Add New Record in ${tabs.find((t) => t.id === activeTab)?.label}`)
         }
-        subtitle="جميع البيانات يتم التحقق منها ومزامنتها مباشرة مع قاعدة بيانات Firestore"
+        subtitle={language === 'ar' ? 'جميع البيانات يتم التحقق منها ومزامنتها مباشرة مع قاعدة بيانات Firestore' : 'All data is validated and synced directly with the Firestore database'}
         maxWidth="lg"
       >
         <form onSubmit={handleSave} className="space-y-4">
@@ -1173,7 +1284,7 @@ export const MasterDataView: React.FC<MasterDataViewProps> = ({ onNavigate }) =>
             <>
               <div>
                 <label className="block text-xs font-bold text-slate-700 mb-1">
-                  بادئة الكود (Prefix Code - 3 أحرف إنجليزية) *
+                  {language === 'ar' ? 'بادئة الكود (3 أحرف إنجليزية) *' : 'Prefix Code (3 English letters) *'}
                 </label>
                 <input
                   type="text"
@@ -1181,16 +1292,16 @@ export const MasterDataView: React.FC<MasterDataViewProps> = ({ onNavigate }) =>
                   required
                   value={formData.prefixCode || ''}
                   onChange={(e) => setFormData({ ...formData, prefixCode: e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, '') })}
-                  placeholder="مثال: BAR, BHA, BSI"
+                  placeholder={language === 'ar' ? 'مثال: BAR, BHA, BSI' : 'e.g. BAR, BHA, BSI'}
                   className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3.5 py-2.5 text-sm font-mono font-bold uppercase text-slate-900 focus:outline-none focus:border-amber-500 focus:bg-white"
                 />
-                <p className="text-[11px] text-slate-500 mt-1">يجب أن تتكون البادئة من 3 أحرف لاتينية بالضبط مثل (BAR أو BHA).</p>
+                <p className="text-[11px] text-slate-500 mt-1">{language === 'ar' ? 'يجب أن تتكون البادئة من 3 أحرف لاتينية بالضبط مثل (BAR أو BHA).' : 'The prefix must be exactly 3 Latin letters, e.g. BAR or BHA.'}</p>
               </div>
 
               <div className="grid grid-cols-2 gap-3">
                 <div>
                   <label className="block text-xs font-bold text-slate-700 mb-1">
-                    الاسم بالإنجليزية (Name in English) *
+                    {language === 'ar' ? 'الاسم بالإنجليزية *' : 'Name in English *'}
                   </label>
                   <input
                     type="text"
@@ -1204,21 +1315,21 @@ export const MasterDataView: React.FC<MasterDataViewProps> = ({ onNavigate }) =>
                 </div>
                 <div>
                   <label className="block text-xs font-bold text-slate-700 mb-1">
-                    الاسم بالعربية (Name in Arabic) *
+                    {language === 'ar' ? 'الاسم بالعربية *' : 'Name in Arabic *'}
                   </label>
                   <input
                     type="text"
                     required
                     value={formData.nameAr || ''}
                     onChange={(e) => setFormData({ ...formData, nameAr: e.target.value })}
-                    placeholder="مثال: طوب مقاوم للأحماض"
+                    placeholder={language === 'ar' ? 'مثال: طوب مقاوم للأحماض' : 'e.g. Acid-resistant brick'}
                     className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3.5 py-2 text-xs text-slate-900 focus:outline-none focus:border-amber-500 focus:bg-white"
                   />
                 </div>
               </div>
 
               <div>
-                <label className="block text-xs font-bold text-slate-700 mb-1">الوصف والبيان</label>
+                <label className="block text-xs font-bold text-slate-700 mb-1">{language === 'ar' ? 'الوصف والبيان' : 'Description'}</label>
                 <textarea
                   rows={2}
                   value={formData.description || ''}
@@ -1237,10 +1348,10 @@ export const MasterDataView: React.FC<MasterDataViewProps> = ({ onNavigate }) =>
               <div>
                 <div className="flex items-center justify-between mb-1">
                   <label className="block text-xs font-bold text-slate-700">
-                    كود المنتج الذكي (Product Code) *
+                    {language === 'ar' ? 'كود المنتج الذكي *' : 'Smart Product Code *'}
                   </label>
                   <span className="text-[10px] text-slate-400 font-mono">
-                    [البادئة 3 أحرف] + [الألومينا خانتان] + [المعرف]
+                    {language === 'ar' ? '[البادئة 3 أحرف] + [الألومينا خانتان] + [المعرف]' : '[3-letter prefix] + [2-digit alumina] + [identifier]'}
                   </span>
                 </div>
                 <input
@@ -1249,7 +1360,7 @@ export const MasterDataView: React.FC<MasterDataViewProps> = ({ onNavigate }) =>
                   required
                   value={formData.code || ''}
                   onChange={(e) => handleProductCodeChange(e.target.value)}
-                  placeholder="مثال: BAR250102305 أو BHA70123456"
+                  placeholder={language === 'ar' ? 'مثال: BAR250102305 أو BHA70123456' : 'e.g. BAR250102305 or BHA70123456'}
                   className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3.5 py-2.5 text-sm font-mono font-black uppercase text-slate-950 tracking-wider focus:outline-none focus:border-amber-500 focus:bg-white"
                 />
               </div>
@@ -1362,7 +1473,7 @@ export const MasterDataView: React.FC<MasterDataViewProps> = ({ onNavigate }) =>
               {/* Product Name */}
               <div>
                 <label className="block text-xs font-bold text-slate-700 mb-1">
-                  اسم المنتج / التوصيف *
+                  {language === 'ar' ? 'اسم المنتج / التوصيف *' : 'Product Name / Description *'}
                 </label>
                 <input
                   id="product-form-name-input"
@@ -1370,7 +1481,7 @@ export const MasterDataView: React.FC<MasterDataViewProps> = ({ onNavigate }) =>
                   required
                   value={formData.name || ''}
                   onChange={(e) => setFormData({ ...formData, name: e.target.value })}
-                  placeholder="مثال: طوب عالي الألومينا 70% - قياسي"
+                  placeholder={language === 'ar' ? 'مثال: طوب عالي الألومينا 70% - قياسي' : 'e.g. High Alumina Brick 70% - Standard'}
                   className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3.5 py-2.5 text-xs font-bold text-slate-900 focus:outline-none focus:border-amber-500 focus:bg-white"
                 />
               </div>
@@ -1378,20 +1489,20 @@ export const MasterDataView: React.FC<MasterDataViewProps> = ({ onNavigate }) =>
               {/* Category and Alumina % */}
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="block text-xs font-bold text-slate-700 mb-1">التصنيف (Category / Product Type)</label>
+                  <label className="block text-xs font-bold text-slate-700 mb-1">{language === 'ar' ? 'التصنيف / نوع المنتج' : 'Category / Product Type'}</label>
                   <input
                     type="text"
                     value={formData.category || formData.productTypeNameAr || formData.productTypeName || ''}
                     onChange={(e) => setFormData({ ...formData, category: e.target.value, isManualClassification: true })}
-                    placeholder="طوب حراري / كتل كبس"
+                    placeholder={language === 'ar' ? 'طوب حراري / كتل كبس' : 'Refractory brick / Pressed blocks'}
                     className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3.5 py-2 text-xs text-slate-800"
                   />
                 </div>
                 <div>
                   <div className="flex items-center justify-between mb-1">
-                    <label className="block text-xs font-bold text-slate-700">نسبة الألومينا (%)</label>
+                    <label className="block text-xs font-bold text-slate-700">{language === 'ar' ? 'نسبة الألومينا (%)' : 'Alumina Percentage (%)'}</label>
                     {manualOverrideAlumina && (
-                      <span className="text-[10px] text-amber-700 font-bold">تعديل يدوي</span>
+                      <span className="text-[10px] text-amber-700 font-bold">{language === 'ar' ? 'تعديل يدوي' : 'Manual Edit'}</span>
                     )}
                   </div>
                   <input
@@ -1406,7 +1517,7 @@ export const MasterDataView: React.FC<MasterDataViewProps> = ({ onNavigate }) =>
                       const val = e.target.value;
                       setFormData({ ...formData, aluminaPercentage: val === '' ? null : Number(val) });
                     }}
-                    placeholder="اختياري (0-100)"
+                    placeholder={language === 'ar' ? 'اختياري (0-100)' : 'Optional (0-100)'}
                     className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3.5 py-2 text-xs font-mono font-bold text-slate-900"
                   />
                 </div>
@@ -1415,7 +1526,7 @@ export const MasterDataView: React.FC<MasterDataViewProps> = ({ onNavigate }) =>
               {/* Piece Weight & Dimensions */}
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="block text-xs font-bold text-slate-700 mb-1">وزن القطعة (كجم)</label>
+                  <label className="block text-xs font-bold text-slate-700 mb-1">{language === 'ar' ? 'وزن القطعة (كجم)' : 'Piece Weight (kg)'}</label>
                   <input
                     id="product-form-weight-input"
                     type="number"
@@ -1424,23 +1535,23 @@ export const MasterDataView: React.FC<MasterDataViewProps> = ({ onNavigate }) =>
                     value={formData.pieceWeight !== undefined && formData.pieceWeight !== null ? formData.pieceWeight : ''}
                     onChange={(e) => {
                       const val = e.target.value;
-                      setFormData({ 
-                        ...formData, 
-                        pieceWeight: val === '' ? null : Number(val), 
-                        pieceWeightKg: val === '' ? null : Number(val) 
+                      setFormData({
+                        ...formData,
+                        pieceWeight: val === '' ? null : Number(val),
+                        pieceWeightKg: val === '' ? null : Number(val)
                       });
                     }}
-                    placeholder="مثال: 4.5"
+                    placeholder={language === 'ar' ? 'مثال: 4.5' : 'e.g. 4.5'}
                     className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3.5 py-2 text-xs font-mono font-bold text-slate-900"
                   />
                 </div>
                 <div>
-                  <label className="block text-xs font-bold text-slate-700 mb-1">الأبعاد (Dimensions)</label>
+                  <label className="block text-xs font-bold text-slate-700 mb-1">{language === 'ar' ? 'الأبعاد' : 'Dimensions'}</label>
                   <input
                     type="text"
                     value={formData.dimensions || ''}
                     onChange={(e) => setFormData({ ...formData, dimensions: e.target.value })}
-                    placeholder="230x114x65 مم"
+                    placeholder={language === 'ar' ? '230x114x65 مم' : '230x114x65 mm'}
                     className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3.5 py-2 text-xs"
                   />
                 </div>
@@ -1453,14 +1564,14 @@ export const MasterDataView: React.FC<MasterDataViewProps> = ({ onNavigate }) =>
             <>
               <div>
                 <label className="block text-xs font-bold text-slate-700 mb-1">
-                  الكود التعريفي (Code) *
+                  {language === 'ar' ? 'الكود التعريفي *' : 'Identifier Code *'}
                 </label>
                 <input
                   type="text"
                   required
                   value={formData.code || ''}
                   onChange={(e) => setFormData({ ...formData, code: e.target.value })}
-                  placeholder="مثال: EMP-101 / PRESS-01"
+                  placeholder={language === 'ar' ? 'مثال: EMP-101 / PRESS-01' : 'e.g. EMP-101 / PRESS-01'}
                   className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3.5 py-2.5 text-xs text-slate-800 focus:outline-none focus:border-amber-500 focus:bg-white"
                 />
               </div>
@@ -1468,14 +1579,14 @@ export const MasterDataView: React.FC<MasterDataViewProps> = ({ onNavigate }) =>
               {activeTab !== 'furnaceCars' && (
                 <div>
                   <label className="block text-xs font-bold text-slate-700 mb-1">
-                    الاسم / الوصف *
+                    {language === 'ar' ? 'الاسم / الوصف *' : 'Name / Description *'}
                   </label>
                   <input
                     type="text"
                     required
                     value={formData.name || ''}
                     onChange={(e) => setFormData({ ...formData, name: e.target.value })}
-                    placeholder="أدخل الاسم بالعربية"
+                    placeholder={language === 'ar' ? 'أدخل الاسم' : 'Enter the name'}
                     className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3.5 py-2.5 text-xs text-slate-800 focus:outline-none focus:border-amber-500 focus:bg-white"
                   />
                 </div>
@@ -1487,17 +1598,17 @@ export const MasterDataView: React.FC<MasterDataViewProps> = ({ onNavigate }) =>
           {activeTab === 'employees' && (
             <div className="grid grid-cols-2 gap-3">
               <div>
-                <label className="block text-xs font-bold text-slate-700 mb-1">المسمى الوظيفي</label>
+                <label className="block text-xs font-bold text-slate-700 mb-1">{language === 'ar' ? 'المسمى الوظيفي' : 'Job Title'}</label>
                 <input
                   type="text"
                   value={formData.jobTitle || ''}
                   onChange={(e) => setFormData({ ...formData, jobTitle: e.target.value })}
-                  placeholder="فني مكبس / عامل فرن"
+                  placeholder={language === 'ar' ? 'فني مكبس / عامل فرن' : 'Press Technician / Furnace Operator'}
                   className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3.5 py-2 text-xs"
                 />
               </div>
               <div>
-                <label className="block text-xs font-bold text-slate-700 mb-1">القسم</label>
+                <label className="block text-xs font-bold text-slate-700 mb-1">{language === 'ar' ? 'القسم' : 'Department'}</label>
                 <select
                   value={formData.departmentId || ''}
                   onChange={(e) => {
@@ -1511,7 +1622,7 @@ export const MasterDataView: React.FC<MasterDataViewProps> = ({ onNavigate }) =>
                   }}
                   className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3.5 py-2 text-xs"
                 >
-                  <option value="">-- اختر القسم --</option>
+                  <option value="">{language === 'ar' ? '-- اختر القسم --' : '-- Select Department --'}</option>
                   {departments.map((d) => (
                     <option key={d.id} value={d.id}>
                       {d.name}
@@ -1526,7 +1637,7 @@ export const MasterDataView: React.FC<MasterDataViewProps> = ({ onNavigate }) =>
           {activeTab === 'presses' && (
             <div className="grid grid-cols-2 gap-3">
               <div>
-                <label className="block text-xs font-bold text-slate-700 mb-1">الحمولة (طن)</label>
+                <label className="block text-xs font-bold text-slate-700 mb-1">{language === 'ar' ? 'الحمولة (طن)' : 'Tonnage (t)'}</label>
                 <input
                   type="number"
                   value={formData.tonnage ?? 1200}
@@ -1535,7 +1646,7 @@ export const MasterDataView: React.FC<MasterDataViewProps> = ({ onNavigate }) =>
                 />
               </div>
               <div>
-                <label className="block text-xs font-bold text-slate-700 mb-1">الموديل والصانع</label>
+                <label className="block text-xs font-bold text-slate-700 mb-1">{language === 'ar' ? 'الموديل والصانع' : 'Model & Manufacturer'}</label>
                 <input
                   type="text"
                   value={formData.model || ''}
@@ -1546,22 +1657,49 @@ export const MasterDataView: React.FC<MasterDataViewProps> = ({ onNavigate }) =>
             </div>
           )}
 
+          {/* Specific Chinese Mills Fields */}
+          {activeTab === 'mills' && (
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1">{language === 'ar' ? 'الموديل' : 'Model'}</label>
+                <input
+                  type="text"
+                  value={formData.model || ''}
+                  onChange={(e) => setFormData({ ...formData, model: e.target.value })}
+                  className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3.5 py-2 text-xs"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1">{language === 'ar' ? 'الحالة التشغيلية' : 'Operating Status'}</label>
+                <select
+                  value={formData.status || 'active'}
+                  onChange={(e) => setFormData({ ...formData, status: e.target.value })}
+                  className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3.5 py-2 text-xs"
+                >
+                  <option value="active">{language === 'ar' ? 'جاهز للعمل' : 'Ready'}</option>
+                  <option value="maintenance">{language === 'ar' ? 'صيانة' : 'Maintenance'}</option>
+                  <option value="inactive">{language === 'ar' ? 'معطل' : 'Inactive'}</option>
+                </select>
+              </div>
+            </div>
+          )}
+
           {/* Specific Furnace Cars Fields */}
           {activeTab === 'furnaceCars' && (
             <div className="grid grid-cols-2 gap-3">
               <div>
-                <label className="block text-xs font-bold text-slate-700 mb-1">رقم العربة *</label>
+                <label className="block text-xs font-bold text-slate-700 mb-1">{language === 'ar' ? 'رقم العربة *' : 'Car Number *'}</label>
                 <input
                   type="text"
                   required
                   value={formData.carNumber || ''}
                   onChange={(e) => setFormData({ ...formData, carNumber: e.target.value })}
-                  placeholder="مثال: 105"
+                  placeholder={language === 'ar' ? 'مثال: 105' : 'e.g. 105'}
                   className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3.5 py-2 text-xs"
                 />
               </div>
               <div>
-                <label className="block text-xs font-bold text-slate-700 mb-1">الفرن المخصص</label>
+                <label className="block text-xs font-bold text-slate-700 mb-1">{language === 'ar' ? 'الفرن المخصص' : 'Assigned Furnace'}</label>
                 <select
                   value={formData.furnaceId || ''}
                   onChange={(e) => {
@@ -1575,7 +1713,7 @@ export const MasterDataView: React.FC<MasterDataViewProps> = ({ onNavigate }) =>
                   }}
                   className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3.5 py-2 text-xs"
                 >
-                  <option value="">-- اختياري --</option>
+                  <option value="">{language === 'ar' ? '-- اختياري --' : '-- Optional --'}</option>
                   {furnaces.map((f) => (
                     <option key={f.id} value={f.id}>
                       {f.name}
@@ -1593,7 +1731,7 @@ export const MasterDataView: React.FC<MasterDataViewProps> = ({ onNavigate }) =>
               onClick={() => setIsModalOpen(false)}
               className="px-4 py-2 text-xs font-bold text-slate-600 hover:text-slate-900 bg-slate-100 hover:bg-slate-200 rounded-xl transition-colors cursor-pointer"
             >
-              إلغاء
+              {language === 'ar' ? 'إلغاء' : 'Cancel'}
             </button>
             <button
               id="master-data-modal-save-btn"
@@ -1602,7 +1740,7 @@ export const MasterDataView: React.FC<MasterDataViewProps> = ({ onNavigate }) =>
               className="px-5 py-2 text-xs font-extrabold text-slate-950 bg-amber-400 hover:bg-amber-500 rounded-xl shadow-xs transition-colors disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer flex items-center gap-2"
             >
               {isSaving && <RefreshCw className="w-3.5 h-3.5 animate-spin" />}
-              <span>{editingItem ? 'حفظ التعديلات' : 'إضافة إلى قاعدة البيانات'}</span>
+              <span>{editingItem ? (language === 'ar' ? 'حفظ التعديلات' : 'Save Changes') : (language === 'ar' ? 'إضافة إلى قاعدة البيانات' : 'Add to Database')}</span>
             </button>
           </div>
         </form>
@@ -1612,8 +1750,8 @@ export const MasterDataView: React.FC<MasterDataViewProps> = ({ onNavigate }) =>
       <Modal
         isOpen={isQuickTypeModalOpen}
         onClose={() => setIsQuickTypeModalOpen(false)}
-        title={`إضافة تصنيف منتج جديد (${quickTypePrefix})`}
-        subtitle="سيتم حفظ التصنيف في Firestore وإتاحته فوراً لمحلل الأكواد"
+        title={language === 'ar' ? `إضافة تصنيف منتج جديد (${quickTypePrefix})` : `Add New Product Type (${quickTypePrefix})`}
+        subtitle={language === 'ar' ? 'سيتم حفظ التصنيف في Firestore وإتاحته فوراً لمحلل الأكواد' : 'The type will be saved to Firestore and immediately available to the code analyzer'}
         maxWidth="md"
       >
         <form onSubmit={handleSaveQuickType} className="space-y-4">
@@ -1626,7 +1764,7 @@ export const MasterDataView: React.FC<MasterDataViewProps> = ({ onNavigate }) =>
 
           <div>
             <label className="block text-xs font-bold text-slate-700 mb-1">
-              بادئة الكود (Prefix Code - 3 أحرف) *
+              {language === 'ar' ? 'بادئة الكود (3 أحرف) *' : 'Prefix Code (3 letters) *'}
             </label>
             <input
               type="text"
@@ -1640,7 +1778,7 @@ export const MasterDataView: React.FC<MasterDataViewProps> = ({ onNavigate }) =>
 
           <div>
             <label className="block text-xs font-bold text-slate-700 mb-1">
-              الاسم بالإنجليزية (Name in English) *
+              {language === 'ar' ? 'الاسم بالإنجليزية *' : 'Name in English *'}
             </label>
             <input
               type="text"
@@ -1655,20 +1793,20 @@ export const MasterDataView: React.FC<MasterDataViewProps> = ({ onNavigate }) =>
 
           <div>
             <label className="block text-xs font-bold text-slate-700 mb-1">
-              الاسم بالعربية (Name in Arabic) *
+              {language === 'ar' ? 'الاسم بالعربية *' : 'Name in Arabic *'}
             </label>
             <input
               type="text"
               required
               value={quickTypeNameAr}
               onChange={(e) => setQuickTypeNameAr(e.target.value)}
-              placeholder="مثال: طوب عالي الألومينا مخصص"
+              placeholder={language === 'ar' ? 'مثال: طوب عالي الألومينا مخصص' : 'e.g. Custom High Alumina Brick'}
               className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3.5 py-2 text-xs"
             />
           </div>
 
           <div>
-            <label className="block text-xs font-bold text-slate-700 mb-1">الوصف</label>
+            <label className="block text-xs font-bold text-slate-700 mb-1">{language === 'ar' ? 'الوصف' : 'Description'}</label>
             <textarea
               rows={2}
               value={quickTypeDescription}
@@ -1683,7 +1821,7 @@ export const MasterDataView: React.FC<MasterDataViewProps> = ({ onNavigate }) =>
               onClick={() => setIsQuickTypeModalOpen(false)}
               className="px-4 py-2 text-xs font-bold text-slate-600 bg-slate-100 hover:bg-slate-200 rounded-xl"
             >
-              إلغاء
+              {language === 'ar' ? 'إلغاء' : 'Cancel'}
             </button>
             <button
               type="submit"
@@ -1691,7 +1829,7 @@ export const MasterDataView: React.FC<MasterDataViewProps> = ({ onNavigate }) =>
               className="px-5 py-2 text-xs font-extrabold text-slate-950 bg-amber-400 hover:bg-amber-500 rounded-xl flex items-center gap-2 cursor-pointer"
             >
               {isQuickTypeSaving && <RefreshCw className="w-3.5 h-3.5 animate-spin" />}
-              <span>حفظ التصنيف وتفعيله فوراً</span>
+              <span>{language === 'ar' ? 'حفظ التصنيف وتفعيله فوراً' : 'Save & Activate Type Immediately'}</span>
             </button>
           </div>
         </form>
@@ -1701,13 +1839,15 @@ export const MasterDataView: React.FC<MasterDataViewProps> = ({ onNavigate }) =>
       <Modal
         isOpen={!!deleteConfirmItem}
         onClose={() => setDeleteConfirmItem(null)}
-        title="تأكيد الحذف"
-        subtitle="هل أنت متأكد من رغبتك في حذف أو تعطيل هذا السجل؟"
+        title={language === 'ar' ? 'تأكيد الحذف' : 'Confirm Deletion'}
+        subtitle={language === 'ar' ? 'هل أنت متأكد من رغبتك في حذف أو تعطيل هذا السجل؟' : 'Are you sure you want to delete or deactivate this record?'}
         maxWidth="sm"
       >
         <div className="space-y-4">
           <p className="text-xs text-slate-600 leading-relaxed">
-            سيتم إزالة السجل ({deleteConfirmItem?.code || deleteConfirmItem?.prefixCode || deleteConfirmItem?.name}) من قاعدة البيانات السحابية مباشرة.
+            {language === 'ar'
+              ? `سيتم إزالة السجل (${deleteConfirmItem?.code || deleteConfirmItem?.prefixCode || deleteConfirmItem?.name}) من قاعدة البيانات السحابية مباشرة.`
+              : `The record (${deleteConfirmItem?.code || deleteConfirmItem?.prefixCode || deleteConfirmItem?.name}) will be removed from the cloud database immediately.`}
           </p>
           <div className="flex items-center justify-end gap-2.5 pt-4 border-t border-slate-100">
             <button
@@ -1715,7 +1855,7 @@ export const MasterDataView: React.FC<MasterDataViewProps> = ({ onNavigate }) =>
               onClick={() => setDeleteConfirmItem(null)}
               className="px-4 py-2 text-xs font-bold text-slate-600 bg-slate-100 hover:bg-slate-200 rounded-xl cursor-pointer"
             >
-              إلغاء
+              {language === 'ar' ? 'إلغاء' : 'Cancel'}
             </button>
             <button
               id="confirm-delete-btn"
@@ -1723,7 +1863,7 @@ export const MasterDataView: React.FC<MasterDataViewProps> = ({ onNavigate }) =>
               onClick={handleDelete}
               className="px-4 py-2 text-xs font-bold text-white bg-rose-600 hover:bg-rose-700 rounded-xl shadow-xs cursor-pointer"
             >
-              تأكيد الحذف
+              {language === 'ar' ? 'تأكيد الحذف' : 'Confirm Delete'}
             </button>
           </div>
         </div>
@@ -1902,6 +2042,18 @@ export const MasterDataView: React.FC<MasterDataViewProps> = ({ onNavigate }) =>
       <DataQualityModal
         isOpen={isQualityModalOpen}
         onClose={() => setIsQualityModalOpen(false)}
+      />
+
+      {/* Master Data Quality Report - duplicate/similar-name detection + safe delete/archive */}
+      <MasterDataQualityReportModal
+        isOpen={isQualityReportOpen}
+        onClose={() => setIsQualityReportOpen(false)}
+      />
+
+      {/* Cost Center Hierarchy - a separate, additive Master Data section (see the pseudo-tab button above); entirely local/Firestore-independent browsing except for the manually-gated Phase 4B execution action inside it */}
+      <CostCenterHierarchyPanel
+        isOpen={isHierarchyPanelOpen}
+        onClose={() => setIsHierarchyPanelOpen(false)}
       />
     </div>
   );

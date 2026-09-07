@@ -37,6 +37,20 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, '../..');
 const TMP = fs.mkdtempSync(path.join(os.tmpdir(), 'asfour-builder-'));
 
+/**
+ * Reads a production source file with line endings normalised to LF.
+ *
+ * The shims below match multi-line import blocks written as '\n'-joined
+ * strings. Git checks these files out with CRLF on Windows (core.autocrlf),
+ * so matching the raw bytes made the shim - and therefore the whole suite -
+ * pass only when the working copy happened to use LF. Normalising here keeps
+ * the needles exact (a materially changed import still fails the assertion)
+ * while making the result independent of how the repo was checked out.
+ */
+function readSource(abs: string): string {
+  return fs.readFileSync(abs, 'utf-8').replace(/\r\n/g, '\n');
+}
+
 /** Rewrites relative specifiers to absolute file URLs so a copy can be imported from outside the repo. */
 function absolutise(source: string, originalPath: string): string {
   const dir = path.dirname(originalPath);
@@ -52,7 +66,7 @@ function absolutise(source: string, originalPath: string): string {
 /** Loads a real production module with the given import lines replaced by stubs. */
 async function loadReal(relPath: string, replacements: Array<[string, string]>) {
   const abs = path.join(ROOT, relPath);
-  let src = fs.readFileSync(abs, 'utf-8');
+  let src = readSource(abs);
   for (const [needle, stub] of replacements) {
     assert.ok(src.includes(needle), `expected to find import "${needle}" in ${relPath} - production imports changed, update this shim`);
     src = src.replace(needle, stub);
@@ -100,7 +114,7 @@ async function bootstrap() {
 /** reportingEngine's only Firebase coupling is two constants; stub them and keep the real logic. */
 function writeReportingEngineShim() {
   const abs = path.join(ROOT, 'src/services/reportingEngine.ts');
-  let src = fs.readFileSync(abs, 'utf-8');
+  let src = readSource(abs);
   const needle = "import { STAGE_DISPLAY_NAMES, STAGE_COLLECTION_NAMES } from './stageRecordService';";
   assert.ok(src.includes(needle), 'reportingEngine imports changed - update this shim');
   src = src.replace(
@@ -343,7 +357,7 @@ test('K1. persistence writes ONLY to localStorage, under one namespaced key', ()
 });
 
 test('K2. the persistence module contains no Firestore write path', () => {
-  const src = fs.readFileSync(path.join(ROOT, 'src/services/dashboardPersistenceService.ts'), 'utf-8');
+  const src = readSource(path.join(ROOT, 'src/services/dashboardPersistenceService.ts'));
   const code = src.replace(/\/\*[\s\S]*?\*\//g, '').split('\n').filter((l) => !/^\s*\/\//.test(l)).join('\n');
   assert.equal(/from 'firebase\/firestore'/.test(code), false);
   assert.equal(/setDoc\(|addDoc\(|updateDoc\(|deleteDoc\(|writeBatch\(|collection\(/.test(code), false);

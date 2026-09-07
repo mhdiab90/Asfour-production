@@ -78,6 +78,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
     { id: 'restore' as NavigationPage, label: t('nav_restore'), icon: RotateCcw },
     { id: 'system-health' as NavigationPage, label: t('nav_system_health'), icon: Activity },
     { id: 'versions' as NavigationPage, label: t('nav_versions'), icon: GitBranch, badge: `v${CURRENT_APP_VERSION.version}` },
+    { id: 'ai-provider-management' as NavigationPage, label: language === 'ar' ? 'إدارة مزود الذكاء الاصطناعي' : 'AI Provider Management', icon: Sparkles },
     { id: 'settings' as NavigationPage, label: t('nav_settings'), icon: Settings },
   ];
 

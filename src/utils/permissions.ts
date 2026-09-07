@@ -140,6 +140,11 @@ export const DEFAULT_SUPER_ADMIN_PERMISSIONS: GranularPermissions = {
   'system.view': true,
   'system.health.view': true,
   'system.manage': true,
+  'system.aiProvider.manage': true,
+  'mills.view': true,
+  'mills.create': true,
+  'mills.edit': true,
+  'mills.delete': true,
   'audit.view': true,
   'settings.view': true,
   'settings.edit': true,
@@ -266,6 +271,11 @@ export const DEFAULT_PRODUCTION_OPERATOR_PERMISSIONS: GranularPermissions = {
   'system.view': false,
   'system.health.view': false,
   'system.manage': false,
+  'system.aiProvider.manage': false,
+  'mills.view': false,
+  'mills.create': false,
+  'mills.edit': false,
+  'mills.delete': false,
   'audit.view': false,
   'settings.view': false,
   'settings.edit': false,
@@ -636,6 +646,8 @@ export function canAccessPage(user: AdminUser | null | undefined, page: Navigati
       return perms['system.view'] || perms['system.health.view'];
     case 'versions':
       return perms['versions.view'] || perms['system.view'];
+    case 'ai-provider-management':
+      return perms['system.aiProvider.manage'];
     case 'settings':
     case 'admin-panel':
       return perms['settings.view'] || perms['audit.view'];
@@ -849,6 +861,7 @@ export const PERMISSION_CATEGORY_GROUPS: PermissionCategoryGroup[] = [
       { key: 'system.view', nameAr: 'عرض حالة النظام والاتصال السحابي', nameEn: 'View System State', descriptionAr: 'مراقبة حالة الجلسات والاتصال', descriptionEn: 'Monitor session and connectivity' },
       { key: 'system.health.view', nameAr: 'عرض مؤشرات صحة النظام وزمن استجابة Firestore', nameEn: 'View System Health & Latency', descriptionAr: 'مراقبة زمن استجابة الاستعلامات وحالة السحابة', descriptionEn: 'Monitor query latency and cloud status' },
       { key: 'system.manage', nameAr: 'إدارة إعدادات النظام المتقدمة', nameEn: 'Manage Advanced Settings', descriptionAr: 'التحكم بالبروتوكولات ونسخ المخطط (Schema)', descriptionEn: 'Manage protocols & schema version' },
+      { key: 'system.aiProvider.manage', nameAr: 'إدارة مزود الذكاء الاصطناعي النشط للمساعد الذكي', nameEn: 'Manage the Active AI Provider', descriptionAr: 'اختبار وتفعيل مزود الذكاء الاصطناعي للتطبيق بالكامل', descriptionEn: 'Test and activate which AI provider powers the assistant application-wide' },
       { key: 'audit.view', nameAr: 'عرض سجل التدقيق والأنشطة الأمنية (Audit Logs)', nameEn: 'View Security Audit Logs', descriptionAr: 'متابعة سجل حركات الدخول والتعديلات والحذف', descriptionEn: 'Review login, update, and delete audit trails' },
       { key: 'settings.view', nameAr: 'عرض شاشة الإعدادات العامة', nameEn: 'View Settings Page', descriptionAr: 'الاطلاع على بيانات المنظومة والنسخ', descriptionEn: 'View system configuration' },
       { key: 'settings.edit', nameAr: 'تعديل إعدادات وتفضيلات النظام', nameEn: 'Edit System Settings', descriptionAr: 'تحديث تفضيلات المنظومة', descriptionEn: 'Update system preferences' },
