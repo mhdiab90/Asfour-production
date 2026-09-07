@@ -24,6 +24,7 @@ export const DEFAULT_SUPER_ADMIN_PERMISSIONS: GranularPermissions = {
   // 1. Dashboard
   'dashboard.view': true,
   'dashboard.export_kpi': true,
+  'dashboard.manageCustomDashboards': true,
 
   // 2. Production Entry & Operations
   'production.view': true,
@@ -163,6 +164,7 @@ export const DEFAULT_PRODUCTION_OPERATOR_PERMISSIONS: GranularPermissions = {
 
   'dashboard.view': false,
   'dashboard.export_kpi': false,
+  'dashboard.manageCustomDashboards': false,
   'production.view': true,
   'production.create': true,
   'production.edit': true,
@@ -283,6 +285,7 @@ export const DEFAULT_PRODUCTION_SUPERVISOR_PERMISSIONS: GranularPermissions = {
   'production.scope': 'shift',
   'dashboard.view': true,
   'dashboard.export_kpi': true,
+  'dashboard.manageCustomDashboards': true,
   'production.view': true,
   'production.create': true,
   'production.edit': true,
@@ -326,6 +329,7 @@ export const DEFAULT_QUALITY_CONTROL_PERMISSIONS: GranularPermissions = {
   dataScope: 'ALL',
   'production.scope': 'all',
   'dashboard.view': true,
+  'dashboard.manageCustomDashboards': true,
   'production.view': true,
   'production.create': false,
   'production.edit': false,

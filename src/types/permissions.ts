@@ -44,6 +44,7 @@ export interface GranularPermissions {
   // 1. Dashboard & Analytics
   'dashboard.view': boolean;
   'dashboard.export_kpi': boolean;
+  'dashboard.manageCustomDashboards': boolean;
 
   // 2. Production Entry & Direct Operations
   'production.view': boolean;
