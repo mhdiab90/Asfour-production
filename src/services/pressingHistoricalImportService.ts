@@ -41,7 +41,8 @@ import { fetchMasterData } from './masterDataService';
 import { fetchProductTypes } from './productTypeService';
 import { parseProductCode } from '../utils/productCodeParser';
 import { logAuditAction } from './auditService';
-import { safeBatchSet } from '../utils/firestoreSanitizer';
+import { safeBatchSet, safeSetDoc } from '../utils/firestoreSanitizer';
+import { runChunkedWriteWithFallback } from './tubeBallMillsChunkedWritePure';
 import { calculateProductionMetrics } from './productionService';
 import { toWesternDigits } from '../utils/formatters';
 import { findBestFuzzyCandidates, ProposedMatchCandidate } from '../utils/fuzzyMatching';
@@ -1278,6 +1279,8 @@ export async function executePressingBatchImport(
   skippedCount: number;
   errors: string[];
   importId: string;
+  /** F-03 - rowIndex of every row whose OWN individual write failed, so the UI can keep exactly those rows reviewable/re-importable instead of losing a whole chunk. */
+  failedRowIndexes: number[];
 }> {
   const currentUser = auth.currentUser;
   const now = new Date();
@@ -1288,19 +1291,32 @@ export async function executePressingBatchImport(
   const skippedCount = rowsToImport.length - importableRows.length;
 
   const BATCH_SIZE = 400;
-  const totalBatches = Math.ceil(importableRows.length / BATCH_SIZE) || 1;
-  let importedCount = 0;
-  let failedCount = 0;
-  const errors: string[] = [];
 
-  for (let batchIndex = 0; batchIndex < totalBatches; batchIndex++) {
-    const chunk = importableRows.slice(batchIndex * BATCH_SIZE, (batchIndex + 1) * BATCH_SIZE);
-    if (chunk.length === 0) continue;
-
-    const batch = writeBatch(db);
-
-    chunk.forEach(row => {
-      const docRef = doc(collection(db, 'production'));
+  /**
+   * F-03 - ROW-LEVEL FAILURE ISOLATION.
+   *
+   * A Firestore writeBatch().commit() is ATOMIC, so the previous
+   * one-batch-per-chunk loop marked all 400 rows of a chunk failed when any
+   * single row in it was rejected - 399 perfectly valid, already-validated
+   * rows were discarded because of one bad neighbour. That contradicts the
+   * core partial-import rule that a failing row must only ever block itself.
+   *
+   * This now delegates to runChunkedWriteWithFallback (the SAME orchestrator
+   * Tube/Ball Mills already uses - tubeBallMillsChunkedWritePure.ts), rather
+   * than inventing a second strategy: the happy path still writes one atomic
+   * batch per chunk (so a normal import pays no extra write cost), and ONLY
+   * when a chunk's commit rejects does it retry that one chunk's rows
+   * individually to find out exactly which ones actually fail. The retry is
+   * bounded - one single pass over the failed chunk, never a loop - rows that
+   * already committed are never rewritten, and a later chunk is still
+   * processed after an earlier chunk fails.
+   *
+   * Rows are built up-front so each carries its own docRef: a retried row
+   * reuses the id it was assigned, so the individual fallback can never
+   * create a duplicate of a row the batch had already written.
+   */
+  const entries = importableRows.map(row => {
+    const docRef = doc(collection(db, 'production'));
       const pieceWeight = row.pieceWeight || 0;
 
       const recordPayload: ProductionRecord = {
@@ -1391,23 +1407,31 @@ export async function executePressingBatchImport(
         ...(backupId ? { backupId } : {}),
       };
 
-      safeBatchSet(batch, docRef, enrichedPayload);
-    });
+    return { row, docRef, payload: enrichedPayload };
+  });
 
-    try {
+  const writeResult = await runChunkedWriteWithFallback({
+    items: entries,
+    chunkSize: BATCH_SIZE,
+    getId: (e) => e.row.rowIndex,
+    writeChunk: async (chunk) => {
+      const batch = writeBatch(db);
+      chunk.forEach((e) => safeBatchSet(batch, e.docRef, e.payload));
       await batch.commit();
-      importedCount += chunk.length;
-    } catch (err: any) {
-      console.error(`Pressing batch ${batchIndex + 1} commit error:`, err);
-      failedCount += chunk.length;
-      errors.push(`فشل حفظ الدفعة ${batchIndex + 1} من ${totalBatches}: ${err.message}`);
-    }
+    },
+    // Individual-row fallback - only ever invoked after writeChunk rejects
+    // for the chunk this row belongs to. Reuses the row's pre-assigned
+    // docRef, so a row the failed batch had not written gets written exactly
+    // once and never twice.
+    writeOne: async (e) => { await safeSetDoc(e.docRef, e.payload); },
+    onProgress,
+  });
 
-    if (onProgress) {
-      const percent = Math.round(((batchIndex + 1) / totalBatches) * 100);
-      onProgress(percent, batchIndex + 1, totalBatches);
-    }
-  }
+  const importedCount = writeResult.importedIds.length;
+  const failedCount = writeResult.failedIds.length;
+  const errors = writeResult.errors;
+  /** Row indexes that genuinely failed their own individual write - these stay reviewable/re-importable. */
+  const failedRowIndexes = writeResult.failedIds as number[];
 
   // Save any approved mappings across the imported rows
   const mappingsToPersist: Array<{
@@ -1469,5 +1493,6 @@ export async function executePressingBatchImport(
     skippedCount,
     errors,
     importId: sessionImportId,
+    failedRowIndexes,
   };
 }

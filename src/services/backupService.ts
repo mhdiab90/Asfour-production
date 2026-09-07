@@ -46,10 +46,10 @@ export const BACKUP_COLLECTIONS = [
   'downtime',
   'stage_rotary_furnace',
   'stage_chinese_mills',
-  'stage_tube_mills',
+  'stage_tube_ball_mills',
   'stage_mortar_concrete',
   'stage_mixing',
-  'stage_lightweight',
+  'stage_lightweight_foam',
   'stage_sorting',
   'audit_logs',
   'system_settings'

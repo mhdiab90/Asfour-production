@@ -14,6 +14,8 @@ import {
   serverTimestamp
 } from 'firebase/firestore';
 import { db, auth } from '../config/firebase';
+import { safeSetDoc } from '../utils/firestoreSanitizer';
+import { runChunkedWriteWithFallback } from './tubeBallMillsChunkedWritePure';
 import {
   Employee,
   Product,
@@ -401,6 +403,8 @@ export async function executeBatchImport(
   duplicateSkippedRowIndexes: number[];
   recheckFailedCount: number;
   recheckFailedRowIndexes: number[];
+  /** F-03.1 - rowIndex of every row whose OWN individual write failed, so the UI can keep exactly those rows reviewable/re-importable instead of losing a whole chunk. Distinct from recheckFailedRowIndexes, which never reached the writer at all. */
+  failedRowIndexes: number[];
 }> {
   // PHASE 4F: reuse the shared STAGE_COLLECTION_NAMES constant (already
   // used by stageRecordService.ts/productionQueryBoundsPure.ts) instead of
@@ -520,11 +524,26 @@ export async function executeBatchImport(
   let success = 0;
   const errors: string[] = [];
 
-  for (let i = 0; i < writableRows.length; i += batchSize) {
-    const chunk = writableRows.slice(i, i + batchSize);
-    const batch = writeBatch(db);
-
-    chunk.forEach((row) => {
+  /**
+   * F-03.1 - ROW-LEVEL FAILURE ISOLATION.
+   *
+   * A Firestore writeBatch().commit() is ATOMIC, so the previous
+   * one-batch-per-chunk loop discarded every row of a chunk when any single
+   * row in it was rejected - `success` never incremented for up to 399
+   * already-validated rows because of one bad neighbour.
+   *
+   * This delegates to runChunkedWriteWithFallback - the SAME orchestrator
+   * Tube/Ball Mills, Pressing and Chinese Mills use, not a second strategy.
+   * The happy path still writes one atomic batch per chunk, so a normal
+   * import pays no extra write cost; only when a chunk's commit rejects does
+   * it retry that one chunk's rows individually, in a single bounded pass.
+   * Later chunks are still processed after an earlier chunk fails.
+   *
+   * Each row's docRef is allocated up-front, so a row retried by the
+   * fallback reuses the id the batch had already assigned and can never
+   * produce a duplicate document.
+   */
+  const entries = writableRows.map((row) => {
       const docRef = doc(collection(db, collectionName));
       const raw = row.data;
 
@@ -571,19 +590,30 @@ export async function executeBatchImport(
         record.date = new Date().toISOString().split('T')[0];
       }
 
-      batch.set(docRef, record);
-    });
+      return { row, docRef, record };
+  });
 
-    try {
+  const writeResult = await runChunkedWriteWithFallback({
+    items: entries,
+    chunkSize: batchSize,
+    getId: (e) => e.row.rowIndex,
+    writeChunk: async (chunk) => {
+      const batch = writeBatch(db);
+      chunk.forEach((e) => batch.set(e.docRef, e.record));
       await batch.commit();
-      success += chunk.length;
-      if (onProgress) {
-        onProgress(Math.round(((i + chunk.length) / writableRows.length) * 100));
-      }
-    } catch (err: any) {
-      errors.push(`فشل حفظ الدفعة: ${err.message}`);
-    }
-  }
+    },
+    // Individual-row fallback - only ever invoked after writeChunk rejects
+    // for the chunk this row belongs to, reusing the pre-assigned docRef.
+    writeOne: async (e) => { await safeSetDoc(e.docRef, e.record); },
+    // This function's own onProgress takes only a percent; the extra
+    // batch arguments the orchestrator supplies are simply ignored.
+    onProgress: onProgress ? (percent) => onProgress(percent) : undefined,
+  });
+
+  success = writeResult.importedIds.length;
+  errors.push(...writeResult.errors);
+  /** F-03.1 - rowIndex of every row whose OWN individual write failed; these stay reviewable/re-importable. */
+  const failedRowIndexes = writeResult.failedIds as number[];
 
   await logAuditAction(
     'BULK_IMPORT',
@@ -606,6 +636,7 @@ export async function executeBatchImport(
     // risking a silent double-write.
     recheckFailedCount: recheckFailedRowIndexes.length,
     recheckFailedRowIndexes,
+    failedRowIndexes,
   };
 }
 

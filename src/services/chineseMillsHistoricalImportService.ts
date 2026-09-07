@@ -19,7 +19,8 @@ import { parseShiftNumber, buildShiftDisplayName, buildShiftCode } from '../util
 import { evaluateBagWeightConsistency, buildInvalidShiftMessage } from '../utils/businessValidationRules';
 import { toWesternDigits } from '../utils/formatters';
 import { normalizeDateInput } from './pressingHistoricalImportService';
-import { safeBatchSet } from '../utils/firestoreSanitizer';
+import { safeBatchSet, safeSetDoc } from '../utils/firestoreSanitizer';
+import { runChunkedWriteWithFallback } from './tubeBallMillsChunkedWritePure';
 import { isChineseMillsRowWritable } from './chineseMillsSelectionPure';
 
 export const CHINESE_MILLS_COLLECTION = 'stage_chinese_mills';
@@ -798,7 +799,7 @@ export async function executeChineseMillsBatchImport(
    * history-writing path.
    */
   historyContext?: { fileName?: string; totalRowsInSession?: number; selectedCount?: number; approvedCount?: number; correctedCount?: number; warningCount?: number; blockingCount?: number }
-): Promise<{ importedCount: number; failedCount: number; skippedCount: number; cancelledCount: number; errors: string[]; importId: string }> {
+): Promise<{ importedCount: number; failedCount: number; skippedCount: number; cancelledCount: number; errors: string[]; importId: string; failedRowIndexes: number[] }> {
   const writable = rowsToImport.filter(isChineseMillsRowWritable);
   const skippedCount = rowsToImport.length - writable.length;
   const importId = `HIST-IMP-CM-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
@@ -811,20 +812,32 @@ export async function executeChineseMillsBatchImport(
   const errors: string[] = [];
   const mappingEntries: Array<{ domain: string; originalValue: string; mappedEntityId: string; mappedEntityName: string; mappedEntityCode?: string; confidence: number; matchType: string }> = [];
 
-  for (let i = 0; i < writable.length; i += BATCH_SIZE) {
-    if (shouldCancel && shouldCancel()) {
-      cancelledCount = writable.length - i;
-      break;
-    }
-    const chunk = writable.slice(i, i + BATCH_SIZE);
-    const batch = writeBatch(db);
-    const currentBatchNum = Math.floor(i / BATCH_SIZE) + 1;
+  /**
+   * F-03.1 - ROW-LEVEL FAILURE ISOLATION.
+   *
+   * A Firestore writeBatch().commit() is ATOMIC, so the previous
+   * one-batch-per-chunk loop lost every row of a chunk when any single row in
+   * it was rejected - up to 399 already-validated rows discarded because of
+   * one bad neighbour, and `importedCount` never incremented for them.
+   *
+   * This delegates to runChunkedWriteWithFallback - the SAME orchestrator
+   * Tube/Ball Mills and Pressing already use, not a second strategy. The
+   * happy path still writes one atomic batch per chunk (no extra write cost
+   * for a normal import); only when a chunk's commit rejects does it retry
+   * that one chunk's rows individually, in a single bounded pass, to find out
+   * exactly which rows genuinely fail. Later chunks are still processed after
+   * an earlier chunk fails, and committed rows are never rewritten.
+   *
+   * Each row's docRef is assigned up-front, so a row retried by the fallback
+   * reuses the id the batch had already allocated and can never be duplicated.
+   * Mapping candidates are likewise collected during entry building - the same
+   * ordering Tube/Ball Mills' implementation already uses.
+   */
+  const entries = writable.map((row) => {
+    const docRef = doc(collection(db, CHINESE_MILLS_COLLECTION));
+    const efficiencyPercentage = row.theoreticalRate ? Number((((row.actualRateFinal || 0) / row.theoreticalRate) * 100).toFixed(1)) : undefined;
 
-    chunk.forEach((row) => {
-      const docRef = doc(collection(db, CHINESE_MILLS_COLLECTION));
-      const efficiencyPercentage = row.theoreticalRate ? Number((((row.actualRateFinal || 0) / row.theoreticalRate) * 100).toFixed(1)) : undefined;
-
-      safeBatchSet(batch, docRef, {
+    const payload = ({
         id: docRef.id,
         stageType: 'chinese_mills',
         date: row.date,
@@ -873,9 +886,9 @@ export async function executeChineseMillsBatchImport(
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString(),
         serverCreatedAt: serverTimestamp(),
-      });
+    });
 
-      (row.proposedMatches || []).forEach((m) => {
+    (row.proposedMatches || []).forEach((m) => {
         if ((m.decision === 'ACCEPTED' || m.confidence >= 90) && m.suggestedId) {
           mappingEntries.push({
             domain: m.fieldDomain === 'millType' ? 'chineseMill' : m.fieldDomain,
@@ -896,17 +909,33 @@ export async function executeChineseMillsBatchImport(
             matchType: 'MANUAL_MAPPING',
           });
         }
-      });
     });
 
-    try {
+    return { row, docRef, payload };
+  });
+
+  const writeResult = await runChunkedWriteWithFallback({
+    items: entries,
+    chunkSize: BATCH_SIZE,
+    getId: (e) => e.row.rowIndex,
+    writeChunk: async (chunk) => {
+      const batch = writeBatch(db);
+      chunk.forEach((e) => safeBatchSet(batch, e.docRef, e.payload));
       await batch.commit();
-      importedCount += chunk.length;
-      if (onProgress) onProgress(Math.round(((i + chunk.length) / writable.length) * 100), currentBatchNum, totalBatches);
-    } catch (err: any) {
-      errors.push(`فشل حفظ الدفعة ${currentBatchNum}: ${err.message}`);
-    }
-  }
+    },
+    // Individual-row fallback - only ever invoked after writeChunk rejects
+    // for the chunk this row belongs to, reusing the row's pre-assigned
+    // docRef so a row is never written twice.
+    writeOne: async (e) => { await safeSetDoc(e.docRef, e.payload); },
+    shouldCancel,
+    onProgress,
+  });
+
+  importedCount = writeResult.importedIds.length;
+  cancelledCount = writeResult.cancelledCount;
+  errors.push(...writeResult.errors);
+  /** F-03.1 - rowIndex of every row whose OWN individual write failed; these stay reviewable/re-importable. */
+  const failedRowIndexes = writeResult.failedIds as number[];
 
   if (mappingEntries.length > 0) {
     await saveApprovedMappingBatch(mappingEntries).catch(() => {});
@@ -955,6 +984,7 @@ export async function executeChineseMillsBatchImport(
     cancelledCount,
     errors,
     importId,
+    failedRowIndexes,
   };
 }
 

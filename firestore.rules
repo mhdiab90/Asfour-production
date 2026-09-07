@@ -20,6 +20,68 @@ service cloud.firestore {
       return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
     }
 
+    // System Version Management & Application Rollback (distinct from data
+    // backup/restore above - this governs APPLICATION CODE version metadata
+    // only, never Firestore data). Executing an actual rollback is a
+    // deliberately narrower, more sensitive capability than "isAdmin()" -
+    // by default only SUPER_ADMIN, or an ADMIN explicitly granted the
+    // 'system.version.rollback' granular permission via the existing
+    // Permission Editor (adminUsers/{uid}.permissions).
+    function hasVersionRollbackPermission() {
+      return isSignedIn() && (
+        (request.auth.token.email == 'ai.mhdiab90@gmail.com') ||
+        (
+          exists(/databases/$(database)/documents/adminUsers/$(request.auth.uid)) &&
+          get(/databases/$(database)/documents/adminUsers/$(request.auth.uid)).data.active == true &&
+          (
+            get(/databases/$(database)/documents/adminUsers/$(request.auth.uid)).data.role == 'SUPER_ADMIN' ||
+            get(/databases/$(database)/documents/adminUsers/$(request.auth.uid)).data.permissions.get('system.version.rollback', false) == true
+          )
+        )
+      );
+    }
+
+    // Central AI Provider Manager - which AIProvider (Claude/Gemini/
+    // Cloudflare Workers AI/Mock) the whole application uses. Read is open
+    // to any signed-in user (the running app, including the Global
+    // Assistant, must know the currently active provider) - only changing
+    // it requires the granular 'system.aiProvider.manage' permission,
+    // mirroring hasVersionRollbackPermission() below rather than the
+    // broader isAdmin() used by the generic system_settings collection.
+    function hasAIProviderManagePermission() {
+      return isSignedIn() && (
+        (request.auth.token.email == 'ai.mhdiab90@gmail.com') ||
+        (
+          exists(/databases/$(database)/documents/adminUsers/$(request.auth.uid)) &&
+          get(/databases/$(database)/documents/adminUsers/$(request.auth.uid)).data.active == true &&
+          (
+            get(/databases/$(database)/documents/adminUsers/$(request.auth.uid)).data.role == 'SUPER_ADMIN' ||
+            get(/databases/$(database)/documents/adminUsers/$(request.auth.uid)).data.permissions.get('system.aiProvider.manage', false) == true
+          )
+        )
+      );
+    }
+
+    // Approved Analytics Central Persistence Fix - who may create/update/
+    // delete an approved metric definition. Reuses the EXISTING
+    // 'reports.view' permission (the same one the Suggested Analytics
+    // screen's page access already requires - see permissions.ts's
+    // 'data-quality' case) rather than inventing a new broad permission,
+    // mirroring hasAIProviderManagePermission()'s exact structure above.
+    function hasApprovedAnalyticsManagePermission() {
+      return isSignedIn() && (
+        (request.auth.token.email == 'ai.mhdiab90@gmail.com') ||
+        (
+          exists(/databases/$(database)/documents/adminUsers/$(request.auth.uid)) &&
+          get(/databases/$(database)/documents/adminUsers/$(request.auth.uid)).data.active == true &&
+          (
+            get(/databases/$(database)/documents/adminUsers/$(request.auth.uid)).data.role == 'SUPER_ADMIN' ||
+            get(/databases/$(database)/documents/adminUsers/$(request.auth.uid)).data.permissions.get('reports.view', false) == true
+          )
+        )
+      );
+    }
+
     // Default deny
     match /{document=**} {
       allow read, write: if false;
@@ -85,6 +147,52 @@ service cloud.firestore {
       allow write: if isAdmin();
     }
 
+    // Chinese Mills stage-specific Master Data (mill identity, fault type
+    // catalog) - same read/write pattern as every other Master Data
+    // collection above. These two collections were introduced by the
+    // Chinese Mills Historical Import feature but were never added here,
+    // so every read fell through to the default-deny catch-all below
+    // regardless of role - this was the root cause of the reported
+    // "Missing or insufficient permissions" error on `faultTypes`.
+    match /chineseMills/{millId} {
+      allow read: if isSignedIn();
+      allow write: if isAdmin();
+    }
+
+    match /faultTypes/{faultTypeId} {
+      allow read: if isSignedIn();
+      allow write: if isAdmin();
+    }
+
+    // Tube/Ball Mills stage-specific Master Data (mill identity, storage
+    // bunkers) - same read/write pattern as Chinese Mills' equivalent
+    // collections above. Introduced by the Tube/Ball Mills Historical
+    // Import feature but never added here, so every read fell through to
+    // the default-deny catch-all below regardless of role - the exact same
+    // root cause already documented and fixed once above for
+    // chineseMills/faultTypes.
+    match /tubeBallMills/{millId} {
+      allow read: if isSignedIn();
+      allow write: if isAdmin();
+    }
+
+    match /bunkers/{bunkerId} {
+      allow read: if isSignedIn();
+      allow write: if isAdmin();
+    }
+
+    // Cost Center / Department Hierarchy (generic self-referencing tree,
+    // sourced from Sheet1 of the authoritative Cost Center workbook) - a
+    // NEW, separate sibling collection to `departments` above, never merged
+    // into it (departments already powers the Employee-assignment dropdown;
+    // mixing in ~189 heterogeneous hierarchy nodes, including equipment
+    // leaves, would corrupt that). Same read/write pattern as every other
+    // Master Data collection in this file.
+    match /costCenterHierarchy/{nodeId} {
+      allow read: if isSignedIn();
+      allow write: if isAdmin();
+    }
+
     // Production records (Production users & admins can read and log production)
     match /production/{productionId} {
       allow read: if isSignedIn();
@@ -129,6 +237,19 @@ service cloud.firestore {
       allow write: if isSignedIn();
     }
 
+    // The Tube/Ball Mills stage's ACTUAL production-record collection name
+    // used throughout the application (stageRecordService.ts,
+    // tubeBallMillsHistoricalImportService.ts's TUBE_BALL_MILLS_COLLECTION,
+    // TubeBallMillsEntryForm.tsx) - distinct from `stage_tube_mills` above,
+    // which is a differently-named collection still referenced elsewhere
+    // (backupService.ts's backup list) and is intentionally left untouched
+    // here, not renamed or removed. Same read/write pattern as every other
+    // stage_* collection.
+    match /stage_tube_ball_mills/{id} {
+      allow read: if isSignedIn();
+      allow write: if isSignedIn();
+    }
+
     match /stage_mortar_concrete/{id} {
       allow read: if isSignedIn();
       allow write: if isSignedIn();
@@ -140,6 +261,22 @@ service cloud.firestore {
     }
 
     match /stage_lightweight/{id} {
+      allow read: if isSignedIn();
+      allow write: if isSignedIn();
+    }
+
+    // The Lightweight/Foam stage's ACTUAL production-record collection name
+    // used throughout the application (stageQueryBoundsPure.ts's
+    // STAGE_COLLECTION_NAMES, stageRecordService.ts's createStageRecord/
+    // fetchUniversalStageRecords, LightweightFoamEntryForm.tsx) - distinct
+    // from `stage_lightweight` above, which is a legacy differently-named
+    // collection left untouched here, not renamed or removed. Without this
+    // block the collection matched no rule at all and fell to the default
+    // deny, which silently blocked stage entry, reports and backup. Same
+    // read/write pattern as every other stage_* collection - mirrors the
+    // `stage_tube_ball_mills` block above, which resolved the identical
+    // legacy-rename gap for the Tube/Ball Mills stage.
+    match /stage_lightweight_foam/{id} {
       allow read: if isSignedIn();
       allow write: if isSignedIn();
     }
@@ -163,9 +300,68 @@ service cloud.firestore {
       allow update, delete: if isAdmin();
     }
 
+    // System Version Management (application code/deployment version
+    // records, release checkpoints - NEVER Firestore data). Read/manage
+    // (create checkpoints, mark Known Good) requires isAdmin(); the status
+    // TRANSITIONS that actually drive a rollback forward additionally
+    // require hasVersionRollbackPermission() below. Immutable audit trail -
+    // no delete, matching auditLogs.
+    match /systemVersions/{versionId} {
+      allow read: if isAdmin();
+      allow create: if isAdmin();
+      allow update: if isAdmin();
+      allow delete: if false;
+    }
+
+    // Rollback Operations audit trail (§12). Any admin can READ (transparency);
+    // requesting a rollback (status: REQUESTED) requires isAdmin() as the
+    // baseline "manage" tier, but advancing it toward execution
+    // (APPROVED/RUNNING/SUCCESS/FAILED) requires the stricter
+    // hasVersionRollbackPermission() - enforced here at the Firestore layer
+    // as well as in the application UI, never only client-side. Immutable -
+    // no delete, so a completed/failed rollback can never be erased from
+    // the audit trail (§35 retention is enforced at the query/read layer,
+    // not by deleting records).
+    match /versionRollbacks/{rollbackId} {
+      allow read: if isAdmin();
+      allow create: if isAdmin();
+      allow update: if hasVersionRollbackPermission();
+      allow delete: if false;
+    }
+
+    // Central AI Provider Manager config (single doc: aiProviderConfig/active).
+    // Read: any signed-in user (needed to know which provider is live).
+    // Write: only 'system.aiProvider.manage' holders (SUPER_ADMIN by default).
+    match /aiProviderConfig/{docId} {
+      allow read: if isSignedIn();
+      allow write: if hasAIProviderManagePermission();
+    }
+
+    // Approved Analytics definitions (Central Persistence Fix) - central,
+    // cross-device metric-definition records, never raw production data.
+    // Read: any signed-in user (fine-grained 'reports.view' page-access
+    // gating happens at the application layer, same documented convention
+    // as system_settings/translationOverrides below). Write: only
+    // 'reports.view' holders - reused, not a new broad permission.
+    match /approvedAnalytics/{entryId} {
+      allow read: if isSignedIn();
+      allow create, update, delete: if hasApprovedAnalyticsManagePermission();
+    }
+
     // System Settings
     match /system_settings/{settingId} {
       allow read: if settingId == 'branding' || isSignedIn();
+      allow write: if isAdmin();
+    }
+
+    // Translation overrides (Translation Manager) - everyone signed in needs
+    // to READ the merged translations to render the UI; only admins can
+    // WRITE an override. Fine-grained `translation.manage` gating happens at
+    // the application layer, same as every other granular permission key in
+    // this app - Firestore rules here only enforce the coarse admin/non-admin
+    // boundary, mirroring system_settings above.
+    match /translationOverrides/{overrideId} {
+      allow read: if isSignedIn();
       allow write: if isAdmin();
     }
 
@@ -182,14 +378,70 @@ service cloud.firestore {
       allow update, delete: if false; // Immutable audit log
     }
 
-    // Health check & testing
+    // ------------------------------------------------------------------
+    // P0 FIX - import audit / mapping / permission-audit collections.
+    //
+    // All three were previously absent from this file entirely, so the
+    // default-deny above blocked every read AND write to them while the
+    // application actively used them. Symptoms: import History was
+    // permanently empty for every module (importHistoryPure.ts documents
+    // this exact root cause), approved import mappings were never
+    // persisted, and permission-change audit records were silently dropped
+    // (userService.ts swallows the failure with console.warn).
+    // ------------------------------------------------------------------
+
+    // Approved import mapping dictionary (importMappingService.ts:88 reads
+    // the whole collection into MAPPINGS_CACHE; :145 persists entries with
+    // batch.set(..., { merge: true }) on a deterministic doc key). Reading
+    // is needed by anyone running an import; approving a mapping is an
+    // administrative decision, so writes stay admin-only rather than open
+    // to any signed-in user.
+    match /importMappings/{id} {
+      allow read: if isSignedIn();
+      allow write: if isAdmin();
+    }
+
+    // Historical import execution audit trail. Written exactly once per
+    // import by logHistoricalImportExecution() (importMappingService.ts:175)
+    // under a per-run unique id (`HIST-IMP-<timestamp>-<random>`), so every
+    // write is a CREATE - never an update. Immutable thereafter, matching
+    // the auditLogs/audit_logs pattern directly above.
+    match /importAuditTrail/{id} {
+      allow read: if isSignedIn();
+      allow create: if isSignedIn();
+      allow update, delete: if false; // Immutable audit log
+    }
+
+    // Permission-change audit trail. Written by updateUserPermissions()
+    // (userService.ts:253) with an auto-generated document id, so every
+    // write is a CREATE. Reading is restricted to admins because these
+    // records contain the full before/after permission sets for other
+    // users; no read site exists in the application today.
+    match /permissionAuditLogs/{id} {
+      allow read: if isAdmin();
+      allow create: if isSignedIn();
+      allow update, delete: if false; // Immutable audit log
+    }
+
+    // Health check & testing. This is the ONLY connection-ping/self-test
+    // collection the application actually uses - systemTestService.ts writes
+    // and immediately deletes a probe document here
+    // (doc(db, 'systemTests', testId)), and it correctly requires a signed-in
+    // caller.
     match /systemTests/{testId} {
       allow read, write: if isSignedIn();
     }
 
-    // Connection ping
-    match /test/{testId} {
-      allow read, write: if true;
-    }
+    // PHASE 5H: the legacy `/test/{testId}` block that previously sat here -
+    // `allow read, write: if true` - has been REMOVED. It granted
+    // UNAUTHENTICATED read and write to anyone who knew the project id, and a
+    // full repository audit found zero references to a Firestore collection
+    // named `test`: no collection(db,'test'), no doc(db,'test'), and no such
+    // literal anywhere in src/, scripts/, public/ or cloudflare/. The
+    // connection-ping purpose it was presumably created for is served by
+    // `systemTests` above (signed-in only), and the app's other liveness
+    // probes read `products` with limit(1) (systemVersionService.ts,
+    // SystemHealthView.tsx). With no match block, the default-deny at the top
+    // of this file now protects the path.
   }
 }
