@@ -1,7 +1,7 @@
 /**
  * Single source of truth for this build's identity.
  *
- * The application version itself (3.2.0) stays human-authored in
+ * The application version itself stays human-authored in
  * src/config/appVersion.ts - it is a product decision, not something a build
  * can infer. Everything else that identifies a build is DERIVED here from Git
  * at build time, so it can never go stale the way the previously hard-coded
@@ -67,6 +67,16 @@ export function readDeclaredVersion(root) {
   return m[1];
 }
 
+/** The release this build belongs to, from release.manifest.json. Null if untracked. */
+export function readReleaseId(root) {
+  try {
+    const m = JSON.parse(fs.readFileSync(path.join(root, 'release.manifest.json'), 'utf-8'));
+    return m.releaseId ?? null;
+  } catch {
+    return null;
+  }
+}
+
 /**
  * Computes the identity of the build being produced right now.
  *
@@ -96,6 +106,10 @@ export function computeBuildIdentity(root, now = new Date()) {
     buildTimestamp,
     // Correlates version -> commit -> build -> deployment without any Firestore write.
     deploymentId: `asfour-${stamp}-${shortSha}`,
+    // Read from the committed manifest so the deployed artefacts can name the
+    // release they belong to, closing the chain at the live site rather than
+    // only inside Git. Null when a release is not registry-tracked.
+    releaseId: readReleaseId(root),
   };
 }
 
@@ -103,6 +117,7 @@ export function computeBuildIdentity(root, now = new Date()) {
 export function toVersionJson(identity, extra = {}) {
   return {
     version: identity.version,
+    releaseId: identity.releaseId ?? null,
     buildId: identity.buildId,
     buildTimestamp: identity.buildTimestamp,
     gitCommit: identity.commitSha,
@@ -120,6 +135,7 @@ export function toVersionJson(identity, extra = {}) {
 export function toReleaseIdentity(identity) {
   return {
     version: identity.version,
+    releaseId: identity.releaseId ?? null,
     commitSha: identity.commitSha,
     branch: identity.branch,
     buildId: identity.buildId,

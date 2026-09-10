@@ -542,6 +542,17 @@ test('L8. a MINOR bump is the correct call for this release', () => {
   assert.equal(cr.applyBump('3.2.0', bump), '3.3.0', 'this release is 3.2.0 -> 3.3.0');
 });
 
+test('L9. the deployed artefacts name the release, closing the chain at the live site', async () => {
+  const gateBi: any = await import(pathToFileURL(path.join(ROOT, 'scripts/buildIdentity.mjs')).href);
+  const manifestReleaseId = JSON.parse(readSource('release.manifest.json')).releaseId;
+  assert.equal(gateBi.readReleaseId(ROOT), manifestReleaseId, 'the release id must come from the manifest, not a second copy');
+
+  const id = gateBi.computeBuildIdentity(ROOT);
+  assert.equal(id.releaseId, manifestReleaseId);
+  assert.equal(gateBi.toVersionJson(id).releaseId, manifestReleaseId, '/version.json must name its release');
+  assert.equal(gateBi.toReleaseIdentity(id).releaseId, manifestReleaseId, 'release-identity.json must name its release');
+});
+
 (async () => {
   await bootstrap();
   for (const { name, fn } of registered) {
