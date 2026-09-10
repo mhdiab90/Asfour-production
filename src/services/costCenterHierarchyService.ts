@@ -29,8 +29,9 @@ import { doc, writeBatch } from 'firebase/firestore';
 import { db, auth } from '../config/firebase';
 import { safeBatchSet } from '../utils/firestoreSanitizer';
 import { parseSheet1HierarchyRows, buildCostCenterHierarchyCreationPlan, ParsedHierarchyNode } from './costCenterHierarchyPure';
+import { fetchMasterData } from './masterDataService';
 
-/** NEW collection - never the existing `departments` collection. See the architecture decision above. Not yet registered in firestore.rules (no write happens in Phase 2, so no rule is required yet) - the exact rule a Phase 3 would need is documented in the Phase 2 report, not applied here. */
+/** NEW collection - never the existing `departments` collection. See the architecture decision above. Registered in firestore.rules (read: signed-in, write: admin). */
 export const COST_CENTER_HIERARCHY_COLLECTION = 'costCenterHierarchy';
 
 /**
@@ -122,4 +123,48 @@ export async function createCostCenterHierarchyNodes(
   }
 
   return { createdCount, importId };
+}
+
+/**
+ * A hierarchy node as persisted by createCostCenterHierarchyNodes below.
+ * Mirrors the document written there, field for field.
+ */
+export interface CostCenterHierarchyRecord {
+  id: string;
+  sheet1Code: string;
+  code: string;
+  name: string;
+  parentId: string | null;
+  parentSheet1Code: string | null;
+  level: number;
+  type: string;
+  rootCategoryCode: string;
+  rootCategoryName: string;
+  status: string;
+  notes: string | null;
+  active: boolean;
+  importBatchId: string;
+  createdBy: string;
+  createdByName: string;
+  createdAt: string;
+}
+
+/**
+ * Reads the persisted hierarchy.
+ *
+ * This collection was previously WRITE-ONLY: the importer created documents
+ * successfully, but nothing in the application ever read them back - there was
+ * no list function here, no getDocs anywhere against this collection, and it is
+ * absent from MASTER_DATA_COLLECTIONS. So a successful import reported a real
+ * created count and then appeared to vanish. The records were never lost; they
+ * simply had no reader.
+ *
+ * Goes through fetchMasterData so it inherits the released cache-first read,
+ * per-user cache scoping and in-flight de-duplication rather than adding a new
+ * Firestore access path in the UI.
+ */
+export async function listCostCenterHierarchyNodes(
+  options?: { skipCache?: boolean },
+): Promise<CostCenterHierarchyRecord[]> {
+  return fetchMasterData<CostCenterHierarchyRecord>(COST_CENTER_HIERARCHY_COLLECTION, options);
 }

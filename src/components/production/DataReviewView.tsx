@@ -52,6 +52,29 @@ import {
 } from '../../services/dashboardPeriodPure';
 import { todayLocalIso, resolveNamedMonthRange } from '../../assistant/tools/dateRangeResolver';
 import { filterDataReviewRecords } from '../../services/dataReviewSearchPure';
+import {
+  MASTER_DATA_CATEGORIES,
+  productionFilterCategories,
+  categoryLabel,
+  normaliseSelection,
+  filterRecordsBySelection,
+  getCategory,
+} from '../../services/masterDataCategoryRegistry';
+import {
+  EMPTY_SELECTION_STATE,
+  BULK_EDITABLE_FIELDS,
+  toggleRow,
+  selectAllVisible,
+  deselectAll,
+  pruneToVisible,
+  selectionCount,
+  isSelected,
+  areAllVisibleSelected,
+  planBulkEdit,
+  summariseBulkEdit,
+  confirmationMessage,
+  BulkEditOutcome,
+} from '../../services/bulkEditPure';
 import * as XLSX from 'xlsx';
 
 /**
@@ -122,6 +145,20 @@ export const DataReviewView: React.FC = () => {
 
   // Selected Record for Modal Inspection / Correction / Audit History
   const [selectedRecord, setSelectedRecord] = useState<UniversalStageRecord | null>(null);
+  // Category-first filtering. Only categories with a VERIFIED production
+  // relationship appear here - see masterDataCategoryRegistry.
+  const [filterCategoryId, setFilterCategoryId] = useState<string>('');
+  const [filterCodes, setFilterCodes] = useState<string[]>([]);
+  const [filterAll, setFilterAll] = useState<boolean>(true);
+
+  // Explicit row selection for bulk edit. Never inferred from the filters.
+  const [selection, setSelection] = useState(EMPTY_SELECTION_STATE);
+  const [isBulkOpen, setIsBulkOpen] = useState<boolean>(false);
+  const [bulkNotes, setBulkNotes] = useState<string>('');
+  const [bulkReason, setBulkReason] = useState<string>('');
+  const [bulkBusy, setBulkBusy] = useState<boolean>(false);
+  const [bulkOutcome, setBulkOutcome] = useState<BulkEditOutcome | null>(null);
+
   const [isEditMode, setIsEditMode] = useState<boolean>(false);
   const [editedFields, setEditedFields] = useState<Record<string, any>>({});
   const [correctionReason, setCorrectionReason] = useState<string>('');
@@ -266,9 +303,88 @@ export const DataReviewView: React.FC = () => {
    * overwritten, so clearing the box restores the full filtered set.
    */
   const visibleRecords = useMemo(
-    () => filterDataReviewRecords(records, searchQuery),
-    [records, searchQuery]
+    () => {
+      const searched = filterDataReviewRecords(records, searchQuery);
+      // Category/code narrowing runs over the already-bounded, already-fetched
+      // set - no extra Firestore read, and never one query per selected code.
+      const sel = normaliseSelection(filterCategoryId || null, filterCodes, filterAll);
+      return filterRecordsBySelection(searched, sel);
+    },
+    [records, searchQuery, filterCategoryId, filterCodes, filterAll]
   );
+
+  /**
+   * Codes offered by the second selector, derived from the records actually in
+   * view. Sourcing them from the loaded set (rather than a fresh Master Data
+   * fetch) keeps this at zero additional reads and guarantees every offered
+   * code can actually match something.
+   */
+  const availableCodes = useMemo(() => {
+    const category = filterCategoryId ? getCategory(filterCategoryId) : undefined;
+    const field = category?.productionFilter;
+    if (!field) return [] as Array<{ value: string; label: string }>;
+    const seen = new Map<string, string>();
+    for (const r of filterDataReviewRecords(records, searchQuery)) {
+      const raw = (r as any)[field];
+      if (raw == null || raw === '') continue;
+      const value = String(raw);
+      if (seen.has(value)) continue;
+      const label =
+        field === 'stageType' ? (r.stageNameAr || value)
+        : field === 'productId' ? (r.productName || r.productCode || value)
+        : (r.customerName || value);
+      seen.set(value, label);
+    }
+    return [...seen.entries()].map(([value, label]) => ({ value, label })).sort((a, b) => a.label.localeCompare(b.label));
+  }, [records, searchQuery, filterCategoryId]);
+
+  const visibleIds = useMemo(() => visibleRecords.map((r) => r.id), [visibleRecords]);
+
+  /**
+   * A row that scrolls out of the filter must not stay selected: a later bulk
+   * edit would then write to a record the user can no longer see. The count
+   * visibly drops, so nothing happens silently.
+   */
+  useEffect(() => {
+    setSelection((prev) => (prev.selectedIds.length ? pruneToVisible(prev, visibleIds) : prev));
+  }, [visibleIds]);
+
+  /**
+   * Applies the bulk edit.
+   *
+   * Row-isolated on purpose: each record goes through the SAME
+   * updateStageRecord the single-record editor uses, so the correction reason,
+   * the CORRECTED status and the versioned audit log are identical. One row
+   * failing never rolls back the rows that already succeeded.
+   */
+  const handleBulkEdit = async () => {
+    const patch: Record<string, unknown> = { notes: bulkNotes };
+    const plan = planBulkEdit(selection, visibleRecords, patch);
+    if (plan.targets.length === 0) return;
+    if (!window.confirm(confirmationMessage(plan.targets.length, 'ar'))) return;
+
+    setBulkBusy(true);
+    const results: Array<{ id: string; ok: boolean; reason?: string }> = [];
+    for (const target of plan.targets) {
+      try {
+        await updateStageRecord(
+          target.stageType as any,
+          target.id,
+          patch,
+          bulkReason || 'تعديل جماعي',
+        );
+        results.push({ id: target.id, ok: true });
+      } catch (err: any) {
+        // Isolated: recorded and skipped, the remaining rows still proceed.
+        results.push({ id: target.id, ok: false, reason: String(err?.message ?? err) });
+      }
+    }
+    const outcome = summariseBulkEdit(plan, results);
+    setBulkOutcome(outcome);
+    setBulkBusy(false);
+    setSelection(deselectAll());
+    await loadRecords();
+  };
 
   const exportToExcel = () => {
     // Exports exactly what the table shows, search included - otherwise a
@@ -451,6 +567,100 @@ export const DataReviewView: React.FC = () => {
 
       {/* Records Table */}
       <div className="bg-white rounded-2xl border border-slate-200 shadow-xs overflow-hidden">
+          {/* Category -> code filtering. Only verified mappings are offered. */}
+          <div className="px-4 pt-4 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+            <div>
+              <label className="block text-[11px] font-bold text-slate-500 mb-1">نوع الأكواد (Data Category)</label>
+              <select
+                value={filterCategoryId}
+                onChange={(e) => { setFilterCategoryId(e.target.value); setFilterCodes([]); setFilterAll(true); }}
+                className="w-full px-3 py-2 text-xs bg-slate-50 border border-slate-300 rounded-xl font-bold text-slate-800 outline-none"
+              >
+                <option value="">بدون تصنيف (No category)</option>
+                {productionFilterCategories().map((c) => (
+                  <option key={c.id} value={c.id}>{c.labelAr} / {c.labelEn}</option>
+                ))}
+              </select>
+            </div>
+
+            <div>
+              <label className="block text-[11px] font-bold text-slate-500 mb-1">
+                الأكواد (Codes) {filterCategoryId && `- ${filterAll ? 'الكل' : filterCodes.length}`}
+              </label>
+              <select
+                multiple
+                disabled={!filterCategoryId}
+                value={filterAll ? [] : filterCodes}
+                onChange={(e) => {
+                  const chosen = Array.from(e.target.selectedOptions).map((o) => o.value);
+                  setFilterCodes(chosen);
+                  setFilterAll(chosen.length === 0);
+                }}
+                className="w-full px-3 py-2 text-xs bg-slate-50 border border-slate-300 rounded-xl text-slate-800 outline-none disabled:opacity-50 h-[76px]"
+              >
+                {availableCodes.map((c) => (
+                  <option key={c.value} value={c.value}>{c.label}</option>
+                ))}
+              </select>
+            </div>
+
+            <div className="flex items-end gap-2">
+              <button
+                type="button"
+                disabled={!filterCategoryId}
+                onClick={() => { setFilterCodes([]); setFilterAll(true); }}
+                className="px-3 py-2 text-xs font-bold text-slate-700 bg-slate-100 hover:bg-slate-200 disabled:opacity-50 rounded-xl cursor-pointer"
+              >
+                الكل (ALL)
+              </button>
+              <button
+                type="button"
+                disabled={!filterCategoryId}
+                onClick={() => { setFilterCategoryId(''); setFilterCodes([]); setFilterAll(true); }}
+                className="px-3 py-2 text-xs font-bold text-slate-700 bg-slate-100 hover:bg-slate-200 disabled:opacity-50 rounded-xl cursor-pointer"
+              >
+                مسح (Clear)
+              </button>
+            </div>
+          </div>
+
+          {/* Selection summary + bulk action. There is deliberately no bulk
+              delete: stage records have no delete primitive at all. */}
+          <div className="px-4 py-3 flex items-center gap-3 flex-wrap text-xs">
+            <span className="font-bold text-slate-600">
+              الظاهر (Visible): <span className="text-slate-900">{visibleRecords.length}</span>
+            </span>
+            <span className="font-bold text-slate-600">
+              المحدد (Selected): <span className="text-sky-700">{selectionCount(selection)}</span>
+            </span>
+            <button
+              type="button"
+              onClick={() => setSelection(selectAllVisible(selection, visibleIds))}
+              disabled={visibleIds.length === 0}
+              className="px-3 py-1.5 font-bold text-slate-700 bg-slate-100 hover:bg-slate-200 disabled:opacity-50 rounded-lg cursor-pointer"
+            >
+              تحديد الظاهر (Select visible)
+            </button>
+            <button
+              type="button"
+              onClick={() => setSelection(deselectAll())}
+              disabled={selectionCount(selection) === 0}
+              className="px-3 py-1.5 font-bold text-slate-700 bg-slate-100 hover:bg-slate-200 disabled:opacity-50 rounded-lg cursor-pointer"
+            >
+              إلغاء التحديد (Deselect all)
+            </button>
+            {canEdit && (
+              <button
+                type="button"
+                onClick={() => { setBulkOutcome(null); setBulkNotes(''); setBulkReason(''); setIsBulkOpen(true); }}
+                disabled={selectionCount(selection) === 0}
+                className="px-3 py-1.5 font-black text-white bg-sky-600 hover:bg-sky-700 disabled:opacity-50 rounded-lg cursor-pointer"
+              >
+                تعديل جماعي (Bulk Edit)
+              </button>
+            )}
+          </div>
+
         {isLoading ? (
           <div className="p-12 text-center text-slate-500 text-sm flex flex-col items-center justify-center gap-3">
             <Loader2 className="w-8 h-8 animate-spin text-red-600" />
@@ -465,6 +675,15 @@ export const DataReviewView: React.FC = () => {
             <table className="w-full text-right text-xs">
               <thead className="bg-slate-50 text-slate-600 font-bold border-b border-slate-200 uppercase">
                 <tr>
+                  <th className="px-4 py-3.5 w-10">
+                    <input
+                      type="checkbox"
+                      aria-label="تحديد كل الظاهر"
+                      checked={areAllVisibleSelected(selection, visibleIds)}
+                      onChange={(e) => setSelection(e.target.checked ? selectAllVisible(selection, visibleIds) : deselectAll())}
+                      className="cursor-pointer"
+                    />
+                  </th>
                   <th className="px-4 py-3.5">التاريخ</th>
                   <th className="px-4 py-3.5">المرحلة الإنتاجية</th>
                   <th className="px-4 py-3.5">المنتج / الصنف</th>
@@ -478,6 +697,15 @@ export const DataReviewView: React.FC = () => {
               <tbody className="divide-y divide-slate-100">
                 {visibleRecords.map((rec) => (
                   <tr key={rec.id} className="hover:bg-slate-50/80 transition-colors">
+                    <td className="px-4 py-3">
+                      <input
+                        type="checkbox"
+                        aria-label={`تحديد سجل ${rec.id}`}
+                        checked={isSelected(selection, rec.id)}
+                        onChange={() => setSelection(toggleRow(selection, rec.id))}
+                        className="cursor-pointer"
+                      />
+                    </td>
                     <td className="px-4 py-3 font-mono font-bold text-slate-700 whitespace-nowrap">
                       {rec.date}
                     </td>
@@ -736,6 +964,46 @@ export const DataReviewView: React.FC = () => {
                   إغلاق
                 </button>
               </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Bulk edit. Only `notes` is offered: every other field is a per-record
+          measurement, system-managed, derived, or a denormalised relation. */}
+      {isBulkOpen && (
+        <div className="fixed inset-0 z-50 bg-slate-900/50 flex items-center justify-center p-4" onClick={() => !bulkBusy && setIsBulkOpen(false)}>
+          <div className="bg-white rounded-2xl max-w-lg w-full p-5 space-y-4" onClick={(e) => e.stopPropagation()}>
+            <h3 className="text-sm font-black text-slate-900">تعديل جماعي (Bulk Edit)</h3>
+            <p className="text-xs text-slate-600">
+              سيتم تعديل <span className="font-black text-sky-700">{selectionCount(selection)}</span> سجل محدد فقط. السجلات غير المحددة لن تتأثر.
+            </p>
+            <div>
+              <label className="block text-[11px] font-bold text-slate-500 mb-1">ملاحظات (notes) - الحقل الوحيد المسموح بتعديله جماعيًا</label>
+              <textarea value={bulkNotes} onChange={(e) => setBulkNotes(e.target.value)} rows={3} className="w-full text-xs border border-slate-300 rounded-lg px-2.5 py-2" />
+              <p className="text-[10px] text-slate-400 mt-1">الحقول المسموحة: {BULK_EDITABLE_FIELDS.join(', ')}</p>
+            </div>
+            <div>
+              <label className="block text-[11px] font-bold text-slate-500 mb-1">سبب التعديل (correction reason)</label>
+              <input type="text" value={bulkReason} onChange={(e) => setBulkReason(e.target.value)} placeholder="تعديل جماعي" className="w-full text-xs border border-slate-300 rounded-lg px-2.5 py-2" />
+            </div>
+            {bulkOutcome && (
+              <div className="text-xs bg-slate-50 border border-slate-200 rounded-lg p-3 space-y-1 max-h-40 overflow-y-auto">
+                <div className="font-bold text-emerald-700">نجح: {bulkOutcome.successCount}</div>
+                <div className="font-bold text-red-700">فشل: {bulkOutcome.failedCount}</div>
+                <div className="font-bold text-slate-500">تم تخطيه: {bulkOutcome.skippedCount}</div>
+                {bulkOutcome.failed.map((f) => (
+                  <div key={f.id} className="text-[11px] text-slate-600 font-mono">{f.id}: {f.reason}</div>
+                ))}
+              </div>
+            )}
+            <div className="flex items-center gap-2 pt-2 border-t border-slate-100">
+              <button type="button" disabled={bulkBusy || selectionCount(selection) === 0} onClick={handleBulkEdit} className="px-3 py-1.5 text-xs font-black text-white bg-sky-600 hover:bg-sky-700 disabled:opacity-50 rounded-lg cursor-pointer">
+                {bulkBusy ? 'جارٍ التنفيذ...' : 'تأكيد التعديل'}
+              </button>
+              <button type="button" disabled={bulkBusy} onClick={() => setIsBulkOpen(false)} className="px-3 py-1.5 text-xs font-bold text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-lg cursor-pointer">
+                إلغاء
+              </button>
             </div>
           </div>
         </div>

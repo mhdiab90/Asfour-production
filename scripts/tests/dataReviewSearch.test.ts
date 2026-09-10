@@ -152,10 +152,12 @@ test('4b. records with every searchable field missing never throw and never fals
 // ---------------------------------------------------------------------------
 
 test('5a. the component derives the shown records with useMemo over loaded state', () => {
-  assert.match(
-    viewCode,
-    /const visibleRecords = useMemo\(\s*\(\) => filterDataReviewRecords\(records, searchQuery\),\s*\[records, searchQuery\]\s*\)/
-  );
+  // Pinned to the INTENT rather than to one argument list: the shown records
+  // are derived with useMemo from the already-loaded `records` state, through
+  // filterDataReviewRecords. The memo has since also applied category/code
+  // narrowing, which must not break that guarantee.
+  assert.match(viewCode, /const visibleRecords = useMemo\(/);
+  assert.match(viewCode, /filterDataReviewRecords\(records, searchQuery\)/);
 });
 
 test('5b/8. searchQuery reaches NEITHER the Firestore fetch NOR its effect deps', () => {
@@ -295,7 +297,12 @@ test('13a. re-filtering a newly loaded dataset keeps the active search applied',
 test('13b. the memo re-runs on a records change, so the search cannot go stale', () => {
   // `records` is in the dependency array alongside `searchQuery`, so a
   // date-range reload recomputes the visible set with the CURRENT term.
-  assert.match(viewCode, /\[records, searchQuery\]/);
+  // Both must remain in the dependency list so neither a fresh fetch nor a
+  // keystroke can leave the shown set stale. Additional dependencies (the
+  // category/code filters) are fine - they only make it re-run more often.
+  const memo = viewCode.match(/const visibleRecords = useMemo\([\s\S]*?\n  \);/)?.[0] ?? '';
+  assert.match(memo, /\brecords\b/);
+  assert.match(memo, /\bsearchQuery\b/);
   // ...and only the date/stage/status filters can trigger that reload.
   assert.match(viewCode, /\}, \[selectedStage, selectedStatus, startDate, endDate, resolvedDates\.invalid\]\);/);
 });

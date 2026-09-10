@@ -27,7 +27,7 @@
  * scripts/tests/costCenterHierarchy.test.ts for a source-inspection test
  * that asserts both the single call site and its enclosing handler.
  */
-import React, { useState, useMemo, useCallback, useRef } from 'react';
+import React, { useState, useMemo, useCallback, useEffect, useRef } from 'react';
 import {
   UploadCloud, Search, ChevronRight, ChevronDown, FolderTree, Building2,
   Layers, Wrench, AlertTriangle, CheckCircle2, XCircle, Info, Loader2,
@@ -35,7 +35,13 @@ import {
 } from 'lucide-react';
 import { useLanguage } from '../../i18n/LanguageContext';
 import { useAuth } from '../../context/AuthContext';
-import { parseSheet1Workbook, createCostCenterHierarchyNodes, COST_CENTER_HIERARCHY_COLLECTION } from '../../services/costCenterHierarchyService';
+import {
+  parseSheet1Workbook,
+  createCostCenterHierarchyNodes,
+  listCostCenterHierarchyNodes,
+  COST_CENTER_HIERARCHY_COLLECTION,
+  CostCenterHierarchyRecord,
+} from '../../services/costCenterHierarchyService';
 import {
   ParsedHierarchyNode,
   HierarchyDryRunSummary,
@@ -99,6 +105,13 @@ export const CostCenterHierarchyPanel: React.FC<CostCenterHierarchyPanelProps> =
   const isAuthorizedAdmin = isAuthenticated && (isSuperAdmin || userRole === 'ADMIN');
 
   const [nodes, setNodes] = useState<ParsedHierarchyNode[]>([]);
+
+  // Already-imported hierarchy, read back from Firestore. This collection
+  // used to be write-only: the importer created documents and nothing ever
+  // read them, so a successful import looked like it had vanished.
+  const [stored, setStored] = useState<CostCenterHierarchyRecord[]>([]);
+  const [storedState, setStoredState] = useState<'IDLE' | 'LOADING' | 'READY' | 'FAILED'>('IDLE');
+  const [storedSearch, setStoredSearch] = useState('');
   const [dryRun, setDryRun] = useState<HierarchyDryRunSummary | null>(null);
   const [fileName, setFileName] = useState<string | null>(null);
   const [parseError, setParseError] = useState<string | null>(null);
@@ -160,6 +173,38 @@ export const CostCenterHierarchyPanel: React.FC<CostCenterHierarchyPanelProps> =
       e.target.value = '';
     }
   }, [isAr]);
+
+  /**
+   * Loads the persisted hierarchy. Cache-first through the shared Master Data
+   * service, so opening this panel repeatedly costs no extra Firestore reads;
+   * Refresh passes skipCache to force a re-read after an import.
+   */
+  const loadStored = useCallback(async (force = false) => {
+    setStoredState('LOADING');
+    try {
+      const rows = await listCostCenterHierarchyNodes(force ? { skipCache: true } : undefined);
+      // Parent before child, then by code - keeps the hierarchy readable
+      // without building a second tree renderer.
+      rows.sort((a, b) => (a.level - b.level) || a.sheet1Code.localeCompare(b.sheet1Code));
+      setStored(rows);
+      setStoredState('READY');
+    } catch {
+      setStoredState('FAILED');
+    }
+  }, []);
+
+  // Only when the panel is actually open - never on application startup.
+  useEffect(() => {
+    if (isOpen && storedState === 'IDLE') void loadStored();
+  }, [isOpen, storedState, loadStored]);
+
+  const storedFiltered = useMemo(() => {
+    const q = storedSearch.trim().toLowerCase();
+    if (!q) return stored;
+    return stored.filter(
+      (n) => n.sheet1Code.toLowerCase().includes(q) || (n.name ?? '').toLowerCase().includes(q),
+    );
+  }, [stored, storedSearch]);
 
   const byCode = useMemo(() => new Map(nodes.map((n) => [n.sheet1Code, n])), [nodes]);
 
@@ -389,6 +434,93 @@ export const CostCenterHierarchyPanel: React.FC<CostCenterHierarchyPanelProps> =
         </div>
 
         <div className="p-6 overflow-y-auto flex-1 space-y-5">
+          {/* Already-imported hierarchy, read back from the authoritative
+              collection. Cache-first via the shared Master Data service, so
+              re-opening this panel does not re-read Firestore. */}
+          <div className="border border-slate-200 rounded-xl overflow-hidden">
+            <div className="flex items-center justify-between gap-3 px-4 py-3 bg-slate-50/70 border-b border-slate-100 flex-wrap">
+              <div className="flex items-center gap-2">
+                <FolderTree className="w-4 h-4 text-emerald-600" />
+                <h4 className="text-sm font-bold text-slate-800">
+                  {isAr ? 'التسلسل الهرمي المحفوظ (المستورد سابقًا)' : 'Stored hierarchy (previously imported)'}
+                </h4>
+                {storedState === 'READY' && (
+                  <span className="text-[11px] font-bold text-slate-500">({storedFiltered.length})</span>
+                )}
+              </div>
+              <div className="flex items-center gap-2">
+                {storedState === 'READY' && stored.length > 0 && (
+                  <input
+                    type="text"
+                    value={storedSearch}
+                    onChange={(e) => setStoredSearch(e.target.value)}
+                    placeholder={isAr ? 'بحث بالكود أو الاسم' : 'Search by code or name'}
+                    className="text-xs border border-slate-300 rounded-lg px-2.5 py-1.5 w-56"
+                  />
+                )}
+                <button
+                  type="button"
+                  onClick={() => loadStored(true)}
+                  disabled={storedState === 'LOADING'}
+                  className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold text-slate-700 bg-slate-100 hover:bg-slate-200 disabled:opacity-50 rounded-lg cursor-pointer"
+                >
+                  {storedState === 'LOADING' ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : null}
+                  {isAr ? 'تحديث' : 'Refresh'}
+                </button>
+              </div>
+            </div>
+
+            {storedState === 'LOADING' && (
+              <p className="px-4 py-4 text-xs text-slate-500">{isAr ? 'جارٍ التحميل...' : 'Loading...'}</p>
+            )}
+            {storedState === 'FAILED' && (
+              <p className="px-4 py-4 text-xs text-red-700">
+                {isAr ? 'تعذر تحميل التسلسل الهرمي المحفوظ.' : 'Could not load the stored hierarchy.'}
+              </p>
+            )}
+            {storedState === 'READY' && stored.length === 0 && (
+              <p className="px-4 py-4 text-xs text-slate-500">
+                {isAr
+                  ? 'لا توجد عقد محفوظة بعد. بعد اعتماد وتنفيذ استيراد، ستظهر هنا.'
+                  : 'No stored nodes yet. After an import is approved and executed, they appear here.'}
+              </p>
+            )}
+            {storedState === 'READY' && stored.length > 0 && (
+              <div className="overflow-x-auto max-h-72 overflow-y-auto">
+                <table className="w-full text-xs min-w-[760px]">
+                  <thead className="sticky top-0 bg-white">
+                    <tr className="text-[11px] text-slate-500 border-b border-slate-100">
+                      <th className="text-start py-2 px-3 font-bold">{isAr ? 'الكود' : 'Code'}</th>
+                      <th className="text-start py-2 px-3 font-bold">{isAr ? 'الاسم' : 'Name'}</th>
+                      <th className="text-start py-2 px-3 font-bold">{isAr ? 'الأصل' : 'Parent'}</th>
+                      <th className="text-start py-2 px-3 font-bold">{isAr ? 'المستوى' : 'Level'}</th>
+                      <th className="text-start py-2 px-3 font-bold">{isAr ? 'النوع' : 'Type'}</th>
+                      <th className="text-start py-2 px-3 font-bold">{isAr ? 'التصنيف الرئيسي' : 'Root category'}</th>
+                      <th className="text-start py-2 px-3 font-bold">{isAr ? 'الحالة' : 'Status'}</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {storedFiltered.map((n) => (
+                      <tr key={n.id} className="border-b border-slate-50 hover:bg-slate-50/60" title={n.notes ?? ''}>
+                        <td className="py-2 px-3 font-mono font-bold text-slate-800">{n.sheet1Code}</td>
+                        <td className="py-2 px-3 text-slate-700">{n.name}</td>
+                        <td className="py-2 px-3 font-mono text-slate-500">{n.parentSheet1Code ?? '-'}</td>
+                        <td className="py-2 px-3 text-slate-600">{n.level}</td>
+                        <td className="py-2 px-3 text-slate-600">{n.type}</td>
+                        <td className="py-2 px-3 text-slate-600">{n.rootCategoryName || n.rootCategoryCode || '-'}</td>
+                        <td className="py-2 px-3">
+                          <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded border ${n.active ? 'bg-emerald-50 text-emerald-700 border-emerald-300' : 'bg-slate-100 text-slate-500 border-slate-300'}`}>
+                            {n.status || (n.active ? (isAr ? 'نشط' : 'Active') : (isAr ? 'غير نشط' : 'Inactive'))}
+                          </span>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+
           {/* Safety notice */}
           <div className="flex items-start gap-2.5 bg-blue-50 border border-blue-200 rounded-xl px-4 py-3">
             <Info className="w-4 h-4 text-blue-600 shrink-0 mt-0.5" />

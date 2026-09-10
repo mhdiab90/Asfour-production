@@ -61,7 +61,7 @@ const MODULE_RULES: Array<{ test: RegExp; module: string }> = [
   { test: /^src\/components\/reports\/|^src\/services\/(reportingEngine|reportTemplates)/, module: 'Reports' },
   { test: /^src\/assistant\/|^src\/components\/assistant\/|^src\/components\/ai\/|^src\/services\/ai/, module: 'AI Assistant' },
   { test: /^src\/components\/masterData\/|^src\/services\/(masterData|costCenter|productType)/, module: 'Master Data' },
-  { test: /^src\/components\/production\/|^src\/services\/(production|stageRecord)/, module: 'Production' },
+  { test: /^src\/components\/production\/|^src\/services\/(production|stageRecord|bulkEdit|dataReviewSearch)/, module: 'Production' },
   { test: /^src\/components\/admin\/(DataImport|ChineseMillsImport|TubeBallMillsImport)|^src\/services\/\w*[Hh]istoricalImport/, module: 'Historical Import' },
   { test: /^src\/services\/(backupService|restoreService)|^src\/components\/admin\/BackupRestoreView/, module: 'Backup & Restore' },
   { test: /^src\/components\/users\/|^src\/(types|utils)\/permissions|^src\/context\/AuthContext/, module: 'Users & Permissions' },
