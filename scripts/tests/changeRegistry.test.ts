@@ -467,12 +467,51 @@ test('K6. Firestore Rules exist for every new collection and forbid deletion', (
 
 // --- L. Version Management UI + this release's own identity -----------------
 
-test('L1. the Change Registry panel is read-only - it never writes history', () => {
+test('L1. the panel only bootstraps a declared release - it never rewrites history', () => {
   const src = readSource('src/components/admin/ChangeRegistryPanel.tsx');
-  for (const w of ['createChange', 'updateChange', 'approveChange', 'createRelease', 'setChangeStatus', 'setFeatureFlag', 'setDoc', 'updateDoc', 'deleteDoc']) {
-    assert.equal(src.includes(w), false, `the panel must not call ${w} - mutation belongs to the service layer`);
+  // Registering a manifest-declared release is the one write it performs, and
+  // it is how the first records ever get created. Everything that could alter
+  // existing history stays out of the UI.
+  for (const w of ['updateChange', 'approveChange', 'setChangeStatus', 'setFeatureFlag', 'setDoc(', 'updateDoc(', 'deleteDoc(']) {
+    assert.equal(src.includes(w), false, `the panel must not call ${w} - it would let the UI rewrite history`);
   }
+  assert.ok(src.includes('registerDeclaredChange'), 'the panel must be able to register a declared release');
   assert.ok(src.includes('listChanges') && src.includes('listReleases'), 'the panel reads the registry');
+});
+
+test('L1b. registration is gated on the manage permission', () => {
+  const src = readSource('src/components/admin/ChangeRegistryPanel.tsx');
+  assert.ok(/const canManage = isSuperAdmin \|\| hasPermission\('system\.version\.manage'\)/.test(src),
+    'registration must reuse the existing permission model');
+  assert.ok(/canManage && manifest\?\.releaseId/.test(src), 'the register action must be hidden without the permission');
+});
+
+test('L1c. registering the same manifest twice cannot create duplicates', () => {
+  const ui = readSource('src/components/admin/ChangeRegistryPanel.tsx');
+  assert.ok(/if \(existing\.has\(changeId\)\) continue;/.test(ui), 'already-registered ids must be skipped');
+  assert.ok(/!releases\.some\(\(r\) => r\.releaseId === manifest\.releaseId\)/.test(ui), 'an existing release must not be recreated');
+  const svc = readSource('src/services/changeRegistryService.ts');
+  assert.ok(/already exists - refusing to create a duplicate/.test(svc), 'the service must refuse a taken id');
+});
+
+test('L1d. change ids run on ONE global sequence, not one per prefix', () => {
+  const svc = readSource('src/services/changeRegistryService.ts');
+  // A per-prefix counter could never reproduce the manifest's MOD-0001,
+  // MOD-0002, INFRA-0003... - INFRA would always mint INFRA-0001.
+  assert.equal(/COUNTERS, `change_\$\{prefix\}`/.test(svc), false, 'the counter must not be per-prefix');
+  assert.ok(/const CHANGE_COUNTER = 'change';/.test(svc), 'one shared counter is required');
+  // Registering a declared id must drag the counter past it so it is never reissued.
+  assert.ok(/if \(parsed\.seq > current\)/.test(svc), 'a declared id must advance the shared counter');
+});
+
+test('L1e. the manifest ids are reproducible by the allocator in declared order', () => {
+  const ids: string[] = JSON.parse(readSource('release.manifest.json')).changeIds;
+  // Global sequence: the Nth declared change is number N, whatever its prefix.
+  ids.forEach((id, i) => {
+    const parsed = cr.parseChangeId(id);
+    assert.ok(parsed, `${id} is malformed`);
+    assert.equal(parsed.seq, i + 1, `${id} should be sequence ${i + 1} in a global ordering`);
+  });
 });
 
 test('L2. the panel loads nothing until the screen is opened, and pages its list', () => {

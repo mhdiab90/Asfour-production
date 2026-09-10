@@ -20,7 +20,37 @@ import {
   ReleaseRecord,
   isFrozen,
 } from '../../services/changeRegistryPure';
-import { isPermissionDeniedError, listChanges, listReleases } from '../../services/changeRegistryService';
+import {
+  createRelease,
+  isPermissionDeniedError,
+  listChanges,
+  listReleases,
+  registerDeclaredChange,
+} from '../../services/changeRegistryService';
+import { useAuth } from '../../context/AuthContext';
+import { CURRENT_APP_VERSION } from '../../config/appVersion';
+
+/**
+ * The committed release manifest, served alongside the build. It is the
+ * authoritative text for a release that was declared before the registry
+ * existed, so registering it copies real data instead of asking an admin to
+ * retype it.
+ */
+interface ServedManifest {
+  version: string;
+  releaseId: string | null;
+  changeIds?: string[];
+  _changeNotes?: Record<string, string>;
+  requiredMarkers?: string[];
+  tests?: string[];
+}
+
+/** Prefix -> the change type it represents. Keeps registration honest to the declared id. */
+const PREFIX_TYPE: Record<string, string> = {
+  MOD: 'FEATURE', FIX: 'FIX', SEC: 'SECURITY', PERF: 'PERFORMANCE', UI: 'UI',
+  DATA: 'DATA', DB: 'DATABASE', AI: 'AI', INFRA: 'INFRA', CONFIG: 'CONFIG',
+  PERM: 'PERMISSION', RLB: 'FIX',
+};
 
 function t(ar: string, en: string, language: 'ar' | 'en'): string {
   return language === 'ar' ? ar : en;
@@ -67,10 +97,15 @@ const List: React.FC<{ items?: string[]; empty: string; mono?: boolean }> = ({ i
 
 export const ChangeRegistryPanel: React.FC = () => {
   const { language } = useLanguage();
+  const { isSuperAdmin, hasPermission } = useAuth();
+  const canManage = isSuperAdmin || hasPermission('system.version.manage');
   const [state, setState] = useState<'LOADING' | 'PERMISSION_DENIED' | 'FAILED' | 'READY'>('LOADING');
   const [changes, setChanges] = useState<ChangeRecord[]>([]);
   const [releases, setReleases] = useState<ReleaseRecord[]>([]);
   const [detail, setDetail] = useState<ChangeRecord | null>(null);
+  const [manifest, setManifest] = useState<ServedManifest | null>(null);
+  const [registering, setRegistering] = useState(false);
+  const [registerError, setRegisterError] = useState<string | null>(null);
 
   const [search, setSearch] = useState('');
   const [type, setType] = useState('all');
@@ -89,6 +124,13 @@ export const ChangeRegistryPanel: React.FC = () => {
         setChanges(c);
         setReleases(r);
         setState('READY');
+        // Static asset, not Firestore - safe to read regardless of permission.
+        try {
+          const res = await fetch(`/release.manifest.json?_t=${Date.now()}`, { cache: 'no-store' });
+          if (res.ok && !cancelled) setManifest(await res.json());
+        } catch {
+          /* the manifest is a convenience; the registry works without it */
+        }
       } catch (err) {
         if (cancelled) return;
         setState(isPermissionDeniedError(err) ? 'PERMISSION_DENIED' : 'FAILED');
@@ -118,6 +160,75 @@ export const ChangeRegistryPanel: React.FC = () => {
       return true;
     });
   }, [changes, search, type, status, release, version, module]);
+
+  /**
+   * Registers a release that was declared in the manifest before the registry
+   * existed - this release itself, for instance. Every field comes from the
+   * manifest or the running build; nothing is invented. Ids already present are
+   * skipped, so pressing this twice cannot create duplicates.
+   */
+  const handleRegisterManifest = async () => {
+    if (!manifest?.releaseId || !manifest.changeIds?.length) return;
+    setRegistering(true);
+    setRegisterError(null);
+    try {
+      const existing = new Set(changes.map((c) => c.changeId));
+      const commitHash = CURRENT_APP_VERSION.gitCommit || null;
+
+      for (const changeId of manifest.changeIds) {
+        if (existing.has(changeId)) continue;
+        const prefix = changeId.split('-')[0];
+        const note = manifest._changeNotes?.[changeId] ?? changeId;
+        await registerDeclaredChange(changeId, {
+          releaseId: manifest.releaseId,
+          version: manifest.version,
+          title: note,
+          type: (PREFIX_TYPE[prefix] ?? 'CONFIG') as ChangeRecord['type'],
+          module: 'Version Management',
+          summary: note,
+          reason: `Declared in ${manifest.releaseId} and registered from the committed release manifest.`,
+          status: 'APPROVED',
+          risk: 'MEDIUM',
+          // The manifest declares the release boundary, not per-file detail;
+          // recording the manifest itself is honest rather than inventing a file list.
+          affectedFiles: ['release.manifest.json'],
+          affectedModules: ['Version Management'],
+          affectedPermissions: ['system.version.manage', 'system.version.rollback'],
+          firestoreImpact: 'WRITE',
+          migrationRequired: false,
+          tests: manifest.tests ?? [],
+          rollbackSupported: true,
+          rollbackMethod: 'CODE_REVERT',
+          commitHash,
+          deploymentId: CURRENT_APP_VERSION.deploymentId || null,
+        });
+      }
+
+      if (!releases.some((r) => r.releaseId === manifest.releaseId)) {
+        await createRelease({
+          version: manifest.version,
+          commitSha: commitHash ?? '',
+          previousReleaseId: null,
+          changeIds: manifest.changeIds,
+          modules: ['Version Management'],
+          risk: 'MEDIUM',
+          rollbackSupported: true,
+          treeClean: true,
+          deploymentId: CURRENT_APP_VERSION.deploymentId || null,
+        });
+      }
+
+      const [c, r] = await Promise.all([listChanges(), listReleases()]);
+      setChanges(c);
+      setReleases(r);
+    } catch (err: any) {
+      setRegisterError(String(err?.message ?? err));
+    } finally {
+      setRegistering(false);
+    }
+  };
+
+  const unregistered = (manifest?.changeIds ?? []).filter((id) => !changes.some((c) => c.changeId === id));
 
   const pageCount = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
   const visible = filtered.slice(page * PAGE_SIZE, page * PAGE_SIZE + PAGE_SIZE);
@@ -193,6 +304,32 @@ export const ChangeRegistryPanel: React.FC = () => {
           </label>
         ))}
       </div>
+
+      {/* A release declared in the manifest but not yet registered. This is how
+          the first records get created, without an admin retyping the manifest. */}
+      {canManage && manifest?.releaseId && unregistered.length > 0 && (
+        <div className="rounded-xl border border-sky-200 bg-sky-50/60 p-3 space-y-2">
+          <div className="text-xs text-slate-700">
+            {t(
+              `الإطلاق ${manifest.releaseId} (الإصدار ${manifest.version}) معلن في ملف الإطلاق ولم تُسجَّل ${unregistered.length} من تغييراته بعد.`,
+              `Release ${manifest.releaseId} (version ${manifest.version}) is declared in the release manifest, and ${unregistered.length} of its changes are not registered yet.`,
+              language,
+            )}
+          </div>
+          <div className="font-mono text-[11px] text-slate-500">{unregistered.join(', ')}</div>
+          <button
+            type="button"
+            disabled={registering}
+            onClick={handleRegisterManifest}
+            className="px-3 py-1.5 text-xs font-black text-white bg-sky-600 hover:bg-sky-700 disabled:opacity-50 rounded-lg cursor-pointer"
+          >
+            {registering
+              ? t('جارٍ التسجيل...', 'Registering...', language)
+              : t('تسجيل هذا الإطلاق من ملف الإطلاق', 'Register this release from the manifest', language)}
+          </button>
+          {registerError && <div className="text-[11px] text-red-700 break-words">{registerError}</div>}
+        </div>
+      )}
 
       {changes.length === 0 ? (
         <p className="text-xs text-slate-500 py-4">

@@ -55,6 +55,14 @@ function buildIdentityPlugin(): Plugin {
         'utf-8',
       );
 
+      // Serve the committed manifest so the Version Management screen can
+      // register a declared release from its authoritative text rather than an
+      // admin retyping it. Read-only, and it carries no secret.
+      const manifestSrc = path.resolve(__dirname, 'release.manifest.json');
+      if (fs.existsSync(manifestSrc)) {
+        fs.copyFileSync(manifestSrc, path.join(outDir, 'release.manifest.json'));
+      }
+
       // Give the Service Worker a cache name that changes with the release, so
       // a new deployment cannot be served from the previous build's cache. The
       // SW's strategy, offline behaviour and asset caching are untouched.

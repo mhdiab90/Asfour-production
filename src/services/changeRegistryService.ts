@@ -41,6 +41,7 @@ import {
   assertUpdateAllowed,
   findDependencyCycle,
   formatChangeId,
+  parseChangeId,
   formatReleaseId,
   isValidChangeId,
   isValidReleaseId,
@@ -67,22 +68,72 @@ function actor(): string {
 
 // --- ID allocation ----------------------------------------------------------
 
+/** One counter for ALL change ids - see allocateChangeId. */
+const CHANGE_COUNTER = 'change';
+
 /**
- * Mints the next id for a prefix inside a transaction, so two admins creating
- * a change at the same moment can never receive the same number. Ids are never
- * reused: the counter only moves forward, and a deleted draft does not free
- * its number (deletion is impossible anyway - see firestore.rules).
+ * Mints the next id inside a transaction, so two admins creating a change at
+ * the same moment can never receive the same number. Ids are never reused: the
+ * counter only moves forward, and a deleted draft does not free its number
+ * (deletion is impossible anyway - see firestore.rules).
+ *
+ * The sequence is GLOBAL, not per-prefix: MOD-0001, MOD-0002, INFRA-0003...
+ * The prefix classifies a change, it does not open a separate number space.
+ * A per-prefix counter would make MOD-0001 and FIX-0001 both "the first
+ * change", and could never reproduce ids that were declared in a release
+ * manifest before the registry existed.
  */
 export async function allocateChangeId(prefix: ChangePrefix): Promise<string> {
-  const ref = doc(db, COUNTERS, `change_${prefix}`);
+  const ref = doc(db, COUNTERS, CHANGE_COUNTER);
   const next = await runTransaction(db, async (tx) => {
     const snap = await tx.get(ref);
     const current = snap.exists() ? Number(snap.data().seq || 0) : 0;
     const seq = current + 1;
-    tx.set(ref, { seq, prefix, updatedAt: new Date().toISOString() }, { merge: true });
+    tx.set(ref, { seq, updatedAt: new Date().toISOString() }, { merge: true });
     return seq;
   });
   return formatChangeId(prefix, next);
+}
+
+/**
+ * Bootstraps a change whose id was declared in a release manifest before the
+ * registry existed - the only path that accepts an id instead of minting one.
+ *
+ * It refuses if the id is already taken, so registering the same manifest twice
+ * cannot create a duplicate, and it drags the shared counter past the id so a
+ * later allocateChangeId() can never hand out the same number again.
+ */
+export async function registerDeclaredChange(
+  changeId: string,
+  draft: Omit<ChangeRecord, 'changeId' | 'createdAt' | 'createdBy'>,
+): Promise<ChangeRecord> {
+  const parsed = parseChangeId(changeId);
+  if (!parsed) throw new Error(`"${changeId}" is not a valid Change ID`);
+
+  const existing = await getChange(changeId);
+  if (existing) throw new Error(`${changeId} already exists - refusing to create a duplicate`);
+
+  const record: ChangeRecord = {
+    ...draft,
+    changeId,
+    createdAt: new Date().toISOString(),
+    createdBy: actor(),
+  };
+  const errors = validateChangeRecord(record);
+  if (errors.length) throw new Error(`invalid change record:\n - ${errors.join('\n - ')}`);
+
+  await runTransaction(db, async (tx) => {
+    const ref = doc(db, COUNTERS, CHANGE_COUNTER);
+    const snap = await tx.get(ref);
+    const current = snap.exists() ? Number(snap.data().seq || 0) : 0;
+    if (parsed.seq > current) {
+      tx.set(ref, { seq: parsed.seq, updatedAt: new Date().toISOString() }, { merge: true });
+    }
+  });
+
+  await setDoc(doc(db, CHANGES, changeId), record);
+  logAuditAction('CREATE', CHANGES, changeId, `تسجيل تغيير معلن ${changeId}: ${record.title}`).catch(() => {});
+  return record;
 }
 
 export async function allocateReleaseId(year = new Date().getFullYear()): Promise<string> {
