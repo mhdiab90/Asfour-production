@@ -21,6 +21,7 @@ import { RawMaterialsView } from './components/admin/RawMaterialsView';
 import { BackupRestoreView } from './components/admin/BackupRestoreView';
 import { SystemHealthView } from './components/admin/SystemHealthView';
 import { AIAssistantView } from './components/ai/AIAssistantView';
+import { SystemVersionManagementView } from './components/admin/SystemVersionManagementView';
 import { AIProviderManagementView } from './components/admin/AIProviderManagementView';
 import { GlobalAssistant } from './components/assistant/GlobalAssistant';
 import { AssistantSelectionProvider } from './context/AssistantSelectionContext';
@@ -325,9 +326,9 @@ const MainAppContent: React.FC = () => {
                 <SystemHealthView initialTab="health" />
               )}
 
-              {/* System Versions & Changelog */}
+              {/* System Version Management, Change Registry & Rollback */}
               {currentPage === 'versions' && (
-                <SystemHealthView initialTab="history" />
+                <SystemVersionManagementView />
               )}
 
               {/* Central AI Provider Manager */}

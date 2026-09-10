@@ -239,7 +239,9 @@ test('D6. the manifest precursor declares what a release must contain', () => {
   for (const k of ['version', 'releaseId', 'commitSha', 'buildId', 'deploymentId', 'requiredMarkers', 'tests', 'treeClean']) {
     assert.ok(k in m, `manifest is missing ${k}`);
   }
-  assert.equal(m.version, '3.2.0', 'this task must not bump the version');
+  assert.match(m.version, /^\d+\.\d+\.\d+$/, 'the manifest version must be semantic');
+  const declared = readSource('src/config/appVersion.ts').match(/version: '(\d+\.\d+\.\d+)'/)?.[1];
+  assert.equal(m.version, declared, 'the manifest must agree with appVersion.ts - never a second hand-maintained copy');
   assert.ok(bi.isHostingOnlyDeployCommand(m.deployCommand), 'the manifest must declare a Hosting-only deploy');
 });
 

@@ -465,6 +465,83 @@ test('K6. Firestore Rules exist for every new collection and forbid deletion', (
   for (const b of blocks) assert.match(b, /allow delete: if false;/, `history must be undeletable:\n${b}`);
 });
 
+// --- L. Version Management UI + this release's own identity -----------------
+
+test('L1. the Change Registry panel is read-only - it never writes history', () => {
+  const src = readSource('src/components/admin/ChangeRegistryPanel.tsx');
+  for (const w of ['createChange', 'updateChange', 'approveChange', 'createRelease', 'setChangeStatus', 'setFeatureFlag', 'setDoc', 'updateDoc', 'deleteDoc']) {
+    assert.equal(src.includes(w), false, `the panel must not call ${w} - mutation belongs to the service layer`);
+  }
+  assert.ok(src.includes('listChanges') && src.includes('listReleases'), 'the panel reads the registry');
+});
+
+test('L2. the panel loads nothing until the screen is opened, and pages its list', () => {
+  const src = readSource('src/components/admin/ChangeRegistryPanel.tsx');
+  assert.ok(/useEffect\(\(\) => \{/.test(src), 'loading must happen in an effect, not at module scope');
+  assert.ok(src.includes('PAGE_SIZE'), 'the list must be paged rather than unbounded');
+  assert.ok(src.includes("'PERMISSION_DENIED'") && src.includes('isPermissionDeniedError'),
+    'permission denial must be its own explained state, not a generic failure');
+});
+
+test('L3. the bounded view shows every field a reviewer needs', () => {
+  const src = readSource('src/components/admin/ChangeRegistryPanel.tsx');
+  for (const f of ['changeId', 'releaseId', 'version', 'title', 'type', 'summary', 'reason', 'status', 'risk',
+                   'affectedModules', 'affectedFiles', 'affectedPermissions', 'firestoreImpact', 'tests',
+                   'dependencies', 'featureFlag', 'commitHash', 'deploymentId', 'rollbackMethod']) {
+    assert.ok(new RegExp(`detail\\.${f}\\b`).test(src), `the change detail must show ${f}`);
+  }
+});
+
+test('L4. the registry UI supports the required search and filters', () => {
+  const src = readSource('src/components/admin/ChangeRegistryPanel.tsx');
+  for (const f of ['search', 'type', 'status', 'release', 'module', 'version']) {
+    assert.ok(new RegExp(`const \\[${f}, set`).test(src), `a ${f} filter is required`);
+  }
+});
+
+test('L5. Version Management is reachable and the registry is mounted inside it', () => {
+  const view = readSource('src/components/admin/SystemVersionManagementView.tsx');
+  assert.ok(view.includes('<ChangeRegistryPanel />'), 'the registry must be mounted in Version Management');
+  const app = readSource('src/App.tsx');
+  assert.ok(/currentPage === 'versions' && \(\s*<SystemVersionManagementView \/>/.test(app),
+    "the 'versions' route must render the real Version Management view");
+});
+
+test('L6. this release declares 3.3.0 honestly, with a matching changelog entry', () => {
+  const src = readSource('src/config/appVersion.ts');
+  assert.ok(src.includes("version: '3.3.0'"), 'the hand-authored version must be 3.3.0');
+  const changelog = src.match(/changelog: \[[\s\S]*?\n  \]/)?.[0] ?? '';
+  assert.ok(changelog.includes("version: '3.3.0'"), 'the changelog must record 3.3.0');
+  // Older entries stay exactly as they were - history is not rewritten.
+  for (const old of ['3.2.0', '3.1.0', '3.0.0']) {
+    assert.ok(changelog.includes(`version: '${old}'`), `historical entry ${old} must be preserved`);
+  }
+});
+
+test('L7. the manifest names this release and only this release\'s changes', () => {
+  const m = JSON.parse(readSource('release.manifest.json'));
+  assert.equal(m.version, '3.3.0');
+  assert.equal(m.releaseId, 'REL-2026-0001');
+  assert.ok(Array.isArray(m.changeIds) && m.changeIds.length > 0, 'the release must enumerate its changes');
+  for (const id of m.changeIds) assert.ok(cr.isValidChangeId(id), `${id} is malformed`);
+  assert.equal(new Set(m.changeIds).size, m.changeIds.length, 'change ids must be unique');
+  // No fabricated history: every declared change is documented, and nothing
+  // claims to belong to a release that predates the registry.
+  for (const id of m.changeIds) {
+    assert.ok(m._changeNotes?.[id], `${id} must be documented in the manifest`);
+  }
+});
+
+test('L8. a MINOR bump is the correct call for this release', () => {
+  // New user-visible administrative capability, no migration, no schema change.
+  const bump = cr.decideBump([
+    { type: 'FEATURE', migrationRequired: false, firestoreImpact: 'WRITE' },
+    { type: 'INFRA', migrationRequired: false, firestoreImpact: 'RULES' },
+  ]);
+  assert.equal(bump, 'MINOR');
+  assert.equal(cr.applyBump('3.2.0', bump), '3.3.0', 'this release is 3.2.0 -> 3.3.0');
+});
+
 (async () => {
   await bootstrap();
   for (const { name, fn } of registered) {

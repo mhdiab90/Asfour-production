@@ -53,7 +53,13 @@ async function bootstrap() {
 // --- A. Version truth ------------------------------------------------------
 
 test('A1. the declared version is read from appVersion.ts, the one hand-authored source', () => {
-  assert.equal(bi.readDeclaredVersion(ROOT), '3.2.0', 'this task must not change the version number');
+  const v = bi.readDeclaredVersion(ROOT);
+  // Pinned to the shape, not to a number: the version is a product decision
+  // that moves with each release. What must never move is that appVersion.ts
+  // is the ONE hand-authored source it is read from.
+  assert.match(v, /^\d+\.\d+\.\d+$/, 'the declared version must be MAJOR.MINOR.PATCH');
+  const declared = readSource('src/config/appVersion.ts').match(/version: '(\d+\.\d+\.\d+)'/)?.[1];
+  assert.equal(v, declared, 'the build identity must read the version straight from appVersion.ts');
 });
 
 test('A2. the build identity carries a REAL git SHA, never a branch label', () => {
@@ -110,7 +116,12 @@ test('A8. appVersion.ts no longer hard-codes build identity', () => {
   assert.equal(src.includes("'main-v3.2.0'"), false, 'the placeholder gitCommit must be gone');
   assert.equal(src.includes("'2026-08-22-001'"), false, 'the stale buildId must be gone');
   assert.equal(src.includes("'asfour-prod-20260822'"), false, 'the stale deploymentId must be gone');
-  assert.ok(src.includes("version: '3.2.0'"), 'the version itself stays hand-authored');
+  // Must match the CURRENT_APP_VERSION field, not an old changelog entry that
+  // happens to mention the same number.
+  const current = src.match(/CURRENT_APP_VERSION[^=]*=\s*\{[\s\S]*?\n\}/)?.[0] ?? '';
+  assert.match(current, /version: '\d+\.\d+\.\d+'/, 'the version itself stays hand-authored');
+  assert.match(current, /buildId: BUILD_ID_INJECTED/, 'buildId must be injected, not literal');
+  assert.match(current, /gitCommit: COMMIT_SHA_INJECTED/, 'gitCommit must be injected, not literal');
   assert.ok(src.includes('__BUILD_COMMIT_SHA__'), 'the commit SHA must come from the injected build identity');
 });
 

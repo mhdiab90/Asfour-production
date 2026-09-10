@@ -37,7 +37,7 @@ const DEPLOYMENT_ID_INJECTED = typeof __BUILD_DEPLOYMENT_ID__ === 'string' ? __B
 
 export const CURRENT_APP_VERSION: AppVersionInfo = {
   /** THE single hand-authored value in this file - bumping it is a product decision. */
-  version: '3.2.0',
+  version: '3.3.0',
   buildId: BUILD_ID_INJECTED,
   buildTimestamp: BUILD_TIMESTAMP_INJECTED,
   gitCommit: COMMIT_SHA_INJECTED,
@@ -46,6 +46,16 @@ export const CURRENT_APP_VERSION: AppVersionInfo = {
   environment: 'production',
   releaseDate: '2026-08-22',
   changelog: [
+    {
+      version: '3.3.0',
+      date: '2026-09-10',
+      highlights: [
+        'إدارة إصدارات النظام وسجل الإطلاقات وسجل التغييرات (Version Management & Change Registry)',
+        'أكواد تغيير محدودة وثابتة لكل تعديل مع نطاقه الكامل (Bounded, immutable Change IDs)',
+        'ربط الإصدار بالإطلاق وكود الالتزام والبناء والنشر (Version -> Release -> Commit -> Build -> Deployment)',
+        'بوابة إصدار إلزامية تمنع النشر من شجرة عمل غير نظيفة (Mandatory release gate)'
+      ]
+    },
     {
       version: '3.2.0',
       date: '2026-08-22',
