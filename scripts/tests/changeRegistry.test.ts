@@ -504,14 +504,20 @@ test('L1d. change ids run on ONE global sequence, not one per prefix', () => {
   assert.ok(/if \(parsed\.seq > current\)/.test(svc), 'a declared id must advance the shared counter');
 });
 
-test('L1e. the manifest ids are reproducible by the allocator in declared order', () => {
+test('L1e. manifest ids come from one global, strictly increasing sequence', () => {
   const ids: string[] = JSON.parse(readSource('release.manifest.json')).changeIds;
-  // Global sequence: the Nth declared change is number N, whatever its prefix.
-  ids.forEach((id, i) => {
+  const seqs = ids.map((id) => {
     const parsed = cr.parseChangeId(id);
     assert.ok(parsed, `${id} is malformed`);
-    assert.equal(parsed.seq, i + 1, `${id} should be sequence ${i + 1} in a global ordering`);
+    return parsed.seq;
   });
+  // The invariant is GLOBAL ordering, not "starts at 1": later releases
+  // continue the same counter rather than restarting.
+  for (let i = 1; i < seqs.length; i++) {
+    assert.ok(seqs[i] > seqs[i - 1], `${ids[i]} must come after ${ids[i - 1]} in the global sequence`);
+  }
+  // A per-prefix counter would let two different prefixes share a number.
+  assert.equal(new Set(seqs).size, seqs.length, 'no two changes in a release may share a sequence number');
 });
 
 test('L2. the panel loads nothing until the screen is opened, and pages its list', () => {
@@ -559,8 +565,12 @@ test('L6. this release declares 3.3.0 honestly, with a matching changelog entry'
 
 test('L7. the manifest names this release and only this release\'s changes', () => {
   const m = JSON.parse(readSource('release.manifest.json'));
-  assert.equal(m.version, '3.3.0');
-  assert.equal(m.releaseId, 'REL-2026-0001');
+  // Pinned to the shape and to agreement with appVersion.ts - not to a
+  // number, which moves with every release the planner classifies.
+  assert.match(m.version, /^\d+\.\d+\.\d+$/);
+  const declared = readSource('src/config/appVersion.ts').match(/version: '(\d+\.\d+\.\d+)'/)?.[1];
+  assert.equal(m.version, declared, 'the manifest must agree with appVersion.ts');
+  assert.ok(cr.isValidReleaseId(m.releaseId), `${m.releaseId} must be a valid Release ID`);
   assert.ok(Array.isArray(m.changeIds) && m.changeIds.length > 0, 'the release must enumerate its changes');
   for (const id of m.changeIds) assert.ok(cr.isValidChangeId(id), `${id} is malformed`);
   assert.equal(new Set(m.changeIds).size, m.changeIds.length, 'change ids must be unique');

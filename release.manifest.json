@@ -1,14 +1,9 @@
 {
   "_doc": "Release Manifest precursor. Describes WHAT is being released so the gate checks a committed declaration rather than whatever flags an operator typed. commitSha/buildId/deploymentId are left null until a release is cut - the gate fills the comparison from the build itself, and only enforces a field that is set here. This is NOT the Change Registry: no change IDs, no Firestore, no UI.",
-  "version": "3.3.0",
-  "releaseId": "REL-2026-0001",
+  "version": "3.4.0",
+  "releaseId": "REL-2026-0002",
   "changeIds": [
-    "MOD-0001",
-    "MOD-0002",
-    "INFRA-0003",
-    "CONFIG-0004",
-    "PERM-0005",
-    "DB-0006"
+    "MOD-0007"
   ],
   "commitSha": null,
   "buildId": null,
@@ -32,6 +27,7 @@
   "tests": [
     "buildIdentity",
     "changeRegistry",
+    "releasePlanner",
     "releaseGate",
     "aiAssistantRestoration",
     "dashboardBuilder",
@@ -41,11 +37,10 @@
   "deployCommand": "firebase deploy --only hosting --project asfourproduction-70e6e",
   "treeClean": true,
   "_changeNotes": {
-    "MOD-0001": "Activate System Version Management UI and route (versions)",
-    "MOD-0002": "Change Registry + Release Registry (Layer 3) service, types and panel",
-    "INFRA-0003": "Release gate validates the release chain (release id, change ids, uniqueness)",
-    "CONFIG-0004": "Feature flag foundation - runtime disable for changes that declare a flag",
-    "PERM-0005": "Activate system.version.manage and system.version.rollback (SUPER_ADMIN only)",
-    "DB-0006": "Firestore Rules for changeRegistry, releases, registryCounters, featureFlags"
-  }
+    "MOD-0007": "Automatic release planning: deterministic classification of a change from its real diff, deriving change type, Change ID prefix, impact, version bump and Release ID without manual entry"
+  },
+  "previousVersion": "3.3.0",
+  "versionBump": "MINOR",
+  "classificationConfidence": "HIGH",
+  "previousReleaseId": "REL-2026-0001"
 }

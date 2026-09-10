@@ -207,6 +207,37 @@ for (const t of requiredTests) {
   }
 }
 
+// --- 7c. The version must be justified by the classification ---------------
+// A release that calls itself a PATCH while shipping a new capability, or a
+// MINOR whose changes are all fixes, is a mislabelled release. The manifest
+// declares what the planner decided; this re-derives it and refuses a mismatch,
+// so nobody can hand-edit a version past the classifier.
+{
+  const previousVersion = manifest?.previousVersion;
+  const versionBump = manifest?.versionBump;
+
+  if (previousVersion == null && versionBump == null) {
+    step('version bump justified by classification', true, 'not classification-tracked for this release');
+  } else {
+    const SEMVER = /^(\d+)\.(\d+)\.(\d+)$/;
+    const okPrev = SEMVER.test(String(previousVersion));
+    step('previous version declared', okPrev, `${previousVersion}`);
+    step('version bump declared', ['PATCH', 'MINOR', 'MAJOR'].includes(String(versionBump)), `${versionBump}`);
+
+    if (okPrev && ['PATCH', 'MINOR', 'MAJOR'].includes(String(versionBump))) {
+      const [, ma, mi, pa] = String(previousVersion).match(SEMVER).map(Number);
+      const expected =
+        versionBump === 'MAJOR' ? `${ma + 1}.0.0` : versionBump === 'MINOR' ? `${ma}.${mi + 1}.0` : `${ma}.${mi}.${pa + 1}`;
+      const declared = manifest?.version;
+      step(
+        'declared version matches the classified bump',
+        declared === expected,
+        `${previousVersion} + ${versionBump} = ${expected}, manifest says ${declared}`,
+      );
+    }
+  }
+}
+
 // --- 8. Deployment target must be Hosting-only -----------------------------
 // A bare `firebase deploy` would also push Firestore Rules and Storage rules,
 // which are released deliberately and separately.

@@ -36,8 +36,8 @@ const BUILD_TIMESTAMP_INJECTED = typeof __BUILD_TIMESTAMP__ === 'string' ? __BUI
 const DEPLOYMENT_ID_INJECTED = typeof __BUILD_DEPLOYMENT_ID__ === 'string' ? __BUILD_DEPLOYMENT_ID__ : 'dev';
 
 export const CURRENT_APP_VERSION: AppVersionInfo = {
-  /** THE single hand-authored value in this file - bumping it is a product decision. */
-  version: '3.3.0',
+  /** Set by the automatic release planner from the classified change set - see releasePlannerPure.ts. */
+  version: '3.4.0',
   buildId: BUILD_ID_INJECTED,
   buildTimestamp: BUILD_TIMESTAMP_INJECTED,
   gitCommit: COMMIT_SHA_INJECTED,
@@ -46,6 +46,15 @@ export const CURRENT_APP_VERSION: AppVersionInfo = {
   environment: 'production',
   releaseDate: '2026-08-22',
   changelog: [
+    {
+      version: '3.4.0',
+      date: '2026-09-10',
+      highlights: [
+        'تخطيط إصدارات تلقائي: تصنيف التغيير من الفروق الفعلية واشتقاق نوع التغيير ورقم الإصدار تلقائيًا',
+        'توليد تلقائي لأكواد التغيير ومعرّف الإطلاق دون إدخال يدوي',
+        'بوابة الإصدار تتحقق من تطابق رقم الإصدار مع التصنيف الفعلي'
+      ]
+    },
     {
       version: '3.3.0',
       date: '2026-09-10',
