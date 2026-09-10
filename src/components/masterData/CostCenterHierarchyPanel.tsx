@@ -33,12 +33,16 @@ import {
   Layers, Wrench, AlertTriangle, CheckCircle2, XCircle, Info, Loader2,
   ClipboardCheck, ShieldCheck, ShieldAlert, Filter, Rocket,
 } from 'lucide-react';
+import { resolveHierarchySelection } from '../../services/hierarchyResolverPure';
 import { useLanguage } from '../../i18n/LanguageContext';
 import { useAuth } from '../../context/AuthContext';
 import {
   parseSheet1Workbook,
   createCostCenterHierarchyNodes,
   listCostCenterHierarchyNodes,
+  buildCostCenterHierarchyIndex,
+  updateCostCenterHierarchyNode,
+  validateHierarchyNodeEdit,
   COST_CENTER_HIERARCHY_COLLECTION,
   CostCenterHierarchyRecord,
 } from '../../services/costCenterHierarchyService';
@@ -120,6 +124,21 @@ export const CostCenterHierarchyPanel: React.FC<CostCenterHierarchyPanelProps> =
   const [expandedRoots, setExpandedRoots] = useState<Set<string>>(new Set());
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedCode, setSelectedCode] = useState<string | null>(null);
+  /**
+   * Inline editing of ONE persisted node at a time.
+   *
+   * `sheet1Code` is not editable: it is the Firestore document id, every child
+   * stores it as its parentSheet1Code, and the importer's idempotency depends
+   * on the same source code always mapping to the same document. Restructuring
+   * is done by re-parenting, which is checked for cycles before it is written.
+   */
+  const [editingCode, setEditingCode] = useState<string | null>(null);
+  const [editName, setEditName] = useState<string>('');
+  const [editParent, setEditParent] = useState<string>('');
+  const [editActive, setEditActive] = useState<boolean>(true);
+  const [editReason, setEditReason] = useState<string>('');
+  const [editError, setEditError] = useState<string | null>(null);
+  const [editSaving, setEditSaving] = useState<boolean>(false);
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('ALL');
   const [rootFilter, setRootFilter] = useState<RootFilter>('ALL');
   const [typeFilter, setTypeFilter] = useState<TypeFilter>('ALL');
@@ -205,6 +224,73 @@ export const CostCenterHierarchyPanel: React.FC<CostCenterHierarchyPanelProps> =
       (n) => n.sheet1Code.toLowerCase().includes(q) || (n.name ?? '').toLowerCase().includes(q),
     );
   }, [stored, storedSearch]);
+
+  /**
+   * The persisted hierarchy as a resolver index.
+   *
+   * Used to show each node's real descendant count, which is the same number
+   * that a report for that node would aggregate over - so what the user sees
+   * here and what a total counts come from one resolver, not two.
+   */
+  const storedIndex = useMemo(() => buildCostCenterHierarchyIndex(stored), [stored]);
+
+  const descendantCounts = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const node of stored) {
+      counts.set(
+        node.sheet1Code,
+        resolveHierarchySelection(storedIndex, node.sheet1Code, { includeSelf: false }).length,
+      );
+    }
+    return counts;
+  }, [stored, storedIndex]);
+
+  const beginEdit = (node: CostCenterHierarchyRecord) => {
+    setEditingCode(node.sheet1Code);
+    setEditName(node.name || '');
+    setEditParent(node.parentSheet1Code || '');
+    setEditActive(node.active !== false);
+    setEditReason('');
+    setEditError(null);
+  };
+
+  const cancelEdit = () => {
+    setEditingCode(null);
+    setEditError(null);
+  };
+
+  const saveEdit = async () => {
+    if (!editingCode) return;
+    setEditError(null);
+
+    const patch = {
+      name: editName,
+      parentSheet1Code: editParent ? editParent : null,
+      active: editActive,
+    };
+
+    // Refused before any write: self-parenting, an unknown parent, and any move
+    // that would close a cycle such as A -> B -> C -> A.
+    const check = validateHierarchyNodeEdit(stored, editingCode, patch);
+    if (!check.valid) {
+      setEditError(check.issues.map((i) => (isAr ? i.messageAr : i.messageEn)).join(' | '));
+      return;
+    }
+
+    setEditSaving(true);
+    try {
+      await updateCostCenterHierarchyNode(stored, editingCode, patch, editReason || undefined);
+      // skipCache so the move is visible immediately rather than after the
+      // freshness window - the shared cache entry was already invalidated by
+      // the service, this just re-reads it now.
+      await loadStored(true);
+      setEditingCode(null);
+    } catch (err: any) {
+      setEditError(err?.message || (isAr ? 'تعذر حفظ التعديل.' : 'Could not save the change.'));
+    } finally {
+      setEditSaving(false);
+    }
+  };
 
   const byCode = useMemo(() => new Map(nodes.map((n) => [n.sheet1Code, n])), [nodes]);
 
@@ -485,6 +571,108 @@ export const CostCenterHierarchyPanel: React.FC<CostCenterHierarchyPanelProps> =
                   : 'No stored nodes yet. After an import is approved and executed, they appear here.'}
               </p>
             )}
+            {/*
+              Inline editor for the selected node.
+              Sits ABOVE the table so it stays on screen while the list scrolls,
+              and so it is never clipped by the table's own scroll box.
+            */}
+            {editingCode && (
+              <div className="mb-3 rounded-xl border border-sky-200 bg-sky-50/60 p-3 space-y-2.5">
+                <div className="flex items-center justify-between gap-2">
+                  <p className="text-xs font-black text-sky-900">
+                    {isAr ? 'تعديل العنصر' : 'Editing node'}{' '}
+                    <span className="font-mono">{editingCode}</span>
+                  </p>
+                  <span className="text-[11px] font-bold text-slate-500">
+                    {isAr ? 'الكود غير قابل للتعديل - أعد الربط بدلاً من ذلك' : 'Code is not editable - re-parent instead'}
+                  </span>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
+                  <div>
+                    <label className="block text-[11px] font-bold text-slate-600 mb-1">{isAr ? 'الاسم' : 'Name'}</label>
+                    <input
+                      type="text"
+                      value={editName}
+                      onChange={(e) => setEditName(e.target.value)}
+                      className="w-full bg-white border border-slate-300 rounded-lg px-2.5 py-1.5 text-xs"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[11px] font-bold text-slate-600 mb-1">{isAr ? 'العنصر الأصل' : 'Parent node'}</label>
+                    <select
+                      value={editParent}
+                      onChange={(e) => setEditParent(e.target.value)}
+                      className="w-full bg-white border border-slate-300 rounded-lg px-2.5 py-1.5 text-xs"
+                    >
+                      <option value="">{isAr ? '-- جذر (بدون أصل) --' : '-- Root (no parent) --'}</option>
+                      {stored
+                        // The node itself is never offered. A deeper cycle
+                        // (a move under one of its own descendants) is caught
+                        // on save by the shared resolver.
+                        .filter((candidate) => candidate.sheet1Code !== editingCode)
+                        .map((candidate) => (
+                          <option key={candidate.id} value={candidate.sheet1Code}>
+                            {candidate.sheet1Code} - {candidate.name}
+                          </option>
+                        ))}
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-[11px] font-bold text-slate-600 mb-1">{isAr ? 'سبب التعديل' : 'Change reason'}</label>
+                    <input
+                      type="text"
+                      value={editReason}
+                      onChange={(e) => setEditReason(e.target.value)}
+                      placeholder={isAr ? 'يُسجَّل في سجل التدقيق' : 'Recorded in the audit log'}
+                      className="w-full bg-white border border-slate-300 rounded-lg px-2.5 py-1.5 text-xs"
+                    />
+                  </div>
+                </div>
+
+                <label className="flex items-center gap-2 text-xs font-bold text-slate-700 cursor-pointer w-fit">
+                  <input
+                    type="checkbox"
+                    checked={editActive}
+                    onChange={(e) => setEditActive(e.target.checked)}
+                    className="w-3.5 h-3.5 accent-amber-500 cursor-pointer"
+                  />
+                  {isAr ? 'نشط' : 'Active'}
+                </label>
+
+                {editError && (
+                  <p className="text-[11px] font-bold text-rose-700 bg-rose-50 border border-rose-200 rounded-lg px-2.5 py-1.5">
+                    {editError}
+                  </p>
+                )}
+
+                <p className="text-[11px] text-slate-600 font-medium">
+                  {isAr
+                    ? 'نقل العنصر يغيّر علاقة البيانات الأساسية الحالية فقط - لا يتم تعديل أي كمية إنتاج تاريخية. التقارير بعد الحفظ تستخدم التسلسل الجديد مباشرةً.'
+                    : 'Moving a node changes only the current Master Data relationship - no historical production quantity is altered. Reports use the new structure as soon as it is saved.'}
+                </p>
+
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => void saveEdit()}
+                    disabled={editSaving}
+                    className="px-3 py-1.5 text-xs font-bold text-slate-950 bg-amber-400 hover:bg-amber-500 disabled:opacity-50 rounded-lg cursor-pointer"
+                  >
+                    {editSaving ? (isAr ? 'جارٍ الحفظ...' : 'Saving...') : (isAr ? 'حفظ' : 'Save')}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={cancelEdit}
+                    disabled={editSaving}
+                    className="px-3 py-1.5 text-xs font-bold text-slate-700 bg-slate-100 hover:bg-slate-200 disabled:opacity-50 rounded-lg cursor-pointer"
+                  >
+                    {isAr ? 'إلغاء' : 'Cancel'}
+                  </button>
+                </div>
+              </div>
+            )}
+
             {storedState === 'READY' && stored.length > 0 && (
               <div className="overflow-x-auto max-h-72 overflow-y-auto">
                 <table className="w-full text-xs min-w-[760px]">
@@ -497,6 +685,10 @@ export const CostCenterHierarchyPanel: React.FC<CostCenterHierarchyPanelProps> =
                       <th className="text-start py-2 px-3 font-bold">{isAr ? 'النوع' : 'Type'}</th>
                       <th className="text-start py-2 px-3 font-bold">{isAr ? 'التصنيف الرئيسي' : 'Root category'}</th>
                       <th className="text-start py-2 px-3 font-bold">{isAr ? 'الحالة' : 'Status'}</th>
+                      <th className="text-start py-2 px-3 font-bold" title={isAr ? 'عدد العناصر التابعة لهذا العنصر على كل المستويات' : 'Descendants at every level below this node'}>
+                        {isAr ? 'التوابع' : 'Descendants'}
+                      </th>
+                      <th className="text-center py-2 px-3 font-bold">{isAr ? 'تحرير' : 'Edit'}</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -512,6 +704,17 @@ export const CostCenterHierarchyPanel: React.FC<CostCenterHierarchyPanelProps> =
                           <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded border ${n.active ? 'bg-emerald-50 text-emerald-700 border-emerald-300' : 'bg-slate-100 text-slate-500 border-slate-300'}`}>
                             {n.status || (n.active ? (isAr ? 'نشط' : 'Active') : (isAr ? 'غير نشط' : 'Inactive'))}
                           </span>
+                        </td>
+                        <td className="py-2 px-3 font-bold text-slate-600">{descendantCounts.get(n.sheet1Code) ?? 0}</td>
+                        <td className="py-2 px-3 text-center">
+                          <button
+                            type="button"
+                            onClick={() => beginEdit(n)}
+                            disabled={editingCode !== null}
+                            className="text-[11px] font-bold text-sky-700 hover:text-sky-900 disabled:opacity-40 cursor-pointer"
+                          >
+                            {isAr ? 'تعديل' : 'Edit'}
+                          </button>
                         </td>
                       </tr>
                     ))}

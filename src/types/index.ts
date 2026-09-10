@@ -114,6 +114,31 @@ export interface Department {
   updatedAt?: string;
 }
 
+/**
+ * Financial Account - Master Data only.
+ *
+ * The full rationale for this being a new structure (nothing existed to reuse)
+ * and the exact field list live in services/financialAccountsPure.ts. Kept
+ * deliberately small: account codes and their parent/child structure, not an
+ * accounting engine. No production record references a financial account.
+ */
+export interface FinancialAccount {
+  id?: string;
+  code: string;
+  name: string;
+  nameEn?: string;
+  /** Parent account's `code`. Absent/null = a root account. */
+  parentCode?: string | null;
+  /** Free text as supplied by the source sheet - never a forced enum. */
+  accountType?: string;
+  description?: string;
+  active: boolean;
+  codeNormalized?: string;
+  nameNormalized?: string;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
 export interface ProductType {
   id?: string;
   prefixCode: string; // 3 uppercase characters (e.g. BAR, BHA, BSI)
@@ -541,7 +566,8 @@ export type MasterDataTab =
   | 'shifts'
   | 'materials'
   | 'machines'
-  | 'stages';
+  | 'stages'
+  | 'financialAccounts';
 
 export type NavigationPage = 
   | 'dashboard' 

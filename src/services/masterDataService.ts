@@ -55,6 +55,9 @@ export const MASTER_DATA_COLLECTIONS: Record<MasterDataTab, string> = {
   materials: 'materials',
   machines: 'machines',
   stages: 'stages',
+  // Its own collection - see financialAccountsPure.ts for why nothing existed
+  // to reuse. Deliberately NOT 'departments', which holds departments.
+  financialAccounts: 'financialAccounts',
 };
 
 /** Scopes the local cache to the signed-in user (Phase 1 Local Cache Foundation) - mirrors the existing per-user localStorage-key convention already used by the Historical Import draft services (e.g. tubeBallMillsDraftPure.ts's storageKey), just keyed by uid here since that is already read via `auth` elsewhere in this codebase (e.g. auditService.ts). Never a new tenant/permission concept. */

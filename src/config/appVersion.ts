@@ -37,7 +37,7 @@ const DEPLOYMENT_ID_INJECTED = typeof __BUILD_DEPLOYMENT_ID__ === 'string' ? __B
 
 export const CURRENT_APP_VERSION: AppVersionInfo = {
   /** Set by the automatic release planner from the classified change set - see releasePlannerPure.ts. */
-  version: '3.5.0',
+  version: '3.6.0',
   buildId: BUILD_ID_INJECTED,
   buildTimestamp: BUILD_TIMESTAMP_INJECTED,
   gitCommit: COMMIT_SHA_INJECTED,
@@ -46,6 +46,17 @@ export const CURRENT_APP_VERSION: AppVersionInfo = {
   environment: 'production',
   releaseDate: '2026-08-22',
   changelog: [
+    {
+      version: '3.6.0',
+      date: '2026-09-10',
+      highlights: [
+        'تنظيم البيانات الأساسية حسب التصنيف أولاً مع سجل تصنيفات قابل للتوسعة',
+        'الحسابات المالية: استيراد من Excel وتحرير وبحث وتسلسل هرمي كامل',
+        'محرك تسلسل هرمي موحّد: اختيار الأصل يشمل كل الفروع التابعة مهما كان عمقها',
+        'تحرير مراكز التكلفة الهرمية مع منع الحلقات المغلقة والأصل غير الموجود',
+        'تجميع الإنتاج حسب التسلسل الهرمي دون تكرار احتساب أي سجل'
+      ]
+    },
     {
       version: '3.5.0',
       date: '2026-09-10',

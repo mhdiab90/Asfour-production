@@ -1,9 +1,9 @@
 {
   "_doc": "Release Manifest precursor. Describes WHAT is being released so the gate checks a committed declaration rather than whatever flags an operator typed. commitSha/buildId/deploymentId are left null until a release is cut - the gate fills the comparison from the build itself, and only enforces a field that is set here. This is NOT the Change Registry: no change IDs, no Firestore, no UI.",
-  "version": "3.5.0",
-  "releaseId": "REL-2026-0003",
+  "version": "3.6.0",
+  "releaseId": "REL-2026-0004",
   "changeIds": [
-    "MOD-0008"
+    "DB-0009"
   ],
   "commitSha": null,
   "buildId": null,
@@ -14,7 +14,11 @@
     "asfour_erp_dashboards",
     "ai-assistant",
     "dashboard.manageCustomDashboards",
-    "stageComparison"
+    "stageComparison",
+    "financialAccounts",
+    "استيراد الحسابات المالية",
+    "parentSheet1Code",
+    "التوابع"
   ],
   "_markerNotes": {
     "ai-provider-management": "AI Provider Management route - absent means the AI Assistant closure was dropped",
@@ -22,7 +26,11 @@
     "asfour_erp_dashboards": "Custom Dashboard Builder localStorage key",
     "ai-assistant": "AI Assistant page route",
     "dashboard.manageCustomDashboards": "Dashboard/Builder permission - proves the Dashboard release is present",
-    "stageComparison": "Reports cross-stage comparison category - proves the Reports upgrade is present"
+    "stageComparison": "Reports cross-stage comparison category - proves the Reports upgrade is present",
+    "financialAccounts": "The new Financial Accounts collection - absent means the Master Data 2.0 closure was dropped",
+    "استيراد الحسابات المالية": "The Import Financial Accounts action in Master Data",
+    "parentSheet1Code": "Hierarchy parent link - proves hierarchy editing/resolution is present",
+    "التوابع": "The Descendants column - proves the shared hierarchy resolver is wired to the UI"
   },
   "tests": [
     "buildIdentity",
@@ -33,15 +41,17 @@
     "dashboardBuilder",
     "reportsView",
     "stageRecordCache",
-    "masterDataBulk"
+    "masterDataBulk",
+    "masterData2",
+    "costCenterHierarchy"
   ],
   "deployCommand": "firebase deploy --only hosting --project asfourproduction-70e6e",
   "treeClean": true,
   "_changeNotes": {
-    "MOD-0008": "Category-first Master Data organisation, category/code filtering with one/multiple/all selection in Production Review, explicit row selection and row-isolated bulk edit, and visibility for imported hierarchical cost centres"
+    "DB-0009": "Category-first Master Data over an extensible registry; Financial Accounts master data with Excel import and hierarchical editing (new financialAccounts collection and its Firestore rule); one shared generic hierarchy resolver reused by Master Data, Production Review and production aggregation; hierarchical cost-centre editing with cycle, self-parent and unknown-parent protection"
   },
-  "previousVersion": "3.4.0",
+  "previousVersion": "3.5.0",
   "versionBump": "MINOR",
-  "classificationConfidence": "HIGH",
-  "previousReleaseId": "REL-2026-0002"
+  "classificationConfidence": "MEDIUM",
+  "previousReleaseId": "REL-2026-0003"
 }

@@ -193,6 +193,24 @@ service cloud.firestore {
       allow write: if isAdmin();
     }
 
+    // Financial Accounts Master Data.
+    //
+    // A new collection is unavoidable here: this ruleset denies everything not
+    // explicitly matched (see the default-deny block above), and Financial
+    // Accounts previously had no collection of any kind - the only trace of
+    // them pointed at `departments`, which holds departments. Storing accounts
+    // there would corrupt the Employee-assignment department dropdown in
+    // exactly the way costCenterHierarchy above was created to avoid.
+    //
+    // This block is purely ADDITIVE and grants no new privilege: read for any
+    // signed-in user, write for admins - byte-for-byte the same pattern as
+    // every other Master Data collection in this file. No existing collection's
+    // access is altered, nothing is migrated, and no production data is touched.
+    match /financialAccounts/{accountId} {
+      allow read: if isSignedIn();
+      allow write: if isAdmin();
+    }
+
     // Production records (Production users & admins can read and log production)
     match /production/{productionId} {
       allow read: if isSignedIn();

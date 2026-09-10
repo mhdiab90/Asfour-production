@@ -53,8 +53,28 @@ interface BulkEntryViewProps {
   onNavigate: (page: NavigationPage) => void;
 }
 
+/**
+ * Lets another screen open this one already pointed at the right entity - the
+ * "Import Financial Accounts" action in Master Data writes this key, so the
+ * user lands on the Financial Accounts importer instead of having to find it.
+ *
+ * Read once and cleared, mirroring the MasterDataView prefill this codebase
+ * already uses. A missing or unrecognised value simply falls back to products.
+ */
+export const BULK_IMPORT_PREFILL_KEY = 'asfour.bulkImport.prefillTab';
+
+function readBulkImportPrefill(): MasterDataTab | null {
+  try {
+    const raw = sessionStorage.getItem(BULK_IMPORT_PREFILL_KEY);
+    if (raw) sessionStorage.removeItem(BULK_IMPORT_PREFILL_KEY);
+    return raw && raw in MASTER_DATA_SCHEMAS ? (raw as MasterDataTab) : null;
+  } catch {
+    return null;
+  }
+}
+
 export const BulkEntryView: React.FC<BulkEntryViewProps> = ({ onNavigate }) => {
-  const [selectedTab, setSelectedTab] = useState<MasterDataTab>('products');
+  const [selectedTab, setSelectedTab] = useState<MasterDataTab>(() => readBulkImportPrefill() || 'products');
   const [inputMode, setInputMode] = useState<'upload' | 'paste'>('upload');
   const [pastedText, setPastedText] = useState<string>('');
   const [uploadedFile, setUploadedFile] = useState<File | null>(null);

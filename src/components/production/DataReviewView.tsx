@@ -54,12 +54,14 @@ import { todayLocalIso, resolveNamedMonthRange } from '../../assistant/tools/dat
 import { filterDataReviewRecords } from '../../services/dataReviewSearchPure';
 import {
   MASTER_DATA_CATEGORIES,
-  productionFilterCategories,
-  categoryLabel,
   normaliseSelection,
-  filterRecordsBySelection,
   getCategory,
+  supportsProductionFilter,
 } from '../../services/masterDataCategoryRegistry';
+import {
+  filterProductionRecords,
+  resolveProductionFilter,
+} from '../../services/productionFilterEnginePure';
 import {
   EMPTY_SELECTION_STATE,
   BULK_EDITABLE_FIELDS,
@@ -145,8 +147,15 @@ export const DataReviewView: React.FC = () => {
 
   // Selected Record for Modal Inspection / Correction / Audit History
   const [selectedRecord, setSelectedRecord] = useState<UniversalStageRecord | null>(null);
-  // Category-first filtering. Only categories with a VERIFIED production
-  // relationship appear here - see masterDataCategoryRegistry.
+  /*
+   * Category-first filtering.
+   *
+   * EVERY category is listed, including the ones that cannot filter production.
+   * The unusable ones are disabled and say why, because "the option is missing"
+   * is a worse answer than "the option is here and this is exactly what is
+   * missing" - and a filter that silently matched nothing would look like the
+   * category genuinely having no production, which would be a lie.
+   */
   const [filterCategoryId, setFilterCategoryId] = useState<string>('');
   const [filterCodes, setFilterCodes] = useState<string[]>([]);
   const [filterAll, setFilterAll] = useState<boolean>(true);
@@ -308,7 +317,14 @@ export const DataReviewView: React.FC = () => {
       // Category/code narrowing runs over the already-bounded, already-fetched
       // set - no extra Firestore read, and never one query per selected code.
       const sel = normaliseSelection(filterCategoryId || null, filterCodes, filterAll);
-      return filterRecordsBySelection(searched, sel);
+      /*
+       * Routed through the central engine rather than filtering here: it is the
+       * one place that knows a hierarchical parent means the parent AND every
+       * descendant, and it refuses outright to narrow on a category with no
+       * verified production field. Reporting calls the same engine, so a total
+       * and this list can never disagree about what "Presses" means.
+       */
+      return filterProductionRecords(searched, sel);
     },
     [records, searchQuery, filterCategoryId, filterCodes, filterAll]
   );
@@ -337,6 +353,12 @@ export const DataReviewView: React.FC = () => {
     }
     return [...seen.entries()].map(([value, label]) => ({ value, label })).sort((a, b) => a.label.localeCompare(b.label));
   }, [records, searchQuery, filterCategoryId]);
+
+  /** What the current selection actually resolved to - shown to the user verbatim. */
+  const resolvedFilter = useMemo(
+    () => resolveProductionFilter(normaliseSelection(filterCategoryId || null, filterCodes, filterAll)),
+    [filterCategoryId, filterCodes, filterAll]
+  );
 
   const visibleIds = useMemo(() => visibleRecords.map((r) => r.id), [visibleRecords]);
 
@@ -577,10 +599,21 @@ export const DataReviewView: React.FC = () => {
                 className="w-full px-3 py-2 text-xs bg-slate-50 border border-slate-300 rounded-xl font-bold text-slate-800 outline-none"
               >
                 <option value="">بدون تصنيف (No category)</option>
-                {productionFilterCategories().map((c) => (
-                  <option key={c.id} value={c.id}>{c.labelAr} / {c.labelEn}</option>
-                ))}
+                {MASTER_DATA_CATEGORIES.map((c) => {
+                  const usable = supportsProductionFilter(c.id);
+                  return (
+                    <option key={c.id} value={c.id} disabled={!usable}>
+                      {c.labelAr} / {c.labelEn}
+                      {usable ? '' : ' — غير متاح لمراجعة الإنتاج (not available)'}
+                    </option>
+                  );
+                })}
               </select>
+              {filterCategoryId && !resolvedFilter.applicable && (
+                <p className="mt-1 text-[11px] font-bold text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-2 py-1.5">
+                  {resolvedFilter.reasonAr}
+                </p>
+              )}
             </div>
 
             <div>
@@ -602,6 +635,9 @@ export const DataReviewView: React.FC = () => {
                   <option key={c.value} value={c.value}>{c.label}</option>
                 ))}
               </select>
+              {resolvedFilter.expandedFromHierarchy && (
+                <p className="mt-1 text-[11px] font-bold text-sky-700">{resolvedFilter.reasonAr}</p>
+              )}
             </div>
 
             <div className="flex items-end gap-2">

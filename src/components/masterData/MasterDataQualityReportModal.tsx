@@ -43,6 +43,7 @@ const ENTITY_LABELS: Record<MasterDataTab, { ar: string; en: string }> = {
   materials: { ar: 'الخامات', en: 'Materials' },
   machines: { ar: 'الآلات', en: 'Machines' },
   stages: { ar: 'المراحل', en: 'Stages' },
+  financialAccounts: { ar: 'الحسابات المالية', en: 'Financial Accounts' },
 };
 
 const ISSUE_TYPE_LABELS: Record<QualityIssueType, { ar: string; en: string }> = {

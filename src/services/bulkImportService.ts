@@ -6,7 +6,8 @@
  */
 import * as XLSX from 'xlsx';
 import { collection, getDocs, writeBatch, doc, serverTimestamp } from 'firebase/firestore';
-import { db, handleFirestoreError, OperationType } from '../config/firebase';
+import { db, auth, handleFirestoreError, OperationType } from '../config/firebase';
+import { invalidateCachedCollection } from './localCacheStore';
 import { MasterDataTab, BulkImportRow, BulkImportResult, ProductType } from '../types';
 import { logAuditAction } from './auditService';
 import { toWesternDigits } from '../utils/formatters';
@@ -177,6 +178,31 @@ export const MASTER_DATA_SCHEMAS: Record<MasterDataTab, { title: string; fields:
     fields: [
       { key: 'code', label: 'كود المرحلة', required: true, type: 'string', description: 'مثال: STAGE-01', aliases: ['code', 'كود المرحلة'] },
       { key: 'nameAr', label: 'اسم المرحلة بالعربية', required: true, type: 'string', description: 'مثال: التشكيل والمكابس', aliases: ['nameAr', 'اسم المرحلة'] },
+    ]
+  },
+  /**
+   * Financial Accounts import.
+   *
+   * Adding a schema entry here is the WHOLE integration: this one object gives
+   * Financial Accounts the same upload/paste, alias-based column mapping,
+   * preview, per-row validation, in-file and in-Firestore duplicate detection,
+   * final pre-write duplicate recheck, partial import of the valid rows and
+   * audit log that every other Master Data entity already gets. No second
+   * import engine was built.
+   *
+   * `parentCode` is optional on purpose - a chart of accounts imported without
+   * a parent column is still a valid flat account list, and the hierarchy can
+   * be filled in afterwards by editing.
+   */
+  financialAccounts: {
+    title: 'الحسابات المالية (Financial Accounts)',
+    fields: [
+      { key: 'code', label: 'كود الحساب (code)', required: true, type: 'string', description: 'مثال: 1101 أو 51343', aliases: ['code', 'accountCode', 'كود الحساب', 'الكود', 'Account Code', 'Code'] },
+      { key: 'name', label: 'اسم الحساب بالعربية (name)', required: true, type: 'string', description: 'مثال: النقدية بالخزينة', aliases: ['name', 'accountName', 'اسم الحساب', 'الاسم', 'Account Name', 'Name'] },
+      { key: 'nameEn', label: 'اسم الحساب بالإنجليزية - اختياري', required: false, type: 'string', description: 'e.g. Cash on hand', aliases: ['nameEn', 'englishName', 'الاسم بالإنجليزية', 'Name EN'] },
+      { key: 'parentCode', label: 'كود الحساب الأصل - اختياري', required: false, type: 'string', description: 'كود الحساب الأب في الشجرة المحاسبية', aliases: ['parentCode', 'parent', 'كود الأصل', 'الحساب الأب', 'Parent Code', 'Parent'] },
+      { key: 'accountType', label: 'نوع الحساب - اختياري', required: false, type: 'string', description: 'كما هو مكتوب في الملف - بدون فرض تصنيف', aliases: ['accountType', 'type', 'نوع الحساب', 'النوع', 'Account Type'] },
+      { key: 'description', label: 'الوصف / ملاحظات - اختياري', required: false, type: 'string', description: 'بيان إضافي', aliases: ['description', 'notes', 'الوصف', 'ملاحظات', 'Description'] },
     ]
   }
 };
@@ -588,6 +614,20 @@ export async function commitBulkImport(
       throw error;
     }
   }
+
+  /**
+   * The imported collection's cache entry is now stale - it was written
+   * outside fetchMasterData, so nothing invalidated it. Without this, an
+   * import completes successfully and the Master Data screen keeps showing
+   * the pre-import list until the freshness window expires, which reads
+   * exactly like the import having failed.
+   *
+   * Reuses the same invalidate call the single-record create/update path in
+   * masterDataService.ts already makes, scoped to the same signed-in user.
+   * Never a full cache clear, and never a re-read of the whole database -
+   * the next reader repopulates just this one collection.
+   */
+  await invalidateCachedCollection(auth.currentUser?.uid || 'anonymous', collectionName);
 
   // Audit Log with non-sensitive user metadata
   await logAuditAction(

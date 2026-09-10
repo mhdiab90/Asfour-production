@@ -68,6 +68,16 @@ import { enrichWithNormalizedFields } from '../../utils/searchUtils';
 import { DataQualityModal } from '../admin/DataQualityModal';
 import { MasterDataQualityReportModal } from './MasterDataQualityReportModal';
 import { CostCenterHierarchyPanel } from './CostCenterHierarchyPanel';
+import {
+  MASTER_DATA_CATEGORIES,
+  MasterDataCategory,
+  categoryForTab,
+  categoryLabel,
+  getCategory,
+} from '../../services/masterDataCategoryRegistry';
+import { buildHierarchyIndex, getNodePath } from '../../services/hierarchyResolverPure';
+import { validateAccountForSave } from '../../services/financialAccountService';
+import { BULK_IMPORT_PREFILL_KEY } from '../bulk/BulkEntryView';
 import { exportMasterDataToExcel } from '../../services/exportService';
 import { Badge } from '../common/Badge';
 import { Modal } from '../common/Modal';
@@ -178,6 +188,15 @@ export const MasterDataView: React.FC<MasterDataViewProps> = ({ onNavigate }) =>
   const [isQualityModalOpen, setIsQualityModalOpen] = useState<boolean>(false);
   const [isQualityReportOpen, setIsQualityReportOpen] = useState<boolean>(false);
   const [isHierarchyPanelOpen, setIsHierarchyPanelOpen] = useState<boolean>(false);
+  /**
+   * Codes selected inside the CURRENT category only.
+   *
+   * Cleared whenever the category changes - carrying a product code over into
+   * the Financial Accounts view would let a later action target something the
+   * user can no longer see, which is the same rule Production Review's row
+   * selection already follows.
+   */
+  const [selectedCodes, setSelectedCodes] = useState<string[]>([]);
   const [analyzedItems, setAnalyzedItems] = useState<CodeAnalysisItem[]>([]);
   const [isApplyingAnalysis, setIsApplyingAnalysis] = useState<boolean>(false);
   const [analysisAppliedMessage, setAnalysisAppliedMessage] = useState<string | null>(null);
@@ -193,6 +212,7 @@ export const MasterDataView: React.FC<MasterDataViewProps> = ({ onNavigate }) =>
     { id: 'customers', label: language === 'ar' ? 'العملاء' : 'Customers', icon: Building },
     { id: 'departments', label: language === 'ar' ? 'الأقسام' : 'Departments', icon: Building2 },
     { id: 'shifts', label: language === 'ar' ? 'ورديات العمل' : 'Shifts', icon: Clock },
+    { id: 'financialAccounts', label: language === 'ar' ? 'الحسابات المالية' : 'Financial Accounts', icon: Building2 },
   ];
 
   // Subscribe to Product Types (always kept live for parser)
@@ -286,6 +306,43 @@ export const MasterDataView: React.FC<MasterDataViewProps> = ({ onNavigate }) =>
     setFormData(updated);
   };
 
+  /**
+   * The category currently on screen.
+   *
+   * Derived from activeTab rather than stored separately, so the category
+   * selector and every existing code path that already sets activeTab (the
+   * prefill deep-link, for instance) can never disagree about what is shown.
+   */
+  const currentCategory: MasterDataCategory | undefined = useMemo(
+    () => categoryForTab(activeTab),
+    [activeTab]
+  );
+
+  /** The code that identifies a row in the current category. */
+  const codeOfItem = (item: any): string =>
+    String(item?.[currentCategory?.codeField || 'code'] ?? item?.code ?? item?.prefixCode ?? item?.id ?? '');
+
+  /**
+   * Hierarchy index for a hierarchical category, built once per item list.
+   *
+   * Built through the SHARED resolver, so the parent/child meaning here is
+   * identical to the one Production Review and reporting use - there is no
+   * screen-local idea of what "below this node" means.
+   */
+  const hierarchyIndex = useMemo(() => {
+    if (!currentCategory?.hierarchical) return null;
+    const parentField = currentCategory.parentField || 'parentCode';
+    return buildHierarchyIndex(
+      items.map((item) => ({
+        ...item,
+        id: codeOfItem(item),
+        code: codeOfItem(item),
+        parentId: item?.[parentField] ?? null,
+      }))
+    );
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [items, currentCategory]);
+
   // Filter items
   const filteredItems = useMemo(() => {
     return items.filter((item) => {
@@ -310,6 +367,10 @@ export const MasterDataView: React.FC<MasterDataViewProps> = ({ onNavigate }) =>
         const carNumberMatch = item.carNumber?.toLowerCase().includes(q);
         const aluminaMatch = item.aluminaPercentage !== undefined && String(item.aluminaPercentage).includes(q);
         const prefixMatch = item.productTypePrefix?.toLowerCase().includes(q);
+        // Financial Accounts search their own fields, and only their own -
+        // the search box never reaches across into another category.
+        const accountTypeMatch = item.accountType?.toLowerCase().includes(q);
+        const parentCodeMatch = item.parentCode?.toLowerCase?.().includes(q);
 
         return Boolean(
           codeMatch || 
@@ -319,7 +380,9 @@ export const MasterDataView: React.FC<MasterDataViewProps> = ({ onNavigate }) =>
           companyMatch || 
           carNumberMatch || 
           aluminaMatch || 
-          prefixMatch
+          prefixMatch ||
+          accountTypeMatch ||
+          parentCodeMatch
         );
       }
 
@@ -369,6 +432,8 @@ export const MasterDataView: React.FC<MasterDataViewProps> = ({ onNavigate }) =>
       setFormData({ code: '', name: '', description: '', active: true });
     } else if (activeTab === 'shifts') {
       setFormData({ code: '', name: '', startTime: '08:00', endTime: '16:00', hours: 8, active: true });
+    } else if (activeTab === 'financialAccounts') {
+      setFormData({ code: '', name: '', nameEn: '', parentCode: '', accountType: '', description: '', active: true });
     }
     setIsModalOpen(true);
   };
@@ -498,6 +563,25 @@ export const MasterDataView: React.FC<MasterDataViewProps> = ({ onNavigate }) =>
       if (activeTab === 'furnaceCars' && formData.furnaceId) {
         const found = furnaces.find((f) => f.id === formData.furnaceId);
         if (found) formData.furnaceName = found.name;
+      }
+
+      /*
+       * Financial Accounts carry a parent, so a save can break the tree in
+       * ways a plain required-field check would let through: a duplicate code,
+       * a parent that does not exist, an account made its own parent, or a
+       * move that closes a cycle (A -> B -> C -> A). All four are refused here
+       * BEFORE the write, through the shared hierarchy resolver.
+       */
+      if (activeTab === 'financialAccounts') {
+        const check = validateAccountForSave(items, formData, editingItem?.code);
+        if (!check.valid) {
+          throw new Error(
+            check.issues.map((i) => (language === 'ar' ? i.messageAr : i.messageEn)).join(' | ')
+          );
+        }
+        // An empty parent box means "root", which must be stored as null -
+        // leaving '' behind would look like a parent whose code is blank.
+        formData.parentCode = formData.parentCode ? String(formData.parentCode).trim() : null;
       }
 
       if (editingItem && editingItem.id) {
@@ -770,7 +854,86 @@ export const MasterDataView: React.FC<MasterDataViewProps> = ({ onNavigate }) =>
 
   return (
     <div className="space-y-6" dir={isRtl ? 'rtl' : 'ltr'}>
-      {/* Master Data Tabs Bar */}
+      {/*
+        CATEGORY FIRST.
+        The code TYPE is chosen before any code is shown, so unrelated groups
+        are never mixed in one list. The options come from the shared category
+        registry, which is also what drives the Production Review selector -
+        adding a future category is one registry entry, not a screen change.
+      */}
+      <div className="bg-white rounded-2xl p-4 border border-slate-200 shadow-xs flex flex-col lg:flex-row lg:items-end gap-3">
+        <div className="flex-1 min-w-[240px] max-w-md">
+          <label htmlFor="master-data-category-select" className="block text-[11px] font-black text-slate-500 mb-1">
+            {language === 'ar' ? 'نوع الأكواد (Code Type)' : 'Code Type / نوع الأكواد'}
+          </label>
+          <select
+            id="master-data-category-select"
+            value={currentCategory?.id || ''}
+            onChange={(e) => {
+              const category = getCategory(e.target.value);
+              if (!category) return;
+              setSelectedCodes([]);
+              setSearchQuery('');
+              setStatusFilter('all');
+              setPrefixFilter('all');
+              // The imported Sheet1 tree is served by its own reader, not by a
+              // MasterDataTab collection, so it opens its dedicated panel.
+              if (category.reader === 'costCenterHierarchy') {
+                setIsHierarchyPanelOpen(true);
+                return;
+              }
+              if (category.tab) setActiveTab(category.tab as MasterDataTab);
+            }}
+            className="w-full bg-slate-50 border border-slate-300 rounded-xl px-3.5 py-2.5 text-xs font-black text-slate-800 focus:outline-none focus:border-amber-500 focus:bg-white transition-colors cursor-pointer"
+          >
+            {MASTER_DATA_CATEGORIES.filter((c) => c.tab || c.reader).map((c) => (
+              <option key={c.id} value={c.id}>
+                {categoryLabel(c, 'ar')} / {categoryLabel(c, 'en')}
+              </option>
+            ))}
+          </select>
+        </div>
+
+        <div className="flex items-center gap-2 flex-wrap text-[11px] font-bold text-slate-600">
+          <span className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl bg-slate-100">
+            {language === 'ar' ? 'عدد الأكواد' : 'Codes'}
+            <span className="text-slate-900 font-black">{items.length}</span>
+          </span>
+          {currentCategory?.hierarchical && (
+            <span className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl bg-amber-50 border border-amber-200 text-amber-800">
+              <Layers className="w-3.5 h-3.5" />
+              {language === 'ar' ? 'تصنيف هرمي - الأصل يشمل كل الفروع' : 'Hierarchical - a parent includes every descendant'}
+            </span>
+          )}
+          {activeTab === 'financialAccounts' && (
+            <button
+              id="master-data-import-financial-accounts-btn"
+              type="button"
+              onClick={() => {
+                try { sessionStorage.setItem(BULK_IMPORT_PREFILL_KEY, 'financialAccounts'); } catch { /* a blocked sessionStorage only costs the preselection */ }
+                onNavigate('bulk-entry');
+              }}
+              className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl font-bold text-slate-950 bg-amber-400 hover:bg-amber-500 transition-colors cursor-pointer"
+              title={language === 'ar' ? 'استيراد الحسابات المالية من ملف Excel باستخدام محرك الاستيراد الحالي' : 'Import financial accounts from Excel using the existing import engine'}
+            >
+              <UploadCloud className="w-3.5 h-3.5" />
+              {language === 'ar' ? 'استيراد الحسابات المالية' : 'Import Financial Accounts'}
+            </button>
+          )}
+          <button
+            id="master-data-cost-center-hierarchy-btn"
+            type="button"
+            onClick={() => setIsHierarchyPanelOpen(true)}
+            className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl font-bold text-amber-800 bg-amber-50 border border-amber-200 hover:bg-amber-100 transition-colors cursor-pointer"
+            title={language === 'ar' ? 'استعراض وتحرير التسلسل الهرمي لمراكز التكلفة' : 'Browse and edit the cost center hierarchy'}
+          >
+            <Layers className="w-3.5 h-3.5 text-amber-600" />
+            {language === 'ar' ? 'التسلسل الهرمي لمراكز التكلفة' : 'Cost Center Hierarchy'}
+          </button>
+        </div>
+      </div>
+
+      {/* Quick category chips - the same registry, one click instead of a dropdown. */}
       <div className="bg-white rounded-2xl p-2 border border-slate-200 shadow-xs flex items-center gap-1.5 overflow-x-auto">
         {tabs.map((tab) => {
           const Icon = tab.icon;
@@ -782,6 +945,7 @@ export const MasterDataView: React.FC<MasterDataViewProps> = ({ onNavigate }) =>
               type="button"
               onClick={() => {
                 setActiveTab(tab.id);
+                setSelectedCodes([]);
                 setSearchQuery('');
                 setStatusFilter('all');
                 setPrefixFilter('all');
@@ -805,24 +969,6 @@ export const MasterDataView: React.FC<MasterDataViewProps> = ({ onNavigate }) =>
           );
         })}
 
-        {/*
-          Cost Center Hierarchy - a distinct, additive Master Data section
-          (Phase 5), visually separated from the flat-CRUD tabs above by the
-          divider since it is NOT wired into activeTab/MASTER_DATA_COLLECTIONS/
-          fetchMasterData - it opens its own self-contained, Firestore-free
-          browsing panel instead. Every existing tab above is untouched.
-        */}
-        <div className="w-px h-6 bg-slate-200 shrink-0 mx-0.5" />
-        <button
-          id="master-data-cost-center-hierarchy-btn"
-          type="button"
-          onClick={() => setIsHierarchyPanelOpen(true)}
-          className="flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-bold transition-all shrink-0 cursor-pointer text-amber-800 bg-amber-50 border border-amber-200 hover:bg-amber-100"
-          title={language === 'ar' ? 'استعراض التسلسل الهرمي الجديد لمراكز التكلفة (بيانات محلية - لا يتطلب Firestore)' : 'Browse the new cost center hierarchy (local data - no Firestore required)'}
-        >
-          <Layers className="w-4 h-4 text-amber-600" />
-          <span>{language === 'ar' ? 'التسلسل الهرمي لمراكز التكلفة' : 'Cost Center Hierarchy'}</span>
-        </button>
       </div>
 
       {/* Control Bar: Search, Filters, Add Button, Bulk Import Link, Excel Export */}
@@ -974,6 +1120,51 @@ export const MasterDataView: React.FC<MasterDataViewProps> = ({ onNavigate }) =>
 
       {/* Master Data Table */}
       <div className="bg-white rounded-2xl border border-slate-200 shadow-xs overflow-hidden">
+        {/*
+          Selection acts on the VISIBLE rows of the CURRENT category only.
+          "Select All" means every row that survives the current search and
+          status filter - never every row in the collection - so what the
+          count says is exactly what is on screen.
+        */}
+        <div className="px-4 py-3 border-b border-slate-100 flex items-center gap-2 flex-wrap text-xs">
+          <span className="font-bold text-slate-600">
+            {language === 'ar' ? 'الظاهر' : 'Visible'}: <span className="text-slate-900">{filteredItems.length}</span>
+          </span>
+          <span className="font-bold text-slate-600">
+            {language === 'ar' ? 'المحدد' : 'Selected'}: <span className="text-sky-700">{selectedCodes.length}</span>
+          </span>
+          <button
+            id="master-data-select-all-btn"
+            type="button"
+            disabled={filteredItems.length === 0}
+            onClick={() => setSelectedCodes([...new Set(filteredItems.map(codeOfItem).filter(Boolean))])}
+            className="px-3 py-1.5 font-bold text-slate-700 bg-slate-100 hover:bg-slate-200 disabled:opacity-50 rounded-lg cursor-pointer"
+          >
+            {language === 'ar' ? 'تحديد الكل' : 'Select All'}
+          </button>
+          <button
+            id="master-data-deselect-all-btn"
+            type="button"
+            disabled={selectedCodes.length === 0}
+            onClick={() => setSelectedCodes([])}
+            className="px-3 py-1.5 font-bold text-slate-700 bg-slate-100 hover:bg-slate-200 disabled:opacity-50 rounded-lg cursor-pointer"
+          >
+            {language === 'ar' ? 'إلغاء تحديد الكل' : 'Deselect All'}
+          </button>
+          <button
+            id="master-data-clear-selection-btn"
+            type="button"
+            onClick={() => { setSelectedCodes([]); setSearchQuery(''); setStatusFilter('all'); setPrefixFilter('all'); }}
+            className="px-3 py-1.5 font-bold text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-lg cursor-pointer"
+          >
+            {language === 'ar' ? 'مسح' : 'Clear'}
+          </button>
+          {selectedCodes.length > 0 && (
+            <span className="text-[11px] text-slate-500 font-medium truncate max-w-full" dir="ltr">
+              {selectedCodes.slice(0, 12).join(', ')}{selectedCodes.length > 12 ? ' …' : ''}
+            </span>
+          )}
+        </div>
         {isLoading ? (
           <div className="py-16 text-center text-slate-400">
             <RefreshCw className="w-6 h-6 animate-spin mx-auto mb-2 text-amber-500" />
@@ -992,6 +1183,21 @@ export const MasterDataView: React.FC<MasterDataViewProps> = ({ onNavigate }) =>
             <table className="w-full text-right text-xs">
               <thead className="bg-slate-50 border-b border-slate-200 text-slate-600 font-bold sticky top-0 z-10">
                 <tr>
+                  <th className="px-3 py-3.5 w-10">
+                    <input
+                      type="checkbox"
+                      aria-label={language === 'ar' ? 'تحديد كل الصفوف الظاهرة' : 'Select all visible rows'}
+                      checked={filteredItems.length > 0 && filteredItems.every((i) => selectedCodes.includes(codeOfItem(i)))}
+                      onChange={(e) =>
+                        setSelectedCodes(
+                          e.target.checked
+                            ? [...new Set(filteredItems.map(codeOfItem).filter(Boolean))]
+                            : []
+                        )
+                      }
+                      className="w-3.5 h-3.5 cursor-pointer accent-amber-500"
+                    />
+                  </th>
                   {activeTab === 'productTypes' ? (
                     <>
                       <th className="px-4 py-3.5">{language === 'ar' ? 'البادئة (Prefix)' : 'Prefix'}</th>
@@ -1062,6 +1268,18 @@ export const MasterDataView: React.FC<MasterDataViewProps> = ({ onNavigate }) =>
                       <th className="px-4 py-3.5">{language === 'ar' ? 'المواعيد' : 'Timing'}</th>
                     </>
                   )}
+                  {activeTab === 'financialAccounts' && (
+                    <>
+                      <th className="px-4 py-3.5">{language === 'ar' ? 'الاسم بالإنجليزية' : 'Name (EN)'}</th>
+                      <th className="px-4 py-3.5">{language === 'ar' ? 'نوع الحساب' : 'Account Type'}</th>
+                    </>
+                  )}
+                  {currentCategory?.hierarchical && (
+                    <>
+                      <th className="px-4 py-3.5">{language === 'ar' ? 'الحساب الأصل' : 'Parent'}</th>
+                      <th className="px-4 py-3.5">{language === 'ar' ? 'المسار الكامل' : 'Full Path'}</th>
+                    </>
+                  )}
                   <th className="px-4 py-3.5">{language === 'ar' ? 'حالة التفعيل' : 'Active Status'}</th>
                   <th className="px-4 py-3.5 text-center">{language === 'ar' ? 'الإجراءات' : 'Actions'}</th>
                 </tr>
@@ -1069,6 +1287,20 @@ export const MasterDataView: React.FC<MasterDataViewProps> = ({ onNavigate }) =>
               <tbody className="divide-y divide-slate-100 font-medium text-slate-700">
                 {filteredItems.map((item) => (
                   <tr key={item.id} className="hover:bg-slate-50/80 transition-colors">
+                    <td className="px-3 py-3">
+                      <input
+                        type="checkbox"
+                        aria-label={`${language === 'ar' ? 'تحديد' : 'Select'} ${codeOfItem(item)}`}
+                        checked={selectedCodes.includes(codeOfItem(item))}
+                        onChange={() => {
+                          const code = codeOfItem(item);
+                          setSelectedCodes((prev) =>
+                            prev.includes(code) ? prev.filter((c) => c !== code) : [...prev, code]
+                          );
+                        }}
+                        className="w-3.5 h-3.5 cursor-pointer accent-amber-500"
+                      />
+                    </td>
                     {activeTab === 'productTypes' ? (
                       <>
                         <td className="px-4 py-3">
@@ -1210,6 +1442,30 @@ export const MasterDataView: React.FC<MasterDataViewProps> = ({ onNavigate }) =>
                         <td className="px-4 py-3 font-bold">{item.hours} {language === 'ar' ? 'ساعات' : 'hrs'}</td>
                         <td className="px-4 py-3 font-mono text-slate-500">
                           {item.startTime} &rarr; {item.endTime}
+                        </td>
+                      </>
+                    )}
+
+                    {activeTab === 'financialAccounts' && (
+                      <>
+                        <td className="px-4 py-3 text-slate-600" dir="ltr">{item.nameEn || '-'}</td>
+                        <td className="px-4 py-3 text-slate-600">{item.accountType || '-'}</td>
+                      </>
+                    )}
+                    {currentCategory?.hierarchical && (
+                      <>
+                        <td className="px-4 py-3 font-mono text-slate-500" dir="ltr">
+                          {item?.[currentCategory.parentField || 'parentCode'] || (language === 'ar' ? 'جذر' : 'root')}
+                        </td>
+                        <td className="px-4 py-3 text-slate-500 text-[11px]">
+                          {/* Derived from parent links by the shared resolver, never a stored path. */}
+                          {hierarchyIndex
+                            ? getNodePath(
+                                hierarchyIndex,
+                                codeOfItem(item),
+                                (node: any) => String(node.name || node.code || node.id)
+                              )
+                            : ''}
                         </td>
                       </>
                     )}
@@ -1654,6 +1910,65 @@ export const MasterDataView: React.FC<MasterDataViewProps> = ({ onNavigate }) =>
                   className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3.5 py-2 text-xs"
                 />
               </div>
+            </div>
+          )}
+
+          {/* Specific Financial Account Fields */}
+          {activeTab === 'financialAccounts' && (
+            <div className="space-y-3">
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 mb-1">{language === 'ar' ? 'الاسم بالإنجليزية' : 'Name (EN)'}</label>
+                  <input
+                    type="text"
+                    dir="ltr"
+                    value={formData.nameEn || ''}
+                    onChange={(e) => setFormData({ ...formData, nameEn: e.target.value })}
+                    className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3.5 py-2 text-xs"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 mb-1">{language === 'ar' ? 'نوع الحساب' : 'Account Type'}</label>
+                  <input
+                    type="text"
+                    value={formData.accountType || ''}
+                    onChange={(e) => setFormData({ ...formData, accountType: e.target.value })}
+                    placeholder={language === 'ar' ? 'كما هو في الملف - بدون تصنيف مفروض' : 'As supplied - no enforced taxonomy'}
+                    className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3.5 py-2 text-xs"
+                  />
+                </div>
+              </div>
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1">{language === 'ar' ? 'الحساب الأصل' : 'Parent Account'}</label>
+                <select
+                  value={formData.parentCode || ''}
+                  onChange={(e) => setFormData({ ...formData, parentCode: e.target.value })}
+                  className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3.5 py-2 text-xs"
+                >
+                  <option value="">{language === 'ar' ? '-- بدون أصل (حساب جذر) --' : '-- No parent (root account) --'}</option>
+                  {items
+                    // An account can never be offered itself as its own parent.
+                    // Deeper cycles are refused on save by the shared resolver.
+                    .filter((a) => !editingItem || a.code !== editingItem.code)
+                    .map((a) => (
+                      <option key={a.id} value={a.code}>
+                        {a.code} - {a.name}
+                      </option>
+                    ))}
+                </select>
+                <p className="mt-1 text-[11px] text-slate-500 font-medium">
+                  {language === 'ar'
+                    ? 'اختيار حساب أصل في التقارير يعني الحساب نفسه وكل الحسابات التابعة له مهما كان عمقها.'
+                    : 'Selecting a parent means that account plus every account beneath it, to any depth.'}
+                </p>
+              </div>
+              {editingItem && (
+                <p className="text-[11px] text-slate-500 font-medium bg-slate-50 border border-slate-200 rounded-xl px-3 py-2">
+                  {language === 'ar'
+                    ? 'تغيير كود الحساب: لا يوجد أي حقل في سجلات الإنتاج يشير إلى الحسابات المالية، لذلك لا تتأثر أي بيانات إنتاج تاريخية. لكن الحسابات الفرعية ترتبط بالأصل عن طريق الكود - انقل الحسابات الفرعية أولاً قبل تغيير كود له فروع.'
+                    : 'Changing an account code: no production record references financial accounts, so no historical production data is affected. Child accounts reference their parent BY CODE, so re-parent the children first before renaming a code that has any.'}
+                </p>
+              )}
             </div>
           )}
 

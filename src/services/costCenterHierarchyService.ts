@@ -27,7 +27,15 @@
 import * as XLSX from 'xlsx';
 import { doc, writeBatch } from 'firebase/firestore';
 import { db, auth } from '../config/firebase';
-import { safeBatchSet } from '../utils/firestoreSanitizer';
+import { safeBatchSet, safeUpdateDoc } from '../utils/firestoreSanitizer';
+import { logAuditAction } from './auditService';
+import { invalidateCachedCollection } from './localCacheStore';
+import {
+  HierarchyIndex,
+  HierarchyIssue,
+  buildHierarchyIndex,
+  validateNodeEdit,
+} from './hierarchyResolverPure';
 import { parseSheet1HierarchyRows, buildCostCenterHierarchyCreationPlan, ParsedHierarchyNode } from './costCenterHierarchyPure';
 import { fetchMasterData } from './masterDataService';
 
@@ -167,4 +175,124 @@ export async function listCostCenterHierarchyNodes(
   options?: { skipCache?: boolean },
 ): Promise<CostCenterHierarchyRecord[]> {
   return fetchMasterData<CostCenterHierarchyRecord>(COST_CENTER_HIERARCHY_COLLECTION, options);
+}
+
+/**
+ * The persisted hierarchy as a resolver index.
+ *
+ * `parentSheet1Code` is the parent link and `sheet1Code` is both the code and
+ * the Firestore document id, so a node's id IS its code here - which is why
+ * selections in this category can be expressed as codes throughout.
+ *
+ * Uses the shared resolver; there is no descendant walk in this file.
+ */
+export function buildCostCenterHierarchyIndex(
+  nodes: readonly CostCenterHierarchyRecord[],
+): HierarchyIndex {
+  return buildHierarchyIndex(
+    nodes.map((node) => ({
+      ...node,
+      id: node.sheet1Code || node.id,
+      code: node.sheet1Code || node.code,
+      parentId: node.parentSheet1Code ?? null,
+    })),
+  );
+}
+
+/** Fields a hierarchy node exposes for editing. Everything else is import-derived and left alone. */
+export interface CostCenterHierarchyNodePatch {
+  name?: string;
+  parentSheet1Code?: string | null;
+  active?: boolean;
+  notes?: string | null;
+}
+
+export interface HierarchyEditCheck {
+  valid: boolean;
+  issues: HierarchyIssue[];
+}
+
+/**
+ * Pre-save structural check for one node edit.
+ *
+ * `sheet1Code` is deliberately NOT editable. It is the Firestore document id,
+ * every child stores it as `parentSheet1Code`, and the importer's idempotency
+ * depends on the same source code always resolving to the same document -
+ * changing it would mean creating a new document and orphaning the branch
+ * beneath it. Re-parenting is the supported way to restructure, and it is
+ * checked here for self-parenting, unknown parents and cycles through the
+ * shared resolver.
+ */
+export function validateHierarchyNodeEdit(
+  nodes: readonly CostCenterHierarchyRecord[],
+  sheet1Code: string,
+  patch: CostCenterHierarchyNodePatch,
+): HierarchyEditCheck {
+  const index = buildCostCenterHierarchyIndex(nodes);
+  const result = validateNodeEdit(
+    index,
+    sheet1Code,
+    {
+      ...(patch.name !== undefined ? { name: patch.name } : {}),
+      ...(patch.parentSheet1Code !== undefined ? { parentId: patch.parentSheet1Code } : {}),
+    },
+    { requireUniqueCode: false },
+  );
+  return { valid: result.valid, issues: result.issues };
+}
+
+/**
+ * Writes one node edit.
+ *
+ * Mirrors what the Master Data single-record path already guarantees: the
+ * structural check runs first, the write is a partial update (import-derived
+ * fields such as level, type, rootCategory* and importBatchId are never
+ * touched), the shared cache entry for this collection is invalidated so the
+ * next read reflects the move, and an audit entry records the old and new
+ * values with the user and reason.
+ *
+ * No production record is rewritten. Moving a node changes today's reporting
+ * relationship; historical quantities are never edited to match.
+ */
+export async function updateCostCenterHierarchyNode(
+  nodes: readonly CostCenterHierarchyRecord[],
+  sheet1Code: string,
+  patch: CostCenterHierarchyNodePatch,
+  reason = 'تعديل التسلسل الهرمي',
+): Promise<void> {
+  const check = validateHierarchyNodeEdit(nodes, sheet1Code, patch);
+  if (!check.valid) {
+    throw new Error(check.issues.map((i) => `${i.messageAr} / ${i.messageEn}`).join(' | '));
+  }
+
+  const before = nodes.find((n) => n.sheet1Code === sheet1Code);
+  const updates: Record<string, any> = { updatedAt: new Date().toISOString() };
+  if (patch.name !== undefined) updates.name = String(patch.name).trim();
+  if (patch.active !== undefined) updates.active = patch.active;
+  if (patch.notes !== undefined) updates.notes = patch.notes;
+  if (patch.parentSheet1Code !== undefined) {
+    const parent = patch.parentSheet1Code || null;
+    // parentId and parentSheet1Code are written together - they are the same
+    // relationship stored twice, and letting them disagree would make the
+    // resolver and the stored document tell different stories.
+    updates.parentSheet1Code = parent;
+    updates.parentId = parent;
+  }
+
+  await safeUpdateDoc(doc(db, COST_CENTER_HIERARCHY_COLLECTION, sheet1Code), updates);
+  await invalidateCachedCollection(
+    auth.currentUser?.uid || 'anonymous',
+    COST_CENTER_HIERARCHY_COLLECTION,
+  );
+
+  const changed = Object.keys(updates)
+    .filter((k) => k !== 'updatedAt')
+    .map((k) => `${k}: "${before ? (before as any)[k] ?? '' : ''}" -> "${updates[k] ?? ''}"`)
+    .join('، ');
+  await logAuditAction(
+    'UPDATE',
+    COST_CENTER_HIERARCHY_COLLECTION,
+    sheet1Code,
+    `تعديل عنصر التسلسل الهرمي (${sheet1Code}): ${changed} - السبب: ${reason}`,
+  );
 }
