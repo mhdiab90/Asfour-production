@@ -38,13 +38,15 @@ import { execFileSync, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { computeBuildIdentity, isValidCommitSha, isHostingOnlyDeployCommand } from './buildIdentity.mjs';
+import { computeBuildIdentity, isValidCommitSha, isHostingOnlyDeployCommand, CHANGE_ID_RE, RELEASE_ID_RE } from './buildIdentity.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
 const args = process.argv.slice(2);
 const flag = (n) => { const i = args.indexOf(n); return i >= 0 ? (args[i + 1] ?? '') : undefined; };
 const has = (n) => args.includes(n);
+/** Repeatable flag, e.g. --change-id AI-0001 --change-id FIX-0002 */
+const flagAll = (n) => args.reduce((acc, a, i) => (a === n && args[i + 1] ? [...acc, args[i + 1]] : acc), []);
 
 const manifestPath = flag('--manifest');
 let manifest = null;
@@ -175,6 +177,34 @@ for (const t of requiredTests) {
   const r = run('node', vrArgs);
   process.stdout.write(r.out.replace(/^/gm, '  '));
   step('build identity, markers and cache policy', r.code === 0, r.code === 0 ? 'verifyRelease.mjs passed' : 'verifyRelease.mjs BLOCKED');
+}
+
+// --- 7b. Release chain: the manifest must name its release and its changes -
+// Layer 3 of version -> release -> change -> commit -> build -> deployment.
+// This is a structural check only. Whether each change is APPROVED lives in
+// Firestore, which this offline gate has no credentials to read; that rule is
+// enforced by createRelease() in changeRegistryService.ts, which refuses to
+// build a release out of unapproved changes.
+{
+  const releaseId = manifest?.releaseId ?? flag('--release-id');
+  const changeIds = manifest?.changeIds ?? flagAll('--change-id');
+
+  if (releaseId == null && changeIds.length === 0) {
+    // Not every release has to be registry-tracked yet; say so rather than
+    // failing a release that predates the registry.
+    step('release chain declared', true, 'no releaseId/changeIds in the manifest - release chain not tracked for this release');
+  } else {
+    step('release id is well formed', RELEASE_ID_RE.test(String(releaseId)), `${releaseId}`);
+    step('release enumerates its changes', changeIds.length > 0, `${changeIds.length} change id(s)`);
+
+    const malformed = changeIds.filter((id) => !CHANGE_ID_RE.test(String(id)));
+    step('every change id is well formed', malformed.length === 0,
+      malformed.length ? `malformed: ${malformed.join(', ')}` : `all match ${CHANGE_ID_RE}`);
+
+    const dupes = [...new Set(changeIds.filter((id, i) => changeIds.indexOf(id) !== i))];
+    step('no change id is reused within the release', dupes.length === 0,
+      dupes.length ? `duplicated: ${dupes.join(', ')}` : 'all unique');
+  }
 }
 
 // --- 8. Deployment target must be Hosting-only -----------------------------

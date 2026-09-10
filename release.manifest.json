@@ -2,6 +2,7 @@
   "_doc": "Release Manifest precursor. Describes WHAT is being released so the gate checks a committed declaration rather than whatever flags an operator typed. commitSha/buildId/deploymentId are left null until a release is cut - the gate fills the comparison from the build itself, and only enforces a field that is set here. This is NOT the Change Registry: no change IDs, no Firestore, no UI.",
   "version": "3.2.0",
   "releaseId": null,
+  "changeIds": [],
   "commitSha": null,
   "buildId": null,
   "deploymentId": null,
@@ -23,6 +24,7 @@
   },
   "tests": [
     "buildIdentity",
+    "changeRegistry",
     "releaseGate",
     "aiAssistantRestoration",
     "dashboardBuilder",

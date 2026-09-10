@@ -26,6 +26,19 @@ export function isValidCommitSha(sha) {
 }
 
 /**
+ * Change / Release identifiers (Layer 3 of the release chain).
+ *
+ * These MIRROR src/services/changeRegistryPure.ts, which is the authority. The
+ * gate is plain .mjs and cannot import TypeScript, so the patterns are repeated
+ * here and scripts/tests/changeRegistry.test.ts asserts the two never drift.
+ */
+export const CHANGE_PREFIXES = [
+  'MOD', 'FIX', 'SEC', 'PERF', 'UI', 'DATA', 'DB', 'AI', 'INFRA', 'CONFIG', 'PERM', 'RLB',
+];
+export const CHANGE_ID_RE = new RegExp(`^(${CHANGE_PREFIXES.join('|')})-[0-9]{4}$`);
+export const RELEASE_ID_RE = /^REL-[0-9]{4}-[0-9]{4}$/;
+
+/**
  * A release may only deploy Hosting. A bare `firebase deploy` would also push
  * Firestore Rules and Storage rules, which are released deliberately and
  * separately - shipping them by accident is exactly the kind of silent blast

@@ -170,6 +170,8 @@ export interface GranularPermissions {
   'system.view': boolean;
   'system.health.view': boolean;
   'system.manage': boolean;
+  'system.version.manage': boolean;
+  'system.version.rollback': boolean;
   'system.aiProvider.manage': boolean;
   'mills.view': boolean;
   'mills.create': boolean;

@@ -329,6 +329,60 @@ service cloud.firestore {
       allow delete: if false;
     }
 
+    // Change Registry (Layer 3 of the release chain: version -> release ->
+    // change -> commit -> build -> deployment). Stores metadata and references
+    // only - never Git diffs or file contents. Creating/updating a record is
+    // gated on the same granular permission that governs release checkpoints,
+    // so an ADMIN cannot rewrite release history without being granted it.
+    // Deletion is impossible by design: a rollback is recorded as a NEW
+    // RLB-NNNN change linked to the original, never by erasing it.
+    function hasVersionManagePermission() {
+      return isSignedIn() && (
+        (request.auth.token.email == 'ai.mhdiab90@gmail.com') ||
+        (
+          exists(/databases/$(database)/documents/adminUsers/$(request.auth.uid)) &&
+          get(/databases/$(database)/documents/adminUsers/$(request.auth.uid)).data.active == true &&
+          (
+            get(/databases/$(database)/documents/adminUsers/$(request.auth.uid)).data.role == 'SUPER_ADMIN' ||
+            get(/databases/$(database)/documents/adminUsers/$(request.auth.uid)).data.permissions.get('system.version.manage', false) == true
+          )
+        )
+      );
+    }
+
+    match /changeRegistry/{changeId} {
+      allow read: if isAdmin();
+      allow create: if hasVersionManagePermission();
+      allow update: if hasVersionManagePermission();
+      allow delete: if false;
+    }
+
+    match /releases/{releaseId} {
+      allow read: if isAdmin();
+      allow create: if hasVersionManagePermission();
+      allow update: if hasVersionManagePermission();
+      allow delete: if false;
+    }
+
+    // Monotonic ID allocator for the registry. Read is needed to allocate the
+    // next number; it is written ONLY when a new ID is actually minted, never
+    // on application startup.
+    match /registryCounters/{counterId} {
+      allow read: if isAdmin();
+      allow create, update: if hasVersionManagePermission();
+      allow delete: if false;
+    }
+
+    // Runtime disable for changes that explicitly declare a feature flag.
+    // Readable by any signed-in user because the app must resolve flags to
+    // render; writable only by version managers. Absent document means ON, so
+    // a Firestore outage can never dark-launch a feature off.
+    match /featureFlags/{flagDoc} {
+      allow read: if isSignedIn();
+      allow create, update: if hasVersionManagePermission();
+      allow delete: if false;
+    }
+
     // Central AI Provider Manager config (single doc: aiProviderConfig/active).
     // Read: any signed-in user (needed to know which provider is live).
     // Write: only 'system.aiProvider.manage' holders (SUPER_ADMIN by default).
