@@ -1,5 +1,8 @@
 {
   "hosting": {
+    "predeploy": [
+      "npm run verify-release -- --manifest release.manifest.json --expect-sha-from-head"
+    ],
     "public": "dist",
     "ignore": [
       "firebase.json",
@@ -36,6 +39,33 @@
           {
             "key": "Content-Type",
             "value": "application/manifest+json; charset=utf-8"
+          }
+        ]
+      },
+      {
+        "source": "/",
+        "headers": [
+          {
+            "key": "Cache-Control",
+            "value": "no-cache"
+          }
+        ]
+      },
+      {
+        "source": "/index.html",
+        "headers": [
+          {
+            "key": "Cache-Control",
+            "value": "no-cache"
+          }
+        ]
+      },
+      {
+        "source": "/production",
+        "headers": [
+          {
+            "key": "Cache-Control",
+            "value": "no-cache"
           }
         ]
       },

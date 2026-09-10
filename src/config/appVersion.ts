@@ -14,12 +14,34 @@ export interface AppVersionInfo {
   }[];
 }
 
+/**
+ * Build identity injected by vite.config.ts's build-identity plugin, which
+ * derives every one of these from Git at build time. The `?? ` fallbacks only
+ * apply when this module is loaded outside a Vite build (a plain tsx/node test
+ * run), never in a shipped bundle.
+ *
+ * These used to be hand-edited literals and had drifted badly: production ran
+ * commit 454291d while declaring buildId '2026-08-22-001' and a gitCommit of
+ * 'main-v3.2.0' - a branch label, not a SHA. Nothing here is hand-maintained
+ * any more EXCEPT `version`, which stays a deliberate product decision below.
+ */
+declare const __BUILD_ID__: string | undefined;
+declare const __BUILD_COMMIT_SHA__: string | undefined;
+declare const __BUILD_TIMESTAMP__: string | undefined;
+declare const __BUILD_DEPLOYMENT_ID__: string | undefined;
+
+const BUILD_ID_INJECTED = typeof __BUILD_ID__ === 'string' ? __BUILD_ID__ : 'dev';
+const COMMIT_SHA_INJECTED = typeof __BUILD_COMMIT_SHA__ === 'string' ? __BUILD_COMMIT_SHA__ : '';
+const BUILD_TIMESTAMP_INJECTED = typeof __BUILD_TIMESTAMP__ === 'string' ? __BUILD_TIMESTAMP__ : '';
+const DEPLOYMENT_ID_INJECTED = typeof __BUILD_DEPLOYMENT_ID__ === 'string' ? __BUILD_DEPLOYMENT_ID__ : 'dev';
+
 export const CURRENT_APP_VERSION: AppVersionInfo = {
+  /** THE single hand-authored value in this file - bumping it is a product decision. */
   version: '3.2.0',
-  buildId: '2026-08-22-001',
-  buildTimestamp: '2026-08-22T08:45:00Z',
-  gitCommit: 'main-v3.2.0',
-  deploymentId: 'asfour-prod-20260822',
+  buildId: BUILD_ID_INJECTED,
+  buildTimestamp: BUILD_TIMESTAMP_INJECTED,
+  gitCommit: COMMIT_SHA_INJECTED,
+  deploymentId: DEPLOYMENT_ID_INJECTED,
   databaseSchemaVersion: 3,
   environment: 'production',
   releaseDate: '2026-08-22',

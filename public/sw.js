@@ -1,5 +1,9 @@
-// ASFOUR ERP Service Worker for PWA Offline Caching - Version 3.2.0
-const CACHE_NAME = 'asfour-erp-v3.2.0';
+// ASFOUR ERP Service Worker for PWA Offline Caching.
+// CACHE_VERSION is rewritten at build time by vite.config.ts's build-identity
+// plugin so each release gets its own cache; the literal below is only the
+// development fallback. Strategy, offline behaviour and asset caching are unchanged.
+const CACHE_VERSION = 'dev'; /* __BUILD_IDENTITY__ */
+const CACHE_NAME = `asfour-erp-v${CACHE_VERSION}`;
 const STATIC_ASSETS = [
   '/',
   '/index.html',

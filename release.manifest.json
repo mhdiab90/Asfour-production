@@ -1,0 +1,34 @@
+{
+  "_doc": "Release Manifest precursor. Describes WHAT is being released so the gate checks a committed declaration rather than whatever flags an operator typed. commitSha/buildId/deploymentId are left null until a release is cut - the gate fills the comparison from the build itself, and only enforces a field that is set here. This is NOT the Change Registry: no change IDs, no Firestore, no UI.",
+  "version": "3.2.0",
+  "releaseId": null,
+  "commitSha": null,
+  "buildId": null,
+  "deploymentId": null,
+  "requiredMarkers": [
+    "ai-provider-management",
+    "createCustomDashboard",
+    "asfour_erp_dashboards",
+    "ai-assistant",
+    "dashboard.manageCustomDashboards",
+    "stageComparison"
+  ],
+  "_markerNotes": {
+    "ai-provider-management": "AI Provider Management route - absent means the AI Assistant closure was dropped",
+    "createCustomDashboard": "AI -> Dashboard control tool",
+    "asfour_erp_dashboards": "Custom Dashboard Builder localStorage key",
+    "ai-assistant": "AI Assistant page route",
+    "dashboard.manageCustomDashboards": "Dashboard/Builder permission - proves the Dashboard release is present",
+    "stageComparison": "Reports cross-stage comparison category - proves the Reports upgrade is present"
+  },
+  "tests": [
+    "buildIdentity",
+    "releaseGate",
+    "aiAssistantRestoration",
+    "dashboardBuilder",
+    "reportsView",
+    "stageRecordCache"
+  ],
+  "deployCommand": "firebase deploy --only hosting --project asfourproduction-70e6e",
+  "treeClean": true
+}
