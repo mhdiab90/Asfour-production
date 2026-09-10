@@ -42,8 +42,7 @@
     "reportsView",
     "stageRecordCache",
     "masterDataBulk",
-    "masterData2",
-    "costCenterHierarchy"
+    "masterData2"
   ],
   "deployCommand": "firebase deploy --only hosting --project asfourproduction-70e6e",
   "treeClean": true,
