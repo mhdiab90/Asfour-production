@@ -87,6 +87,14 @@ import { useAuth } from '../../context/AuthContext';
  * work goes through the EXISTING shared resolver. Nothing here walks a tree.
  */
 import { listCostCenterHierarchyNodes, CostCenterHierarchyRecord } from '../../services/costCenterHierarchyService';
+/*
+ * The legacy-code <-> hierarchy dry run. Reports what WOULD link; writes
+ * nothing. Ambiguous codes are surfaced for a human rather than guessed.
+ */
+import {
+  reconcileLegacyWithHierarchy,
+  summariseReconciliation,
+} from '../../services/legacyHierarchyReconciliationPure';
 import { exportMasterDataToExcel } from '../../services/exportService';
 import { Badge } from '../common/Badge';
 import { Modal } from '../common/Modal';
@@ -337,6 +345,28 @@ export const MasterDataView: React.FC<MasterDataViewProps> = ({ onNavigate }) =>
     const node = hierarchyNodes.find((h) => h.id === id);
     return node ? node.name || node.sheet1Code : null;
   };
+
+  /**
+   * Dry-run reconciliation for the equipment tab currently on screen.
+   *
+   * Recomputed from data already loaded - no read, no write. It exists so the
+   * duplicate-looking records (same code, different name, one legacy and one
+   * imported) are visible as what they are, and so ambiguous codes are shown
+   * rather than silently resolved.
+   */
+  const reconciliation = useMemo(() => {
+    if (!isEquipmentTab) return null;
+    return reconcileLegacyWithHierarchy(
+      items.map((i) => ({
+        id: String(i.id ?? ''),
+        code: String(i.code ?? ''),
+        name: i.name,
+        categoryId: activeTab,
+        hierarchyNodeId: i.hierarchyNodeId,
+      })),
+      hierarchyNodes.map((h) => ({ id: h.id, code: h.sheet1Code, name: h.name, type: h.type })),
+    );
+  }, [isEquipmentTab, items, activeTab, hierarchyNodes]);
 
   /** How many equipment records on this tab still carry no link - §24/§26 reporting. */
   const unlinkedEquipmentCount = useMemo(
@@ -1241,6 +1271,36 @@ export const MasterDataView: React.FC<MasterDataViewProps> = ({ onNavigate }) =>
         match would silently attach production to the wrong branch, so the count
         is surfaced and the assignment stays an explicit human decision.
       */}
+      {/*
+        Legacy code <-> hierarchy reconciliation, as a dry run.
+
+        Matched by code WITHIN the same category: names routinely differ between
+        the legacy record and the imported node, so the name is never the
+        identity. A code that matches more than one candidate on either side is
+        reported for review instead of being linked.
+      */}
+      {isEquipmentTab && reconciliation && (reconciliation.counts.matched > 0 || reconciliation.counts.ambiguous > 0) && (
+        <div id="equipment-reconciliation-status" className="bg-sky-50 border border-sky-200 rounded-2xl px-4 py-3 text-xs font-bold text-sky-900 space-y-1">
+          <p>
+            {language === 'ar'
+              ? `مطابقة الأكواد مع التسلسل الهرمي — ${summariseReconciliation(reconciliation, 'ar')}`
+              : `Code reconciliation with the hierarchy — ${summariseReconciliation(reconciliation, 'en')}`}
+          </p>
+          {reconciliation.counts.ambiguous > 0 && (
+            <p className="text-amber-800 font-semibold">
+              {language === 'ar'
+                ? `أكواد تحتاج مراجعة يدوية (أكثر من مرشح): ${reconciliation.ambiguous.map((a) => a.code).join('، ')}`
+                : `Codes needing manual review (more than one candidate): ${reconciliation.ambiguous.map((a) => a.code).join(', ')}`}
+            </p>
+          )}
+          <p className="font-semibold text-sky-800">
+            {language === 'ar'
+              ? 'المطابقة بالكود داخل نفس التصنيف فقط - اختلاف الاسم لا يعني اختلاف السجل. اربط أو عدّل من زر التعديل بجانب كل سجل.'
+              : 'Matched by code within the same category only - a different name does not mean a different record. Link or change it from the Edit action on each row.'}
+          </p>
+        </div>
+      )}
+
       {isEquipmentTab && unlinkedEquipmentCount > 0 && (
         <div id="equipment-hierarchy-status" className="bg-amber-50 border border-amber-200 rounded-2xl px-4 py-3 text-xs font-bold text-amber-900">
           {language === 'ar'

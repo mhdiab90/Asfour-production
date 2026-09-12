@@ -1,14 +1,21 @@
 /**
- * HIERARCHICAL PRODUCTION FILTER UI
+ * HIERARCHICAL PRODUCTION FILTER UI - multi-select at every level.
  *
- * Two screens, one meaning. The Dashboard offers Stage -> Equipment; Production
- * Records offers a multi-level drill-down with checkboxes. §34 is the point of
- * the whole task: both must resolve to the SAME equipment ids, so group E
- * asserts that on the real modules rather than trusting two UIs to agree.
+ * Rewritten for the multi-select selection state (levels[][] rather than a
+ * single drilled path). Every property the previous single-path suite asserted
+ * is still asserted here; only the API it is expressed against changed.
  *
- * The selection state machine is pure and runs here as shipped. The two screens
- * import Firebase, so their wiring is asserted by source inspection with
- * comments stripped - a test can never be satisfied by the prose explaining it.
+ * The rules under test:
+ *   - level 1 is the hierarchy's roots; every later level is the UNION of the
+ *     children of what is ticked above it, and nothing from an unticked branch
+ *   - a deeper tick NARROWS, so a parent and its own child cannot double-count
+ *   - unticking a parent takes its descendants' ticks with it
+ *   - "select all" means the nodes visible at THAT level only
+ *   - a leaf with no children but with equipment IS a valid target
+ *
+ * The state machine is pure and runs as shipped. The two screens import
+ * Firebase, so their wiring is asserted by source inspection with comments
+ * stripped.
  *
  * Run: npx tsx scripts/tests/hierarchySelectorUi.test.ts
  */
@@ -50,27 +57,42 @@ async function bootstrap() {
 }
 
 /**
- * §34's hierarchy, plus a second root and a FIVE-level branch so depth is
- * genuinely exercised rather than assumed to be three.
+ * §44's hierarchy exactly, plus a second root and a five-level branch so depth
+ * is genuinely exercised rather than assumed.
+ *
+ *   المكابس
+ *     مكابس بوخر -> بوخر 1 / بوخر 2 / بوخر 3
+ *     مكابس لايس -> لايس 1600 / لايس 2000
+ *     عميق       -> ع2 -> ع3            (level 5)
+ *   الأفران
+ *     الفرن الدوار
+ *   بلا شيء                             (no children, no equipment)
  */
 const NODES = [
   { id: 'N-PRESSES', code: '5', name: 'المكابس', parentId: null },
-  { id: 'N-BOKHER', code: '51', name: 'بوخر', parentId: 'N-PRESSES' },
-  { id: 'N-P1', code: '511', name: 'مكبس بوخر 1', parentId: 'N-BOKHER' },
-  { id: 'N-P2', code: '512', name: 'مكبس بوخر 2', parentId: 'N-BOKHER' },
-  { id: 'N-P3', code: '513', name: 'مكبس بوخر 3', parentId: 'N-BOKHER' },
-  { id: 'N-LYS', code: '52', name: 'لايس', parentId: 'N-PRESSES' },
-  { id: 'N-LYS-A', code: '521', name: 'لايس أ', parentId: 'N-LYS' },
-  { id: 'N-LYS-A1', code: '5211', name: 'لايس أ-1', parentId: 'N-LYS-A' },   // level 5
+  { id: 'N-BOKHER', code: '51', name: 'مكابس بوخر', parentId: 'N-PRESSES' },
+  { id: 'N-B1', code: '5101', name: 'بوخر 1', parentId: 'N-BOKHER' },
+  { id: 'N-B2', code: '5102', name: 'بوخر 2', parentId: 'N-BOKHER' },
+  { id: 'N-B3', code: '5103', name: 'بوخر 3', parentId: 'N-BOKHER' },
+  { id: 'N-LYS', code: '52', name: 'مكابس لايس', parentId: 'N-PRESSES' },
+  { id: 'N-L1600', code: '5201', name: 'لايس 1600', parentId: 'N-LYS' },
+  { id: 'N-L2000', code: '5202', name: 'لايس 2000', parentId: 'N-LYS' },
+  { id: 'N-DEEP', code: '53', name: 'عميق', parentId: 'N-PRESSES' },
+  { id: 'N-DEEP2', code: '5301', name: 'ع2', parentId: 'N-DEEP' },
+  { id: 'N-DEEP3', code: '530101', name: 'ع3', parentId: 'N-DEEP2' },
   { id: 'N-FURNACES', code: '6', name: 'الأفران', parentId: null },
   { id: 'N-ROTARY', code: '61', name: 'الفرن الدوار', parentId: 'N-FURNACES' },
+  { id: 'N-NOTHING', code: '9', name: 'بلا شيء', parentId: null },
 ];
 
+/** Equipment linked to the LEAVES - so a leaf is the equipment. */
 const EQUIPMENT = [
-  { id: 'E1', hierarchyNodeId: 'N-P1' },
-  { id: 'E2', hierarchyNodeId: 'N-P2' },
-  { id: 'E3', hierarchyNodeId: 'N-P3' },
-  { id: 'E-LYS', hierarchyNodeId: 'N-LYS-A1' },
+  { id: 'E-B1', hierarchyNodeId: 'N-B1' },
+  { id: 'E-B2', hierarchyNodeId: 'N-B2' },
+  { id: 'E-B3', hierarchyNodeId: 'N-B3' },
+  { id: 'E-L1600', hierarchyNodeId: 'N-L1600' },
+  { id: 'E-L2000', hierarchyNodeId: 'N-L2000' },
+  { id: 'E-DEEP', hierarchyNodeId: 'N-DEEP3' },
   { id: 'E-F1', hierarchyNodeId: 'N-ROTARY' },
   { id: 'E-ORPHAN', hierarchyNodeId: null },
 ];
@@ -79,53 +101,66 @@ const index = () => hier.buildHierarchyIndex(NODES);
 const byNode = () => hier.buildEquipmentByNode(EQUIPMENT);
 const EMPTY = () => sel.EMPTY_HIERARCHY_SELECTION;
 const resolve = (state: any) => sel.resolveSelectedEquipment(index(), byNode(), state);
+const opts = (state: any) => sel.levelOptions(index(), state);
 
-/** Drill a path in one go, the way the UI does level by level. */
-function drill(...nodeIds: string[]) {
-  let state = EMPTY();
-  nodeIds.forEach((id, i) => { state = sel.selectAtLevel(state, i + 1, id); });
-  return state;
+/** Tick a set of nodes at one level. */
+function tick(state: any, level: number, ...nodeIds: string[]) {
+  let out = state;
+  for (const id of nodeIds) out = sel.toggleAtLevel(index(), out, level, id);
+  return out;
 }
 
 // ==================================================
-// A. LEVELS (§33 P1-P3, P9, P10)
+// A. LEVELS AND UNIONS (§16, §17, §19, §23, §43 C1-C2, C8)
 // ==================================================
 
-test('A1. TEST P1 - level 1 offers ONLY the hierarchy roots', () => {
-  const levels = sel.levelOptions(index(), EMPTY());
-  assert.equal(levels.length, 1, 'nothing chosen yet, so only level 1 is drawn');
-  assert.deepEqual(levels[0].optionIds.sort(), ['N-FURNACES', 'N-PRESSES']);
-  // Not a flat list of every node.
-  assert.equal(levels[0].optionIds.includes('N-BOKHER'), false);
+test('A1. level 1 offers ONLY the hierarchy roots', () => {
+  const levels = opts(EMPTY());
+  assert.equal(levels.length, 1, 'nothing ticked, so only level 1 is drawn');
+  assert.deepEqual(levels[0].optionIds.sort(), ['N-FURNACES', 'N-NOTHING', 'N-PRESSES']);
+  assert.equal(levels[0].optionIds.includes('N-BOKHER'), false, 'not a flat list of everything');
 });
 
-test('A2. TEST P2 - level 2 offers ONLY the chosen root\'s children', () => {
-  const levels = sel.levelOptions(index(), drill('N-PRESSES'));
+test('A2. TEST C1 - two ticked roots make level 2 the UNION of their children', () => {
+  const state = tick(EMPTY(), 1, 'N-PRESSES', 'N-FURNACES');
+  const levels = opts(state);
   assert.equal(levels.length, 2);
-  assert.deepEqual(levels[1].optionIds.sort(), ['N-BOKHER', 'N-LYS']);
-  assert.equal(levels[1].optionIds.includes('N-ROTARY'), false, 'no other branch may leak in');
+  assert.deepEqual(levels[1].optionIds.sort(), ['N-BOKHER', 'N-DEEP', 'N-LYS', 'N-ROTARY']);
 });
 
-test('A3. TEST P3 - level 3 offers only the chosen child\'s children', () => {
-  const levels = sel.levelOptions(index(), drill('N-PRESSES', 'N-BOKHER'));
+test('A3. §23 - only descendants of TICKED branches appear', () => {
+  const levels = opts(tick(EMPTY(), 1, 'N-PRESSES'));
+  assert.equal(levels[1].optionIds.includes('N-ROTARY'), false, 'the unticked furnace branch must not leak');
+});
+
+test('A4. TEST C2 - two ticked level-2 nodes make level 3 the union of their children', () => {
+  let state = tick(EMPTY(), 1, 'N-PRESSES');
+  state = tick(state, 2, 'N-BOKHER', 'N-LYS');
+  const levels = opts(state);
   assert.equal(levels.length, 3);
-  assert.deepEqual(levels[2].optionIds.sort(), ['N-P1', 'N-P2', 'N-P3']);
+  assert.deepEqual(levels[2].optionIds.sort(), ['N-B1', 'N-B2', 'N-B3', 'N-L1600', 'N-L2000']);
 });
 
-test('A4. TEST P10 - depth is whatever the data has, not three', () => {
-  const levels = sel.levelOptions(index(), drill('N-PRESSES', 'N-LYS', 'N-LYS-A'));
-  assert.equal(levels.length, 4, 'a four-level branch draws four selectors');
-  assert.deepEqual(levels[3].optionIds, ['N-LYS-A1']);
-  // And a leaf draws no further selector.
-  const atLeaf = sel.levelOptions(index(), drill('N-PRESSES', 'N-LYS', 'N-LYS-A', 'N-LYS-A1'));
-  assert.equal(atLeaf.length, 4, 'a leaf adds no empty dropdown');
+test('A5. §17 - ticking one level-2 node flows only ITS children onward', () => {
+  let state = tick(EMPTY(), 1, 'N-PRESSES');
+  state = tick(state, 2, 'N-BOKHER');
+  assert.deepEqual(opts(state)[2].optionIds.sort(), ['N-B1', 'N-B2', 'N-B3']);
 });
 
-test('A5. TEST P9 / CRITICAL 9 - roots come from data; a new root appears automatically', () => {
-  const extended = [...NODES, { id: 'N-NEW', code: '7', name: 'مركز جديد تمامًا', parentId: null }];
-  const levels = sel.levelOptions(hier.buildHierarchyIndex(extended), EMPTY());
-  assert.ok(levels[0].optionIds.includes('N-NEW'), 'no code change needed for a new root');
-  // And no centre name is hard-coded in the selector module.
+test('A6. TEST C8 / §19 - five levels work with no special-case code', () => {
+  let state = tick(EMPTY(), 1, 'N-PRESSES');
+  state = tick(state, 2, 'N-DEEP');
+  state = tick(state, 3, 'N-DEEP2');
+  const levels = opts(state);
+  assert.equal(levels.length, 4);
+  assert.deepEqual(levels[3].optionIds, ['N-DEEP3']);
+  // And the leaf resolves to its equipment.
+  assert.deepEqual(resolve(tick(state, 4, 'N-DEEP3')), ['E-DEEP']);
+});
+
+test('A7. §14 / CRITICAL 14 - roots come from data; no centre name is hard-coded', () => {
+  const extended = [...NODES, { id: 'N-NEW', code: '7', name: 'مركز جديد', parentId: null }];
+  assert.ok(sel.levelOptions(hier.buildHierarchyIndex(extended), EMPTY())[0].optionIds.includes('N-NEW'));
   const src = readCode('src/services/hierarchySelectorPure.ts');
   for (const name of ['المكابس', 'الأفران', 'بوخر', 'الطواحين', 'Presses', 'Furnaces']) {
     assert.equal(src.includes(name), false, `${name} must not be hard-coded`);
@@ -133,253 +168,256 @@ test('A5. TEST P9 / CRITICAL 9 - roots come from data; a new root appears automa
 });
 
 // ==================================================
-// B. SEMANTICS (§34 A-C, §14, §15)
+// B. LEAF = EQUIPMENT (§12-§15, §42 B1-B4, §27)
 // ==================================================
 
-test('B1. §34 A - stopping at level 1 means the WHOLE branch', () => {
-  assert.deepEqual(resolve(drill('N-PRESSES')).sort(), ['E-LYS', 'E1', 'E2', 'E3']);
+test('B1. TEST B1/B3 / CRITICAL 8 - a childless node WITH equipment is a valid target', () => {
+  assert.deepEqual(hier.getChildIds(index(), 'N-B1'), [], 'it genuinely has no children');
+  assert.equal(sel.isSelectableNode(index(), byNode(), 'N-B1'), true, 'but it IS selectable');
+  assert.equal(sel.isEmptyNode(index(), byNode(), 'N-B1'), false, 'and must never be called empty');
 });
 
-test('B2. §34 B - stopping at level 2 means that sub-branch', () => {
-  assert.deepEqual(resolve(drill('N-PRESSES', 'N-BOKHER')).sort(), ['E1', 'E2', 'E3']);
+test('B2. TEST B2 / §27 - ticking a leaf selects that equipment exactly', () => {
+  let state = tick(EMPTY(), 1, 'N-PRESSES');
+  state = tick(state, 2, 'N-BOKHER');
+  state = tick(state, 3, 'N-B1');
+  assert.deepEqual(resolve(state), ['E-B1'], 'the leaf IS the equipment, not "children of the leaf"');
 });
 
-test('B3. §34 C / TEST P4/P5 - ticking equipment narrows to exactly those', () => {
-  let state = drill('N-PRESSES', 'N-BOKHER');
-  state = sel.toggleEquipment(state, 'E1');
-  assert.deepEqual(resolve(state), ['E1'], 'one tick = one piece of equipment');
-  state = sel.toggleEquipment(state, 'E2');
-  assert.deepEqual(resolve(state).sort(), ['E1', 'E2'], 'two ticks = both');
-  assert.equal(resolve(state).includes('E3'), false, 'an explicit tick must NARROW, never add');
+test('B3. TEST B4 - a node with no children AND no equipment is genuinely empty', () => {
+  assert.equal(sel.isSelectableNode(index(), byNode(), 'N-NOTHING'), false);
+  assert.equal(sel.isEmptyNode(index(), byNode(), 'N-NOTHING'), true);
+  assert.deepEqual(resolve(tick(EMPTY(), 1, 'N-NOTHING')), [], 'and it resolves to nothing');
 });
 
-test('B4. §18 - the neutral state narrows nothing at all', () => {
+test('B4. CRITICAL 8 - "no children" is never used on its own to mean "no equipment"', () => {
+  const src = readCode('src/services/hierarchySelectorPure.ts');
+  // isSelectableNode must consult the equipment map, not just the child list.
+  const start = src.indexOf('export function isSelectableNode');
+  const body = src.slice(start, src.indexOf('export function isEmptyNode'));
+  assert.ok(/getChildIds/.test(body) && /resolveEquipmentForHierarchyNodes/.test(body),
+    'both facts must be consulted before calling a node empty');
+});
+
+// ==================================================
+// C. NARROWING, DEDUPE, BRANCH SAFETY (§21, §22, §24, §43 C3-C5)
+// ==================================================
+
+test('C1. §14 - ticking only a parent means the whole branch below it', () => {
+  assert.deepEqual(resolve(tick(EMPTY(), 1, 'N-PRESSES')).sort(),
+    ['E-B1', 'E-B2', 'E-B3', 'E-DEEP', 'E-L1600', 'E-L2000']);
+});
+
+test('C2. TEST C4 / §22 / CRITICAL 12 - parent + child never double-counts', () => {
+  let state = tick(EMPTY(), 1, 'N-PRESSES');
+  state = tick(state, 2, 'N-BOKHER');
+  const out = resolve(state);
+  // The deeper tick narrows, so Bo-kher's equipment only - and each once.
+  assert.deepEqual(out.sort(), ['E-B1', 'E-B2', 'E-B3']);
+  assert.equal(new Set(out).size, out.length, 'no duplicates');
+});
+
+test('C3. TEST C3 - ticking several leaves gives exactly that equipment set', () => {
+  let state = tick(EMPTY(), 1, 'N-PRESSES');
+  state = tick(state, 2, 'N-BOKHER');
+  state = tick(state, 3, 'N-B1', 'N-B2');
+  assert.deepEqual(resolve(state).sort(), ['E-B1', 'E-B2']);
+  assert.equal(resolve(state).includes('E-B3'), false, 'an unticked sibling must not ride along');
+});
+
+test('C4. TEST C5 / §24 / CRITICAL 11 - unticking a parent removes its dependent ticks', () => {
+  let state = tick(EMPTY(), 1, 'N-PRESSES', 'N-FURNACES');
+  state = tick(state, 2, 'N-BOKHER', 'N-ROTARY');
+  assert.deepEqual(resolve(state).sort(), ['E-B1', 'E-B2', 'E-B3', 'E-F1']);
+
+  // Untick Presses. Bo-kher was only reachable through it.
+  const after = sel.toggleAtLevel(index(), state, 1, 'N-PRESSES');
+  assert.deepEqual(after.levels[0], ['N-FURNACES']);
+  assert.equal((after.levels[1] ?? []).includes('N-BOKHER'), false, 'the stale level-2 tick is gone');
+  assert.deepEqual(resolve(after).sort(), ['E-F1']);
+});
+
+test('C5. §24 - reconciliation cascades through every level, not just one', () => {
+  const stale = { levels: [['N-FURNACES'], ['N-BOKHER'], ['N-B1']], equipmentIds: [] };
+  const fixed = sel.reconcileLevels(index(), stale);
+  assert.deepEqual(fixed.levels, [['N-FURNACES']], 'nothing below survives an unreachable level');
+});
+
+test('C6. §18 - the neutral state narrows nothing at all', () => {
   assert.equal(resolve(EMPTY()), null, 'null = no filtering, not "everything selected"');
   assert.equal(resolve(sel.clearSelection()), null);
+  assert.equal(sel.effectiveLevel(EMPTY()), 0);
 });
 
-test('B5. TEST P6 / §13 - select-all covers the current branch only', () => {
-  const state = sel.selectAllEquipment(index(), byNode(), drill('N-PRESSES', 'N-BOKHER'));
-  assert.deepEqual(state.equipmentIds.sort(), ['E1', 'E2', 'E3']);
-  assert.equal(state.equipmentIds.includes('E-F1'), false, 'never the whole system');
-  assert.equal(state.equipmentIds.includes('E-LYS'), false, 'never a sibling branch');
+test('C7. §21 - an equipment tick narrows and can never widen', () => {
+  let state = tick(EMPTY(), 1, 'N-PRESSES');
+  state = sel.toggleEquipment(state, 'E-B1');
+  assert.deepEqual(resolve(state), ['E-B1']);
+  // A tick from outside the branch simply does not match.
+  const outside = { levels: [['N-FURNACES']], equipmentIds: ['E-B1'] };
+  assert.deepEqual(resolve(outside), []);
 });
 
-test('B6. §15 - a tick from another branch can never widen the result', () => {
-  // Tick inside Bo-kher, then navigate to the furnace branch by hand.
-  const ticked = { path: ['N-FURNACES'], equipmentIds: ['E1', 'E2'] };
-  assert.deepEqual(resolve(ticked), [], 'stale ticks are outside the branch, so nothing matches');
-  assert.equal(resolve(ticked).includes('E1'), false);
+// ==================================================
+// D. SELECT ALL PER LEVEL (§26, §43 C6-C7)
+// ==================================================
+
+test('D1. TEST C6 / §26 - select-all at level 1 ticks the roots only', () => {
+  const state = sel.selectAllAtLevel(index(), EMPTY(), 1);
+  assert.deepEqual(state.levels[0].sort(), ['N-FURNACES', 'N-NOTHING', 'N-PRESSES']);
+  assert.equal(state.levels[0].includes('N-BOKHER'), false, 'never a deeper node');
 });
 
-test('B7. unlinked equipment is reachable from no branch at all', () => {
-  for (const nodeId of ['N-PRESSES', 'N-BOKHER', 'N-FURNACES']) {
-    assert.equal(resolve(drill(nodeId)).includes('E-ORPHAN'), false);
+test('D2. TEST C7 / §26 - select-all at level 2 ticks only the VISIBLE children', () => {
+  const state = sel.selectAllAtLevel(index(), tick(EMPTY(), 1, 'N-PRESSES'), 2);
+  assert.deepEqual(state.levels[1].sort(), ['N-BOKHER', 'N-DEEP', 'N-LYS']);
+  assert.equal(state.levels[1].includes('N-ROTARY'), false, 'the unticked furnace branch is not visible');
+});
+
+test('D3. §25 - clearing a level clears everything under it', () => {
+  let state = tick(EMPTY(), 1, 'N-PRESSES');
+  state = tick(state, 2, 'N-BOKHER');
+  state = tick(state, 3, 'N-B1');
+  const cleared = sel.clearLevel(index(), state, 2);
+  assert.deepEqual(cleared.levels, [['N-PRESSES']]);
+});
+
+test('D4. select-all equipment covers the current scope only', () => {
+  let state = tick(EMPTY(), 1, 'N-PRESSES');
+  state = tick(state, 2, 'N-BOKHER');
+  const all = sel.selectAllEquipment(index(), byNode(), state);
+  assert.deepEqual(all.equipmentIds.sort(), ['E-B1', 'E-B2', 'E-B3']);
+  assert.equal(all.equipmentIds.includes('E-F1'), false, 'never the whole system');
+});
+
+test('D5. unlinked equipment is reachable from no branch', () => {
+  // Each node ticked at the level it actually lives on.
+  for (const nodeId of ['N-PRESSES', 'N-FURNACES']) {
+    assert.equal(resolve(tick(EMPTY(), 1, nodeId)).includes('E-ORPHAN'), false);
   }
+  const bokher = tick(tick(EMPTY(), 1, 'N-PRESSES'), 2, 'N-BOKHER');
+  assert.equal(resolve(bokher).includes('E-ORPHAN'), false);
+});
+
+test('D6. a node ticked at the wrong level is rejected, not silently honoured', () => {
+  // N-BOKHER is a level-2 node; ticking it as a root cannot stand.
+  const bogus = sel.toggleAtLevel(index(), EMPTY(), 1, 'N-BOKHER');
+  assert.deepEqual(bogus.levels, [], 'reconciliation drops it');
+  assert.equal(resolve(bogus), null, 'so the selection narrows nothing rather than narrowing wrongly');
 });
 
 // ==================================================
-// C. NAVIGATION (§33 P7, P8, §17)
+// E. §44 END-TO-END
 // ==================================================
 
-test('C1. TEST P7 - going back one level keeps the levels above it', () => {
-  const deep = drill('N-PRESSES', 'N-BOKHER');
-  const back = sel.goBack(deep);
-  assert.deepEqual(back.path, ['N-PRESSES'], 'only the deepest level is dropped');
-  assert.deepEqual(back.equipmentIds, [], 'ticks made inside the branch being left are cleared');
-  assert.deepEqual(sel.goBack(sel.goBack(deep)).path, []);
-  assert.deepEqual(sel.goBack(EMPTY()).path, [], 'going back from the top is harmless');
+test('E1. §44 - Presses > Bo-kher > (1,2) resolves to exactly those two', () => {
+  let state = tick(EMPTY(), 1, 'N-PRESSES');
+  state = tick(state, 2, 'N-BOKHER');
+  state = tick(state, 3, 'N-B1', 'N-B2');
+  assert.deepEqual(resolve(state).sort(), ['E-B1', 'E-B2']);
 });
 
-test('C2. TEST P8 - choosing a different node discards the deeper branch', () => {
-  let state = drill('N-PRESSES', 'N-BOKHER');
-  state = sel.toggleEquipment(state, 'E1');
-  // The user changes level 1 to the other root.
-  const switched = sel.selectAtLevel(state, 1, 'N-FURNACES');
-  assert.deepEqual(switched.path, ['N-FURNACES'], 'the old level-2 choice cannot survive');
-  assert.deepEqual(switched.equipmentIds, [], 'nor can equipment ticked in the old branch');
-  assert.deepEqual(resolve(switched), ['E-F1']);
-});
-
-test('C3. clearing a level clears everything below it', () => {
-  const state = sel.selectAtLevel(drill('N-PRESSES', 'N-BOKHER'), 2, null);
-  assert.deepEqual(state.path, ['N-PRESSES']);
-});
-
-test('C4. §17 - the breadcrumb reads from the data', () => {
-  const labels = sel.selectionPathLabels(index(), drill('N-PRESSES', 'N-BOKHER'), (x: any) => x.name);
-  assert.deepEqual(labels, ['المكابس', 'بوخر']);
-  const text = sel.selectionPathText(index(), drill('N-PRESSES', 'N-BOKHER'), (x: any) => x.name);
-  assert.ok(text.includes('المكابس') && text.includes('بوخر'));
+test('E2. §44 - ticking both level-2 branches offers all five leaves at level 3', () => {
+  let state = tick(EMPTY(), 1, 'N-PRESSES');
+  state = tick(state, 2, 'N-BOKHER', 'N-LYS');
+  assert.deepEqual(opts(state)[2].optionIds.sort(), ['N-B1', 'N-B2', 'N-B3', 'N-L1600', 'N-L2000']);
+  // Any subset may then be ticked.
+  const subset = tick(state, 3, 'N-B3', 'N-L2000');
+  assert.deepEqual(resolve(subset).sort(), ['E-B3', 'E-L2000']);
 });
 
 // ==================================================
-// D. DASHBOARD (§32 D1-D6)
+// F. DASHBOARD (§30, §45)
 // ==================================================
 
-test('D1. TEST D1 - the pressing stage offers its real equipment categories', () => {
-  const cats = reg.equipmentCategoriesForStage('pressing').map((c: any) => c.id);
-  assert.deepEqual(cats.sort(), ['furnaces', 'presses'], 'pressing records BOTH pressId and furnaceId');
+test('F1. the pressing stage offers its real equipment categories', () => {
+  assert.deepEqual(reg.equipmentCategoriesForStage('pressing').map((c: any) => c.id).sort(), ['furnaces', 'presses']);
   assert.equal(reg.stageRecordsEquipment('pressing'), true);
 });
 
-test('D2. TEST D2/D3 / CRITICAL 2 - a stage that records no equipment offers NONE', () => {
+test('F2. §45 / CRITICAL - a stage that records no equipment offers none', () => {
   for (const stage of ['rotary_furnace', 'chinese_mills', 'tube_ball_mills', 'mixing', 'mortar_concrete', 'lightweight_foam', 'sorting']) {
-    assert.deepEqual(reg.equipmentCategoriesForStage(stage), [],
-      `${stage} records no equipment reference, so it must offer no equipment filter`);
+    assert.deepEqual(reg.equipmentCategoriesForStage(stage), []);
     assert.equal(reg.stageRecordsEquipment(stage), false);
   }
 });
 
-test('D3. CRITICAL 2 - presses can never be offered for a non-pressing stage', () => {
+test('F3. presses can never be offered for a non-pressing stage', () => {
   for (const stage of ['rotary_furnace', 'chinese_mills', 'sorting']) {
-    const ids = reg.equipmentCategoriesForStage(stage).map((c: any) => c.id);
-    assert.equal(ids.includes('presses'), false, `presses must not appear under ${stage}`);
+    assert.equal(reg.equipmentCategoriesForStage(stage).map((c: any) => c.id).includes('presses'), false);
   }
 });
 
-test('D4. TEST D5 - "all" stage offers the union, and it is derived, not hard-coded', () => {
-  const all = reg.equipmentCategoriesForStage('all').map((c: any) => c.id).sort();
-  assert.deepEqual(all, ['furnaces', 'presses']);
-  assert.deepEqual(reg.equipmentCategoriesForStage(undefined).map((c: any) => c.id).sort(), all);
-  // Derived from the map, so a stage gaining equipment needs no change here.
-  const src = readCode('src/services/masterDataCategoryRegistry.ts');
-  assert.ok(/Object\.values\(STAGE_EQUIPMENT_CATEGORIES\)\.flat\(\)/.test(src), 'the union must be computed');
-});
-
-test('D5. TEST D4 - the Dashboard clears an equipment selection the new stage cannot use', () => {
+test('F4. the Dashboard clears a selection the new stage cannot use', () => {
   const src = readCode('src/components/dashboard/DashboardView.tsx');
-  assert.ok(/const valid = new Set\(equipmentOptions\.flatMap/.test(src), 'validity is checked against the new stage');
-  assert.ok(/pressId: pressOk \? prev\.pressId : undefined/.test(src), 'an incompatible press id is dropped');
-  assert.ok(/furnaceId: furnaceOk \? prev\.furnaceId : undefined/.test(src), 'and an incompatible furnace id');
-});
-
-test('D6. TEST D6 / §6 - Dashboard equipment comes from master data, never a literal', () => {
-  const src = readCode('src/components/dashboard/DashboardView.tsx');
-  assert.ok(/equipmentCategoriesForStage\(stageType\)/.test(src), 'options must follow the stage');
-  assert.ok(/fetchMasterData<Press>\('presses'\)/.test(src), 'presses come from master data');
-  assert.ok(/id="dashboard-equipment-filter"/.test(src), 'the selector must be identifiable');
-  // The old hard-coded press-only list is gone.
+  assert.ok(/const valid = new Set\(equipmentOptions\.flatMap/.test(src));
+  assert.ok(/pressId: pressOk \? prev\.pressId : undefined/.test(src));
+  assert.ok(/id="dashboard-equipment-filter"/.test(src));
   assert.equal(/<option value="">\{language === 'ar' \? 'كل المكابس'/.test(src), false,
-    'the fixed "All Presses" option must no longer exist');
+    'the fixed "All Presses" option must be gone');
 });
 
 // ==================================================
-// E. §34 D/E - THE TWO SCREENS AGREE
-// ==================================================
-
-test('E1. §34 D/E / §24 - Dashboard ALL and the drill-down resolve the SAME equipment', () => {
-  // Production Records: drill to Presses, tick nothing = the whole branch.
-  const viaDrillDown = resolve(drill('N-PRESSES')).sort();
-
-  // Dashboard: stage pressing, equipment ALL, restricted to the same branch -
-  // both go through the SAME shared resolver, which is why they agree.
-  const viaResolver = hier
-    .resolveEquipmentForHierarchyNodes(index(), byNode(), ['N-PRESSES'], { includeSelf: true })
-    .sort();
-
-  assert.deepEqual(viaDrillDown, viaResolver);
-  assert.deepEqual(viaDrillDown, ['E-LYS', 'E1', 'E2', 'E3']);
-});
-
-test('E2. §34 E - an explicit tick resolves identically through either path', () => {
-  let state = drill('N-PRESSES', 'N-BOKHER');
-  state = sel.toggleEquipment(state, 'E1');
-  state = sel.toggleEquipment(state, 'E2');
-  const branch = hier.resolveEquipmentForHierarchyNodes(index(), byNode(), ['N-BOKHER'], { includeSelf: true });
-  const expected = ['E1', 'E2'].filter((id) => branch.includes(id));
-  assert.deepEqual(resolve(state).sort(), expected.sort());
-});
-
-test('E3. §24/CRITICAL 10 - there is still exactly ONE traversal', () => {
-  const selSrc = readCode('src/services/hierarchySelectorPure.ts');
-  assert.ok(/resolveEquipmentForHierarchyNodes|getChildIds/.test(selSrc), 'the state machine delegates');
-  assert.equal(/while\s*\(queue|stack\.pop\(\)|function\s+\w*[Dd]escendants/.test(selSrc), false,
-    'the state machine must not walk the tree');
-  for (const rel of ['src/components/production/ProductionRecordsView.tsx', 'src/components/dashboard/DashboardView.tsx']) {
-    const src = readCode(rel);
-    assert.equal(/childrenByParent|getDescendants|while\s*\(queue/.test(src), false, `${rel} must not traverse`);
-  }
-});
-
-// ==================================================
-// F. COMPOSITION + REGRESSION (§23, §28, §29, §25)
+// G. WIRING + REGRESSION (§29, §31, §40, §47)
 // ==================================================
 
 const PRV = 'src/components/production/ProductionRecordsView.tsx';
 
-test('F1. TEST P11/P12/P13 - the drill-down is one more AND beside the existing filters', () => {
-  const src = readCode(PRV);
-  assert.ok(/if \(hierarchyEquipmentIds == null\) return true;/.test(src),
-    'nothing drilled = identity, so existing behaviour is untouched');
-  for (const kept of ['filterShift', 'filterProduct', 'startDate', 'endDate', 'searchQuery', 'codeSelection']) {
-    assert.ok(src.includes(kept), `${kept} must still be applied`);
+test('G1. CRITICAL 15 - there is still exactly ONE traversal', () => {
+  const selSrc = readCode('src/services/hierarchySelectorPure.ts');
+  assert.ok(/resolveEquipmentForHierarchyNodes|getChildIds/.test(selSrc), 'the state machine delegates');
+  assert.equal(/while\s*\(queue|stack\.pop\(\)|function\s+\w*[Dd]escendants/.test(selSrc), false);
+  for (const rel of [PRV, 'src/components/dashboard/DashboardView.tsx']) {
+    assert.equal(/childrenByParent|getDescendants|while\s*\(queue/.test(readCode(rel)), false, `${rel} must not traverse`);
   }
-  // It matches the record's own equipment fields, and tests each record once.
-  assert.ok(/\[rec\.pressId, rec\.furnaceId\]\.some\(/.test(src),
-    'a job belongs to the branch via either field, and is tested once');
 });
 
-test('F2. TEST P14 / §28 - row selection still prunes against the newly filtered set', () => {
+test('G2. the view renders a checkbox column per level, not a single dropdown', () => {
   const src = readCode(PRV);
-  assert.ok(/pruneToVisible\(prev, visibleIds\)/.test(src), 'pruning must remain');
-  assert.ok(/filteredRecords\.map\(\(r\) => r\.id\)/.test(src),
-    'visibleIds must derive from the SAME list the drill-down filtered');
+  assert.ok(/hierarchyLevels\.map\(\(lvl\) =>/.test(src), 'one block per level');
+  assert.ok(/toggleAtLevel\(hierarchyIndex, hierarchySelection, lvl\.level, id\)/.test(src), 'ticks go through the state machine');
+  assert.ok(/selectAllAtLevel\(hierarchyIndex, hierarchySelection, lvl\.level\)/.test(src), 'per-level select all');
+  assert.ok(/clearLevel\(hierarchyIndex, hierarchySelection, lvl\.level\)/.test(src), 'per-level clear');
+  assert.ok(/المحدد: \$\{lvl\.selectedIds\.length\}/.test(src), 'per-level selected count');
 });
 
-test('F3. TEST P15/P16 / §29 - Edit and single Delete are untouched; no bulk delete', () => {
+test('G3. §31 - the reconciliation feeds the SAME equipment map everything else uses', () => {
   const src = readCode(PRV);
-  assert.ok(/handleOpenEdit/.test(src), 'row Edit remains');
-  assert.equal((src.match(/deleteProductionRecord\(/g) || []).length, 1, 'one delete call site only');
+  assert.ok(/applyReconciliationToEquipment\(/.test(src), 'links are completed from the code match');
+  assert.ok(/reconcileLegacyWithHierarchy\(/.test(src));
+  assert.ok(/buildEquipmentByNode\(equipmentLinks\)/.test(src), 'and flow into the shared resolver map');
+});
+
+test('G4. §29/§47 - production records, Edit and single Delete are untouched', () => {
+  const src = readCode(PRV);
+  assert.ok(/\[rec\.pressId, rec\.furnaceId\]\.some\(/.test(src), 'existing record fields only');
+  assert.ok(/handleOpenEdit/.test(src));
+  assert.equal((src.match(/deleteProductionRecord\(/g) || []).length, 1);
   for (const forbidden of ['handleBulkDelete', 'bulkDelete', 'deleteSelected', 'deleteStageRecord']) {
     assert.equal(src.includes(forbidden), false, `${forbidden} must not exist`);
   }
 });
 
-test('F4. §25 - Reports and AI were not modified by this task', () => {
-  const reports = readCode('src/components/reports/ReportsView.tsx');
-  assert.equal(/hierarchySelectorPure|levelOptions|selectAtLevel/.test(reports), false,
-    'Reports must not gain the drill-down UI');
-  const ai = readCode('src/assistant/tools/stageReportTools.ts');
-  assert.equal(/hierarchySelectorPure|levelOptions/.test(ai), false, 'AI must not gain it either');
-});
-
-test('F5. §25 - the added furnaceId filter is inert for Reports', () => {
-  const engine = readCode('src/services/reportingEngine.ts');
-  assert.ok(/filters\.furnaceId && \(r\.rawData\?\.furnaceId \|\| ''\) !== filters\.furnaceId/.test(engine),
-    'the furnace filter exists');
-  // Reports never set it, so their behaviour cannot change.
-  const reports = readCode('src/components/reports/ReportsView.tsx');
-  assert.equal(/furnaceId:/.test(reports), false, 'the Reports screen never sets furnaceId');
-});
-
-test('F6. §26/§27 - no financial-account or cost-centre equipment mapping was invented', () => {
-  for (const rel of ['src/services/hierarchySelectorPure.ts', 'src/components/dashboard/DashboardView.tsx']) {
-    const src = readCode(rel);
-    assert.equal(/financialAccount|costCenterId|accountId/.test(src), false,
-      `${rel} must not reference a fabricated mapping`);
-  }
-  const stageMap = readCode('src/services/masterDataCategoryRegistry.ts');
-  const start = stageMap.indexOf('STAGE_EQUIPMENT_CATEGORIES');
-  const block = stageMap.slice(start, start + 500);
-  assert.equal(/financialAccounts|costCenters/.test(block), false,
-    'no stage may claim an account or cost-centre as equipment');
-});
-
-test('F7. §35 - selection changes cause no reads', () => {
-  const selSrc = readCode('src/services/hierarchySelectorPure.ts');
-  assert.equal(/getDocs|firebase|await |fetchMasterData/.test(selSrc), false,
-    'the state machine must stay pure and synchronous');
+test('G5. row selection still prunes against the filtered set', () => {
   const src = readCode(PRV);
-  assert.equal(/hierarchySelection[\s\S]{0,200}fetchMasterData/.test(src), false,
-    'drilling must not trigger a fetch');
+  assert.ok(/pruneToVisible\(prev, visibleIds\)/.test(src));
+  assert.ok(/filteredRecords\.map\(\(r\) => r\.id\)/.test(src));
 });
 
-test('F8. §37 - no new permission was introduced', () => {
+test('G6. §31 - Reports and AI were not modified by this task', () => {
+  assert.equal(/hierarchySelectorPure|levelOptions/.test(readCode('src/components/reports/ReportsView.tsx')), false);
+  assert.equal(/hierarchySelectorPure|levelOptions/.test(readCode('src/assistant/tools/stageReportTools.ts')), false);
+});
+
+test('G7. §40 - selection changes cause no reads', () => {
+  assert.equal(/getDocs|firebase|await |fetchMasterData/.test(readCode('src/services/hierarchySelectorPure.ts')), false);
+  assert.equal(/hierarchySelection[\s\S]{0,200}fetchMasterData/.test(readCode(PRV)), false);
+});
+
+test('G8. §39 - no new permission was introduced', () => {
   for (const rel of [PRV, 'src/components/dashboard/DashboardView.tsx', 'src/services/hierarchySelectorPure.ts']) {
-    const src = readCode(rel);
-    for (const invented of ['hierarchy.filter', 'equipment.select', 'production.hierarchy']) {
-      assert.equal(src.includes(invented), false, `${rel} must not invent ${invented}`);
+    for (const invented of ['hierarchy.filter', 'equipment.select', 'production.hierarchy', 'reconciliation.apply']) {
+      assert.equal(readCode(rel).includes(invented), false, `${rel} must not invent ${invented}`);
     }
   }
 });

@@ -37,7 +37,7 @@ const DEPLOYMENT_ID_INJECTED = typeof __BUILD_DEPLOYMENT_ID__ === 'string' ? __B
 
 export const CURRENT_APP_VERSION: AppVersionInfo = {
   /** Set by the automatic release planner from the classified change set - see releasePlannerPure.ts. */
-  version: '3.13.0',
+  version: '3.14.0',
   buildId: BUILD_ID_INJECTED,
   buildTimestamp: BUILD_TIMESTAMP_INJECTED,
   gitCommit: COMMIT_SHA_INJECTED,
@@ -46,6 +46,16 @@ export const CURRENT_APP_VERSION: AppVersionInfo = {
   environment: 'production',
   releaseDate: '2026-08-22',
   changelog: [
+    {
+      version: '3.14.0',
+      date: '2026-09-12',
+      highlights: [
+        'مطابقة أكواد المعدات القديمة مع عقد التسلسل الهرمي بنفس الكود ونفس التصنيف',
+        'اختلاف الاسم لم يعد يعني سجلين مختلفين - والمطابقة غير المؤكدة تُعرض للمراجعة',
+        'العقدة الطرفية أصبحت هي المعدة نفسها: لا رسالة "لا توجد معدات" بلا سبب',
+        'تحديد متعدد في كل مستوى مع اتحاد الفروع ومنع التكرار'
+      ]
+    },
     {
       version: '3.13.0',
       date: '2026-09-12',

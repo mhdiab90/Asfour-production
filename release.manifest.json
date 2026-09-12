@@ -1,9 +1,9 @@
 {
   "_doc": "Release Manifest precursor. Describes WHAT is being released so the gate checks a committed declaration rather than whatever flags an operator typed. commitSha/buildId/deploymentId are left null until a release is cut - the gate fills the comparison from the build itself, and only enforces a field that is set here. This is NOT the Change Registry: no change IDs, no Firestore, no UI.",
-  "version": "3.13.0",
-  "releaseId": "REL-2026-0011",
+  "version": "3.14.0",
+  "releaseId": "REL-2026-0012",
   "changeIds": [
-    "MOD-0016"
+    "MOD-0017"
   ],
   "commitSha": null,
   "buildId": null,
@@ -26,7 +26,8 @@
     "reports-hierarchy-scope",
     "productionCenters",
     "dashboard-equipment-filter",
-    "production-records-hierarchy-path"
+    "production-records-hierarchy-path",
+    "equipment-reconciliation-status"
   ],
   "_markerNotes": {
     "ai-provider-management": "AI Provider Management route - absent means the AI Assistant closure was dropped",
@@ -46,7 +47,8 @@
     "reports-hierarchy-scope": "The Reports production-centre scope selector - absent means hierarchy-aware reporting was dropped",
     "productionCenters": "The assistant generateReport hierarchy parameter - absent means the AI hierarchy integration was dropped",
     "dashboard-equipment-filter": "The stage-dependent Dashboard equipment selector - absent means it reverted to the fixed press list",
-    "production-records-hierarchy-path": "The Production Records drill-down breadcrumb - absent means the multi-level selector was dropped"
+    "production-records-hierarchy-path": "The Production Records drill-down breadcrumb - absent means the multi-level selector was dropped",
+    "equipment-reconciliation-status": "The Master Data legacy-code reconciliation dry run - absent means the reconciliation audit was dropped"
   },
   "tests": [
     "buildIdentity",
@@ -63,11 +65,13 @@
     "equipmentHierarchyLink",
     "hierarchyReporting",
     "aiHierarchyQuery",
-    "hierarchySelectorUi"
+    "hierarchySelectorUi",
+    "legacyHierarchyReconciliation"
   ],
   "deployCommand": "firebase deploy --only hosting --project asfourproduction-70e6e",
   "treeClean": true,
   "_changeNotes": {
+    "MOD-0017": "Legacy code reconciliation and true multi-select hierarchy. A new pure engine matches legacy equipment records to imported hierarchy nodes by exact business code WITHIN the same category, returning MATCHED / AMBIGUOUS / UNMATCHED; names are carried into the report but never compared, so differing names for the same code reconcile and a shared code across categories never does. Only an unambiguous one-to-one match is safe to persist, and the release writes nothing - Master Data shows the dry run. The derived link also completes equipment links in memory so a hierarchy leaf resolves to its legacy equipment immediately, which is what ends the false \"no equipment\" on a childless node: having no children is no longer treated as having no equipment. The selector became multi-select at EVERY level - each level is the deduplicated union of the children of what is ticked above it, a deeper tick narrows (so parent plus child cannot double-count), unticking a parent cascades its descendants away, and select-all covers only the nodes visible at that level. Reports, AI and the Dashboard inherit the corrected links through the one shared resolver",
     "MOD-0016": "Hierarchical production filter UI. Production Records gains a multi-level production-centre drill-down: level 1 is the hierarchy's real roots, each later level is exactly the chosen node's children, depth is whatever the data has, and equipment is ticked with checkboxes at the current branch. Stopping at any level means the whole branch below it; ticking narrows to exactly what is ticked and can never widen. Navigation discards deeper levels and ticks from the branch being left, so a stale selection cannot leak across branches. The Dashboard equipment selector now follows the selected stage instead of always listing presses - options come from a registry declaration of which equipment each stage actually records, read off the entry forms: only pressing writes pressId/furnaceId, so every other stage now says it has no equipment rather than offering a filter that could only ever match nothing; an incompatible selection is cleared when the stage changes. Both screens resolve through the one shared resolver and agree on the same equipment ids. filterUniversalRecords gained an additive furnaceId clause that Reports never set",
     "AI-0015": "AI hierarchy integration. A new deterministic lookup service (hierarchyNodeLookupPure) resolves production-centre text to a hierarchy node by exact code, then exact canonical name, then exact localized name, returning FOUND / AMBIGUOUS / NOT_FOUND. Ambiguous names ask which branch was meant using real paths; unknown names say so rather than answering zero; fuzzy matching is offered only as a did-you-mean suggestion and never resolves. The EXISTING generateReport tool gained one optional productionCenters field and routes the resolved node ids through the same shared equipment resolver and the same filterUniversalRecords the Reports screen uses, so assistant totals equal report totals by construction rather than by coincidence. No provider, no Global AI Chat, no aggregation formula, no permission, no Firestore rule and no production record changed; the legacy productionQueryTools path is deliberately left out because it aggregates differently",
     "UI-0014": "Hierarchy-aware reporting. The Reports screen gains a production-centre scope selector: choosing a node scopes the report to that node plus every descendant node's linked equipment, resolved once through the shared resolver and deduplicated before any record is examined, so overlapping branches never double-count. A stage record's equipment is read from rawData (pressId/furnaceId/machineId/equipmentId), ALL of them rather than the first, so a record naming both a press and a furnace belongs to both branches yet is still counted once. The scope is an additional AND beside date, stage, product, customer, employee and shift; with no selection the filtering is the identity case and every report is byte-identical to before. Aggregation formulas, exports and permissions are untouched - export already flows from the same filtered dataset. Records from the seven stages that carry no equipment reference are excluded from a press/furnace scope rather than silently kept, because membership must be provable. No AI, Firestore rule, schema or production document changed",
@@ -77,8 +81,8 @@
     "UI-0010": "Financial Accounts import opens a dedicated Master Data importer instead of the Historical Excel Import screen: the action no longer navigates to the bulk-entry route (which App.tsx renders as DataImportView); a new in-place modal reuses the existing financialAccounts schema, XLSX reader, row validation, duplicate detection and chunked commit, adds sheet selection and parent/cycle relationship checks, and keeps partial import so invalid rows never block valid ones",
     "DB-0009": "Category-first Master Data over an extensible registry; Financial Accounts master data with Excel import and hierarchical editing (new financialAccounts collection and its Firestore rule); one shared generic hierarchy resolver reused by Master Data, Production Review and production aggregation; hierarchical cost-centre editing with cycle, self-parent and unknown-parent protection"
   },
-  "previousVersion": "3.12.0",
+  "previousVersion": "3.13.0",
   "versionBump": "MINOR",
   "classificationConfidence": "HIGH",
-  "previousReleaseId": "REL-2026-0010"
+  "previousReleaseId": "REL-2026-0011"
 }

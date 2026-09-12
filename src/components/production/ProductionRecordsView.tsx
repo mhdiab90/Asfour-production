@@ -60,17 +60,30 @@ import { buildHierarchyIndex, getNodePath, buildEquipmentByNode } from '../../se
 import {
   EMPTY_HIERARCHY_SELECTION,
   levelOptions,
-  selectAtLevel,
-  goBack,
+  toggleAtLevel,
+  selectAllAtLevel,
+  clearLevel,
   clearSelection,
-  currentNodeId,
+  effectiveLevel,
   equipmentUnderSelection,
   toggleEquipment,
   selectAllEquipment,
   deselectAllEquipment,
   resolveSelectedEquipment,
-  selectionPathLabels,
+  selectionLabels,
 } from '../../services/hierarchySelectorPure';
+/*
+ * Legacy code <-> hierarchy reconciliation, applied in memory.
+ *
+ * A press that carries no explicit hierarchyNodeId but shares its business code
+ * with exactly one hierarchy node is linked for resolution purposes, so a leaf
+ * resolves to its equipment without waiting for an administrator to persist the
+ * link. An explicitly stored link always wins.
+ */
+import {
+  reconcileLegacyWithHierarchy,
+  applyReconciliationToEquipment,
+} from '../../services/legacyHierarchyReconciliationPure';
 /*
  * Row selection reuses the SAME primitives the Data Review screen already uses -
  * there is one selection architecture in this codebase, not two. These are pure
@@ -199,10 +212,24 @@ export const ProductionRecordsView: React.FC<ProductionRecordsViewProps> = ({ on
    * and the node tree. Nothing here reads Firestore - both lists are already
    * loaded for the selector.
    */
-  const equipmentLinks = useMemo(
-    () => [...presses, ...furnaces].map((e) => ({ id: e.id, hierarchyNodeId: e.hierarchyNodeId })),
-    [presses, furnaces],
-  );
+  /**
+   * Equipment, with hierarchy links completed from the code reconciliation.
+   *
+   * The stored link is authoritative wherever it exists; the code match only
+   * fills gaps. Same code AND same category, exactly one candidate each side -
+   * anything ambiguous is left unlinked rather than guessed.
+   */
+  const equipmentLinks = useMemo(() => {
+    const raw = [
+      ...presses.map((e) => ({ id: String(e.id ?? ''), code: String(e.code ?? ''), categoryId: 'presses', hierarchyNodeId: e.hierarchyNodeId })),
+      ...furnaces.map((e) => ({ id: String(e.id ?? ''), code: String(e.code ?? ''), categoryId: 'furnaces', hierarchyNodeId: (e as any).hierarchyNodeId })),
+    ];
+    const report = reconcileLegacyWithHierarchy(
+      raw,
+      hierarchyNodes.map((h) => ({ id: h.id, code: h.sheet1Code, name: h.name, type: h.type })),
+    );
+    return applyReconciliationToEquipment(raw, report).map((e) => ({ id: e.id, hierarchyNodeId: e.hierarchyNodeId }));
+  }, [presses, furnaces, hierarchyNodes]);
 
   /*
    * The codes offered for the selected category.
@@ -276,9 +303,9 @@ export const ProductionRecordsView: React.FC<ProductionRecordsViewProps> = ({ on
     [hierarchyIndex, equipmentByNode, hierarchySelection],
   );
 
-  /** Readable breadcrumb - labels from the data, never a constant. */
+  /** Readable labels for whatever is in play. From the data, never a constant. */
   const hierarchyCrumbs = useMemo(
-    () => selectionPathLabels(hierarchyIndex, hierarchySelection, (x: any) => x.name || x.sheet1Code || x.id),
+    () => selectionLabels(hierarchyIndex, hierarchySelection, (x: any) => x.name || x.sheet1Code || x.id),
     [hierarchyIndex, hierarchySelection],
   );
 
@@ -532,49 +559,81 @@ export const ProductionRecordsView: React.FC<ProductionRecordsViewProps> = ({ on
                 <span className="text-[11px] font-bold text-slate-500">المراكز الإنتاجية</span>
                 {hierarchyCrumbs.length > 0 && (
                   <span id="production-records-hierarchy-path" className="text-[11px] font-bold text-sky-700">
-                    {hierarchyCrumbs.join(' ← ')}
+                    {hierarchyCrumbs.join(' + ')}
                   </span>
                 )}
-                {hierarchySelection.path.length > 0 && (
-                  <>
-                    <button
-                      type="button"
-                      onClick={() => setHierarchySelection(goBack(hierarchySelection))}
-                      className="px-2 py-1 text-[11px] font-bold text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-lg cursor-pointer"
-                    >
-                      رجوع مستوى
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setHierarchySelection(clearSelection())}
-                      className="px-2 py-1 text-[11px] font-bold text-amber-700 hover:text-amber-900 cursor-pointer"
-                    >
-                      مسح الاختيار
-                    </button>
-                  </>
+                {effectiveLevel(hierarchySelection) > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => setHierarchySelection(clearSelection())}
+                    className="px-2 py-1 text-[11px] font-bold text-amber-700 hover:text-amber-900 cursor-pointer"
+                  >
+                    مسح الاختيار
+                  </button>
                 )}
               </div>
 
-              <div className="flex flex-wrap gap-2">
+              {/*
+                One checkbox column per level. Level 1 is the hierarchy's roots;
+                every later level is the union of the children of whatever is
+                ticked above it, so ticking two sibling branches shows both
+                branches' children and nothing else.
+
+                Ticking deeper NARROWS - which is also why a parent and its own
+                child can never double-count.
+              */}
+              <div className="flex flex-wrap gap-3 items-start">
                 {hierarchyLevels.map((lvl) => (
-                  <select
+                  <div
                     key={lvl.level}
                     id={`production-records-hierarchy-level-${lvl.level}`}
-                    value={lvl.selectedId || ''}
-                    onChange={(e) => setHierarchySelection(selectAtLevel(hierarchySelection, lvl.level, e.target.value || null))}
-                    className="bg-slate-50 border border-slate-200 rounded-xl px-2.5 py-1.5 text-xs font-semibold text-slate-700 min-w-[140px]"
+                    className="min-w-[160px] max-w-[240px] border border-slate-200 rounded-xl p-2 bg-slate-50/60"
                   >
-                    <option value="">{`المستوى ${lvl.level} - الكل`}</option>
-                    {lvl.optionIds.map((id) => {
-                      const node: any = hierarchyIndex.byId.get(id);
-                      return <option key={id} value={id}>{node?.name || node?.sheet1Code || id}</option>;
-                    })}
-                  </select>
+                    <div className="flex items-center justify-between gap-1 mb-1">
+                      <span className="text-[10px] font-black text-slate-600">{`المستوى ${lvl.level}`}</span>
+                      <span className="text-[10px] font-bold text-sky-700">{`المحدد: ${lvl.selectedIds.length}`}</span>
+                    </div>
+                    <div className="flex gap-1 mb-1">
+                      <button
+                        type="button"
+                        onClick={() => setHierarchySelection(selectAllAtLevel(hierarchyIndex, hierarchySelection, lvl.level))}
+                        className="px-1.5 py-0.5 text-[10px] font-bold text-slate-700 bg-slate-100 hover:bg-slate-200 rounded cursor-pointer"
+                      >
+                        تحديد الكل
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setHierarchySelection(clearLevel(hierarchyIndex, hierarchySelection, lvl.level))}
+                        disabled={lvl.selectedIds.length === 0}
+                        className="px-1.5 py-0.5 text-[10px] font-bold text-slate-700 bg-slate-100 hover:bg-slate-200 disabled:opacity-50 rounded cursor-pointer"
+                      >
+                        مسح
+                      </button>
+                    </div>
+                    <div className="max-h-32 overflow-y-auto space-y-0.5">
+                      {lvl.optionIds.map((id) => {
+                        const node: any = hierarchyIndex.byId.get(id);
+                        return (
+                          <label key={id} className="flex items-center gap-1.5 text-[11px] font-semibold text-slate-700 cursor-pointer">
+                            <input
+                              type="checkbox"
+                              className="w-3.5 h-3.5 accent-sky-600 cursor-pointer shrink-0"
+                              checked={lvl.selectedIds.includes(id)}
+                              onChange={() => setHierarchySelection(toggleAtLevel(hierarchyIndex, hierarchySelection, lvl.level, id))}
+                            />
+                            <span className="truncate" title={node?.name || node?.sheet1Code || id}>
+                              {node?.name || node?.sheet1Code || id}
+                            </span>
+                          </label>
+                        );
+                      })}
+                    </div>
+                  </div>
                 ))}
               </div>
 
-              {/* Equipment checkboxes for the current branch. */}
-              {currentNodeId(hierarchySelection) && (
+              {/* Equipment for whatever is in play. A leaf IS its equipment. */}
+              {effectiveLevel(hierarchySelection) > 0 && (
                 <div className="space-y-1.5">
                   <div className="flex items-center gap-2 flex-wrap text-[11px]">
                     <span className="font-bold text-slate-500">
@@ -601,7 +660,9 @@ export const ProductionRecordsView: React.FC<ProductionRecordsViewProps> = ({ on
                     )}
                   </div>
                   {branchEquipment.length === 0 ? (
-                    <p className="text-[11px] text-amber-700 font-bold">لا توجد معدات مرتبطة بهذا الفرع في البيانات الأساسية.</p>
+                    <p className="text-[11px] text-amber-700 font-bold">
+                      لا توجد معدة مرتبطة بالاختيار الحالي - لا بالعقدة نفسها ولا بأي فرع تابع لها. يمكن ربط المعدة من البيانات الأساسية أو بمطابقة الكود.
+                    </p>
                   ) : (
                     <div className="flex flex-wrap gap-x-4 gap-y-1 max-h-28 overflow-y-auto">
                       {branchEquipment.map((id) => (
@@ -710,7 +771,7 @@ export const ProductionRecordsView: React.FC<ProductionRecordsViewProps> = ({ on
         </div>
 
         {/* Clear filter shortcut */}
-        {(searchQuery || filterShift !== 'all' || filterCodes.length > 0 || hierarchySelection.path.length > 0 || filterProduct !== 'all' || startDate || endDate) && (
+        {(searchQuery || filterShift !== 'all' || filterCodes.length > 0 || effectiveLevel(hierarchySelection) > 0 || filterProduct !== 'all' || startDate || endDate) && (
           <div className="flex justify-end pt-1">
             <button
               type="button"
