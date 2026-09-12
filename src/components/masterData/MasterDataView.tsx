@@ -80,6 +80,27 @@ import { validateAccountForSave } from '../../services/financialAccountService';
 import { FinancialAccountsImportModal } from './FinancialAccountsImportModal';
 import { useAuth } from '../../context/AuthContext';
 /*
+ * The three-panel organisation. Selection state only - every label, collection
+ * and code field still comes from the shared registry, and the 5/6/7/8/9
+ * cost-centre rule is the existing one from the Sheet1 import, not a new one.
+ */
+import {
+  EMPTY_PANEL_SELECTION,
+  panelCategories,
+  toggleCategory,
+  selectAllCategories,
+  clearCategories,
+  setActiveCategory,
+  isCategorySelected,
+  isEmptyState,
+  costCenterSubCategories,
+  filterByCostCenterSubCategories,
+  costCenterSubCategoryCounts,
+  selectAllSubCategories,
+  toggleSubCategory,
+  COST_CENTER_CATEGORY_ID,
+} from '../../services/masterDataPanelsPure';
+/*
  * Equipment -> hierarchy linking.
  *
  * The nodes come from the EXISTING reader (listCostCenterHierarchyNodes), which
@@ -229,6 +250,11 @@ export const MasterDataView: React.FC<MasterDataViewProps> = ({ onNavigate }) =>
    */
   const [hierarchyNodes, setHierarchyNodes] = useState<CostCenterHierarchyRecord[]>([]);
   const [isReconcileOpen, setIsReconcileOpen] = useState<boolean>(false);
+  /** Area 1 / Area 2: which categories are in play, and which one Area 3 shows. */
+  const [panelSelection, setPanelSelection] = useState(EMPTY_PANEL_SELECTION);
+  const [isCategoryMenuOpen, setIsCategoryMenuOpen] = useState<boolean>(false);
+  /** Cost-centre sub-categories. Empty = no narrowing, as everywhere else. */
+  const [costCenterDigits, setCostCenterDigits] = useState<string[]>([]);
   const [isApplyingLinks, setIsApplyingLinks] = useState<boolean>(false);
   const [applyOutcome, setApplyOutcome] = useState<ApplyLinksOutcome | null>(null);
   /** Bumped after a successful apply so the equipment list is re-read and the panel recomputes. */
@@ -275,6 +301,43 @@ export const MasterDataView: React.FC<MasterDataViewProps> = ({ onNavigate }) =>
     { id: 'shifts', label: language === 'ar' ? 'ورديات العمل' : 'Shifts', icon: Clock },
     { id: 'financialAccounts', label: language === 'ar' ? 'الحسابات المالية' : 'Financial Accounts', icon: Building2 },
   ];
+
+  /** The seven top-level categories, straight from the registry. */
+  const areaCategories = useMemo(() => panelCategories(), []);
+
+  /**
+   * Icons come from the existing tab definitions - §19 asks for the current
+   * visual language, so nothing new is introduced here.
+   */
+  const iconForCategory = (categoryId: string): React.ElementType => {
+    const category = areaCategories.find((c) => c.id === categoryId);
+    const tab = tabs.find((t) => t.id === (category?.tab as MasterDataTab));
+    return tab?.icon ?? Layers;
+  };
+
+  const labelForCategory = (categoryId: string): string => {
+    const category = areaCategories.find((c) => c.id === categoryId);
+    if (!category) return categoryId;
+    return language === 'ar' ? category.labelAr : category.labelEn;
+  };
+
+  /*
+   * Area 3 follows the active category. `activeTab` stays the engine every
+   * existing behaviour already depends on - the table, the Add/Edit modal, the
+   * importers, export and the per-row actions - so none of them had to change.
+   */
+  useEffect(() => {
+    const category = areaCategories.find((c) => c.id === panelSelection.activeCategoryId);
+    if (category?.tab) setActiveTab(category.tab as MasterDataTab);
+  }, [panelSelection.activeCategoryId, areaCategories]);
+
+  const isCostCenterActive = panelSelection.activeCategoryId === COST_CENTER_CATEGORY_ID;
+
+  /** Counts per 5/6/7/8/9, computed from the rows already loaded - no extra read. */
+  const costCenterCounts = useMemo(
+    () => (isCostCenterActive ? costCenterSubCategoryCounts(items, 'code') : null),
+    [isCostCenterActive, items],
+  );
 
   // Subscribe to Product Types (always kept live for parser)
   useEffect(() => {
@@ -613,6 +676,18 @@ export const MasterDataView: React.FC<MasterDataViewProps> = ({ onNavigate }) =>
       return true;
     });
   }, [items, statusFilter, prefixFilter, searchQuery, activeTab]);
+
+  /**
+   * Area 3's rows.
+   *
+   * The cost-centre sub-filter is one more AND on top of the existing search,
+   * status and prefix filters - never a replacement. With nothing ticked it is
+   * the identity, so every other category behaves exactly as before.
+   */
+  const visibleItems = useMemo(
+    () => (isCostCenterActive ? filterByCostCenterSubCategories(filteredItems, costCenterDigits, 'code') : filteredItems),
+    [isCostCenterActive, filteredItems, costCenterDigits],
+  );
 
   const handleOpenAdd = () => {
     setEditingItem(null);
@@ -1084,7 +1159,7 @@ export const MasterDataView: React.FC<MasterDataViewProps> = ({ onNavigate }) =>
   const handleExport = () => {
     const currentTabObj = tabs.find((t) => t.id === activeTab);
     exportMasterDataToExcel(
-      filteredItems,
+      visibleItems,
       currentTabObj?.label || activeTab,
       `بيانات_${currentTabObj?.label || activeTab}.xlsx`
     );
@@ -1177,44 +1252,192 @@ export const MasterDataView: React.FC<MasterDataViewProps> = ({ onNavigate }) =>
         </div>
       </div>
 
-      {/* Quick category chips - the same registry, one click instead of a dropdown. */}
-      <div className="bg-white rounded-2xl p-2 border border-slate-200 shadow-xs flex items-center gap-1.5 overflow-x-auto">
-        {tabs.map((tab) => {
-          const Icon = tab.icon;
-          const isActive = activeTab === tab.id;
-          return (
-            <button
-              key={tab.id}
-              id={`tab-${tab.id}`}
-              type="button"
-              onClick={() => {
-                setActiveTab(tab.id);
-                setSelectedCodes([]);
-                setSearchQuery('');
-                setStatusFilter('all');
-                setPrefixFilter('all');
-              }}
-              className={`flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-bold transition-all shrink-0 cursor-pointer ${
-                isActive
-                  ? 'bg-amber-400 text-slate-950 shadow-xs'
-                  : 'text-slate-600 hover:text-slate-900 hover:bg-slate-50'
-              }`}
-            >
-              <Icon className={`w-4 h-4 ${isActive ? 'text-slate-950' : 'text-slate-500'}`} />
-              <span>{tab.label}</span>
-              <span
-                className={`text-[10px] px-1.5 py-0.2 rounded font-semibold ${
-                  isActive ? 'bg-slate-900 text-amber-300' : 'bg-slate-100 text-slate-500'
-                }`}
-              >
-                {activeTab === tab.id ? items.length : ''}
-              </span>
-            </button>
-          );
-        })}
+      {/*
+        AREA 1 - Code Type.
 
+        A multi-select with checkboxes, replacing the single-choice chip strip.
+        The list is the registry's, so a category is added by editing the
+        registry rather than this component.
+      */}
+      <div className="bg-white rounded-2xl p-3 border border-slate-200 shadow-xs">
+        <div className="flex items-center justify-between gap-3 flex-wrap">
+          <span className="text-xs font-black text-slate-700">{language === 'ar' ? 'نوع الأكواد' : 'Code Type'}</span>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => setPanelSelection(selectAllCategories(panelSelection))}
+              className="px-2.5 py-1 text-[11px] font-bold text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-lg cursor-pointer"
+            >
+              {language === 'ar' ? 'تحديد الكل' : 'Select all'}
+            </button>
+            <button
+              type="button"
+              onClick={() => { setPanelSelection(clearCategories()); setCostCenterDigits([]); }}
+              disabled={panelSelection.selectedCategoryIds.length === 0}
+              className="px-2.5 py-1 text-[11px] font-bold text-slate-700 bg-slate-100 hover:bg-slate-200 disabled:opacity-50 rounded-lg cursor-pointer"
+            >
+              {language === 'ar' ? 'مسح' : 'Clear'}
+            </button>
+            <button
+              id="master-data-code-type-toggle"
+              type="button"
+              onClick={() => setIsCategoryMenuOpen((v) => !v)}
+              className="px-3 py-1.5 text-[11px] font-black text-slate-950 bg-amber-400 hover:bg-amber-500 rounded-lg cursor-pointer"
+            >
+              {isCategoryMenuOpen
+                ? (language === 'ar' ? 'إخفاء القائمة' : 'Hide list')
+                : (language === 'ar' ? `اختيار الفئات (${panelSelection.selectedCategoryIds.length})` : `Choose categories (${panelSelection.selectedCategoryIds.length})`)}
+            </button>
+          </div>
+        </div>
+
+        {/*
+          Kept open until dismissed, so several categories can be ticked in one
+          visit rather than reopening the menu for each.
+        */}
+        {isCategoryMenuOpen && (
+          <div id="master-data-code-type-menu" className="mt-2 pt-2 border-t border-slate-100 grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-x-4 gap-y-1.5">
+            {areaCategories.map((category) => (
+              <label key={category.id} className="flex items-center gap-2 text-xs font-semibold text-slate-700 cursor-pointer">
+                <input
+                  type="checkbox"
+                  className="w-4 h-4 accent-amber-500 cursor-pointer shrink-0"
+                  checked={isCategorySelected(panelSelection, category.id)}
+                  onChange={() => {
+                    setPanelSelection((prev) => toggleCategory(prev, category.id));
+                    if (category.id === COST_CENTER_CATEGORY_ID) setCostCenterDigits([]);
+                  }}
+                />
+                <span className="truncate">{language === 'ar' ? category.labelAr : category.labelEn}</span>
+              </label>
+            ))}
+          </div>
+        )}
       </div>
 
+      {/*
+        AREA 2 - the selected categories, and only those.
+
+        Unticking one removes its button here; if it was the active one, focus
+        moves to another selected category so Area 3 never shows something that
+        is no longer on this row.
+      */}
+      <div id="master-data-selected-categories" className="bg-white rounded-2xl p-2 border border-slate-200 shadow-xs">
+        {panelSelection.selectedCategoryIds.length === 0 ? (
+          <p className="px-2 py-1.5 text-[11px] font-bold text-slate-400">
+            {language === 'ar' ? 'لم يتم اختيار أي فئة بعد.' : 'No category selected yet.'}
+          </p>
+        ) : (
+          <div className="flex items-center gap-1.5 overflow-x-auto">
+            {panelSelection.selectedCategoryIds.map((categoryId) => {
+              const Icon = iconForCategory(categoryId);
+              const isActive = panelSelection.activeCategoryId === categoryId;
+              return (
+                <button
+                  key={categoryId}
+                  type="button"
+                  onClick={() => setPanelSelection((prev) => setActiveCategory(prev, categoryId))}
+                  className={`flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-bold transition-all shrink-0 cursor-pointer ${
+                    isActive ? 'bg-amber-400 text-slate-950 shadow-xs' : 'text-slate-600 hover:text-slate-900 hover:bg-slate-50'
+                  }`}
+                >
+                  <Icon className={`w-4 h-4 ${isActive ? 'text-slate-950' : 'text-slate-500'}`} />
+                  <span>{labelForCategory(categoryId)}</span>
+                </button>
+              );
+            })}
+          </div>
+        )}
+      </div>
+
+      {/*
+        AREA 3 - the active category's data.
+
+        An explicit empty state rather than a stale table: with nothing selected
+        the rows below would otherwise still be whatever was last loaded.
+      */}
+      {isEmptyState(panelSelection) && (
+        <div id="master-data-empty-state" className="bg-white rounded-2xl p-10 border border-slate-200 shadow-xs text-center">
+          <p className="text-sm font-bold text-slate-700">
+            {language === 'ar' ? 'اختر نوع أكواد لعرض البيانات' : 'Choose a code type to see its data'}
+          </p>
+          <p className="text-xs text-slate-400 mt-1">
+            {language === 'ar'
+              ? 'يمكن اختيار أكثر من فئة، ثم التنقل بينها من شريط الفئات المختارة.'
+              : 'More than one category can be selected, then switched between from the selected-categories row.'}
+          </p>
+        </div>
+      )}
+
+      {/*
+        Cost-centre sub-categories.
+
+        The 5/6/7/8/9 split is the EXISTING rule from the Sheet1 import - the
+        root is the code's first character - so a code outside that range, or
+        one with a leading zero like "0501", is counted as unclassified rather
+        than forced into a bucket. This is a Cost Centre classification and has
+        nothing to do with the Production Equipment hierarchy.
+      */}
+      {isCostCenterActive && costCenterCounts && (
+        <div id="cost-center-subcategories" className="bg-white rounded-2xl p-3 border border-slate-200 shadow-xs space-y-2">
+          <div className="flex items-center justify-between gap-3 flex-wrap">
+            <span className="text-xs font-black text-slate-700">
+              {language === 'ar' ? 'تصنيفات مراكز التكلفة' : 'Cost centre classifications'}
+            </span>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => setCostCenterDigits(selectAllSubCategories())}
+                className="px-2.5 py-1 text-[11px] font-bold text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-lg cursor-pointer"
+              >
+                {language === 'ar' ? 'تحديد الكل' : 'Select all'}
+              </button>
+              <button
+                type="button"
+                onClick={() => setCostCenterDigits([])}
+                disabled={costCenterDigits.length === 0}
+                className="px-2.5 py-1 text-[11px] font-bold text-slate-700 bg-slate-100 hover:bg-slate-200 disabled:opacity-50 rounded-lg cursor-pointer"
+              >
+                {language === 'ar' ? 'إلغاء التحديد' : 'Clear'}
+              </button>
+            </div>
+          </div>
+          <div className="flex flex-wrap gap-x-4 gap-y-1.5">
+            {costCenterSubCategories().map((sub) => {
+              const count = costCenterCounts.byDigit[sub.digit] ?? 0;
+              return (
+                <label
+                  key={sub.digit}
+                  className={`flex items-center gap-2 text-xs font-semibold cursor-pointer ${count === 0 ? 'text-slate-400' : 'text-slate-700'}`}
+                >
+                  <input
+                    type="checkbox"
+                    className="w-4 h-4 accent-amber-500 cursor-pointer shrink-0"
+                    checked={costCenterDigits.includes(sub.digit)}
+                    onChange={() => setCostCenterDigits((prev) => toggleSubCategory(prev, sub.digit))}
+                  />
+                  <span>{`${sub.digit} — ${sub.labelAr} (${count})`}</span>
+                </label>
+              );
+            })}
+          </div>
+          {costCenterCounts.unclassified > 0 && (
+            <p className="text-[10px] font-semibold text-amber-800">
+              {language === 'ar'
+                ? `${costCenterCounts.unclassified} سجل لا يبدأ كوده بأي من 5-9، ولذلك لا يظهر تحت أي تصنيف منها.`
+                : `${costCenterCounts.unclassified} record(s) have a code not starting with 5-9, so they appear under none of these classifications.`}
+            </p>
+          )}
+        </div>
+      )}
+
+      {/*
+        Area 3's controls and table. Hidden entirely while no category is
+        chosen - leaving them visible would show the previously loaded rows
+        under a heading that no longer applies.
+      */}
+      {!isEmptyState(panelSelection) && (
+      <>
       {/* Control Bar: Search, Filters, Add Button, Bulk Import Link, Excel Export */}
       <div className="bg-white rounded-2xl p-4 border border-slate-200 shadow-xs flex flex-col md:flex-row items-stretch md:items-center justify-between gap-3">
         {/* Search & Status Filter */}
@@ -1353,7 +1576,7 @@ export const MasterDataView: React.FC<MasterDataViewProps> = ({ onNavigate }) =>
             id="master-data-export-btn"
             type="button"
             onClick={handleExport}
-            disabled={filteredItems.length === 0}
+            disabled={visibleItems.length === 0}
             className="flex items-center gap-1.5 px-3 py-2 text-xs font-bold text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-xl transition-colors disabled:opacity-50 cursor-pointer"
           >
             <Download className="w-3.5 h-3.5" />
@@ -1413,7 +1636,7 @@ export const MasterDataView: React.FC<MasterDataViewProps> = ({ onNavigate }) =>
         */}
         <div className="px-4 py-3 border-b border-slate-100 flex items-center gap-2 flex-wrap text-xs">
           <span className="font-bold text-slate-600">
-            {language === 'ar' ? 'الظاهر' : 'Visible'}: <span className="text-slate-900">{filteredItems.length}</span>
+            {language === 'ar' ? 'الظاهر' : 'Visible'}: <span className="text-slate-900">{visibleItems.length}</span>
           </span>
           <span className="font-bold text-slate-600">
             {language === 'ar' ? 'المحدد' : 'Selected'}: <span className="text-sky-700">{selectedCodes.length}</span>
@@ -1421,8 +1644,8 @@ export const MasterDataView: React.FC<MasterDataViewProps> = ({ onNavigate }) =>
           <button
             id="master-data-select-all-btn"
             type="button"
-            disabled={filteredItems.length === 0}
-            onClick={() => setSelectedCodes([...new Set(filteredItems.map(codeOfItem).filter(Boolean))])}
+            disabled={visibleItems.length === 0}
+            onClick={() => setSelectedCodes([...new Set(visibleItems.map(codeOfItem).filter(Boolean))])}
             className="px-3 py-1.5 font-bold text-slate-700 bg-slate-100 hover:bg-slate-200 disabled:opacity-50 rounded-lg cursor-pointer"
           >
             {language === 'ar' ? 'تحديد الكل' : 'Select All'}
@@ -1455,7 +1678,7 @@ export const MasterDataView: React.FC<MasterDataViewProps> = ({ onNavigate }) =>
             <RefreshCw className="w-6 h-6 animate-spin mx-auto mb-2 text-amber-500" />
             <p className="text-xs font-semibold">{language === 'ar' ? 'جارٍ تحميل البيانات من Firestore...' : 'Loading data from Firestore...'}</p>
           </div>
-        ) : filteredItems.length === 0 ? (
+        ) : visibleItems.length === 0 ? (
           <div className="py-16 text-center text-slate-400">
             <AlertCircle className="w-8 h-8 mx-auto mb-2 text-slate-300" />
             <p className="text-sm font-bold text-slate-700">{language === 'ar' ? 'لا توجد سجلات مطابقة' : 'No matching records'}</p>
@@ -1472,11 +1695,11 @@ export const MasterDataView: React.FC<MasterDataViewProps> = ({ onNavigate }) =>
                     <input
                       type="checkbox"
                       aria-label={language === 'ar' ? 'تحديد كل الصفوف الظاهرة' : 'Select all visible rows'}
-                      checked={filteredItems.length > 0 && filteredItems.every((i) => selectedCodes.includes(codeOfItem(i)))}
+                      checked={visibleItems.length > 0 && visibleItems.every((i) => selectedCodes.includes(codeOfItem(i)))}
                       onChange={(e) =>
                         setSelectedCodes(
                           e.target.checked
-                            ? [...new Set(filteredItems.map(codeOfItem).filter(Boolean))]
+                            ? [...new Set(visibleItems.map(codeOfItem).filter(Boolean))]
                             : []
                         )
                       }
@@ -1574,7 +1797,7 @@ export const MasterDataView: React.FC<MasterDataViewProps> = ({ onNavigate }) =>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100 font-medium text-slate-700">
-                {filteredItems.map((item) => (
+                {visibleItems.map((item) => (
                   <tr key={item.id} className="hover:bg-slate-50/80 transition-colors">
                     <td className="px-3 py-3">
                       <input
@@ -1821,6 +2044,8 @@ export const MasterDataView: React.FC<MasterDataViewProps> = ({ onNavigate }) =>
           </div>
         )}
       </div>
+      </>
+      )}
 
       {/* Add / Edit Modal */}
       <Modal

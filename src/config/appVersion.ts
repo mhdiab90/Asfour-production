@@ -37,7 +37,7 @@ const DEPLOYMENT_ID_INJECTED = typeof __BUILD_DEPLOYMENT_ID__ === 'string' ? __B
 
 export const CURRENT_APP_VERSION: AppVersionInfo = {
   /** Set by the automatic release planner from the classified change set - see releasePlannerPure.ts. */
-  version: '3.16.0',
+  version: '3.17.0',
   buildId: BUILD_ID_INJECTED,
   buildTimestamp: BUILD_TIMESTAMP_INJECTED,
   gitCommit: COMMIT_SHA_INJECTED,
@@ -46,6 +46,16 @@ export const CURRENT_APP_VERSION: AppVersionInfo = {
   environment: 'production',
   releaseDate: '2026-08-22',
   changelog: [
+    {
+      version: '3.17.0',
+      date: '2026-09-12',
+      highlights: [
+        'تنظيم البيانات الأساسية في ثلاث مناطق: نوع الأكواد ثم الفئات المختارة ثم بيانات الفئة',
+        'اختيار أكثر من فئة بمربعات اختيار، والتنقل بينها من شريط الفئات المختارة',
+        'تصنيفات مراكز التكلفة 5/6/7/8/9 بنفس قاعدة الترحيل القائمة مع إمكانية اختيار أكثر من تصنيف',
+        'الأكواد التي لا تبدأ بـ 5-9 تُعرض كغير مصنفة بدلاً من إدراجها في تصنيف لا تنتمي إليه'
+      ]
+    },
     {
       version: '3.16.0',
       date: '2026-09-12',
