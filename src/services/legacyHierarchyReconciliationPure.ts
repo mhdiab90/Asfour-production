@@ -21,6 +21,9 @@
  *
  * THREE OUTCOMES, AND ONLY ONE OF THEM IS SAFE TO PERSIST.
  *   MATCHED    exactly one legacy record and exactly one node share the code
+ *   CONFLICT   the code points at one node, but the record is already linked to
+ *              a DIFFERENT one. Somebody made that link deliberately, so a code
+ *              match must never quietly replace it
  *   AMBIGUOUS  more than one candidate on either side - left for a human
  *   UNMATCHED  no counterpart - the record stays valid and simply unlinked
  *
@@ -67,6 +70,25 @@ export interface MatchedPair {
   reason: string;
 }
 
+/**
+ * A code match that contradicts an existing link.
+ *
+ * Reported, never applied. Overwriting would silently move a machine's history
+ * into another branch on the strength of a code, discarding whatever the person
+ * who set the original link knew.
+ */
+export interface ConflictMatch {
+  legacyId: string;
+  legacyCategory: string;
+  legacyCode: string;
+  legacyName: string;
+  /** What the record is linked to today. */
+  currentHierarchyNodeId: string;
+  /** What the code match would have pointed at. */
+  proposedHierarchyNodeId: string;
+  reason: string;
+}
+
 export interface AmbiguousMatch {
   code: string;
   category: string;
@@ -77,10 +99,17 @@ export interface AmbiguousMatch {
 
 export interface ReconciliationReport {
   matched: MatchedPair[];
+  conflicts: ConflictMatch[];
   ambiguous: AmbiguousMatch[];
   unmatchedLegacy: Array<{ id: string; code: string; name: string; category: string }>;
   unmatchedHierarchy: Array<{ id: string; code: string; name: string; type: string }>;
-  counts: { matched: number; ambiguous: number; unmatchedLegacy: number; unmatchedHierarchy: number };
+  counts: {
+    matched: number;
+    conflicts: number;
+    ambiguous: number;
+    unmatchedLegacy: number;
+    unmatchedHierarchy: number;
+  };
 }
 
 /**
@@ -138,6 +167,7 @@ export function reconcileLegacyWithHierarchy(
   const legacyByCodeCategory = groupBy(eligible, (l) => `${l.categoryId}::${normaliseCode(l.code)}`);
 
   const matched: MatchedPair[] = [];
+  const conflicts: ConflictMatch[] = [];
   const ambiguous: AmbiguousMatch[] = [];
   const unmatchedLegacy: ReconciliationReport['unmatchedLegacy'] = [];
   const consumedNodeIds = new Set<string>();
@@ -174,6 +204,23 @@ export function reconcileLegacyWithHierarchy(
     const record = records[0];
     const node = candidates[0];
     consumedNodeIds.add(node.id);
+
+    // Already linked somewhere ELSE: a deliberate decision the code match must
+    // not undo. Reported for review, and absent from the plan by construction.
+    const existing = String(record.hierarchyNodeId ?? '');
+    if (existing && existing !== node.id) {
+      conflicts.push({
+        legacyId: record.id,
+        legacyCategory: record.categoryId,
+        legacyCode: record.code,
+        legacyName: record.name ?? '',
+        currentHierarchyNodeId: existing,
+        proposedHierarchyNodeId: node.id,
+        reason: `code "${code}" points at a different node than the one already linked`,
+      });
+      continue;
+    }
+
     matched.push({
       legacyId: record.id,
       legacyCategory: record.categoryId,
@@ -194,11 +241,13 @@ export function reconcileLegacyWithHierarchy(
 
   return {
     matched,
+    conflicts,
     ambiguous,
     unmatchedLegacy,
     unmatchedHierarchy,
     counts: {
       matched: matched.length,
+      conflicts: conflicts.length,
       ambiguous: ambiguous.length,
       unmatchedLegacy: unmatchedLegacy.length,
       unmatchedHierarchy: unmatchedHierarchy.length,
@@ -214,10 +263,13 @@ export interface SafeLink {
 }
 
 /**
- * The links that are safe to write: unambiguous, and not already set.
+ * The links that are safe to write: unambiguous, unconflicted, not already set.
  *
- * Ambiguous rows are absent by construction - they never reach this function -
- * so there is no way for a caller to persist a guess.
+ * Ambiguous and conflicting rows never reach `matched`, so there is no way for
+ * a caller to persist a guess or an overwrite - the safety is structural rather
+ * than a filter someone could forget to apply.
+ *
+ * The length of this list IS the number of writes that will be attempted.
  */
 export function safeLinkPlan(report: ReconciliationReport): SafeLink[] {
   return report.matched
@@ -252,8 +304,15 @@ export function applyReconciliationToEquipment<T extends { id?: string; hierarch
 
 /** Bilingual one-line summary for the Master Data banner. */
 export function summariseReconciliation(report: ReconciliationReport, language: 'ar' | 'en'): string {
-  const { matched, ambiguous, unmatchedLegacy } = report.counts;
+  const { matched, conflicts, ambiguous, unmatchedLegacy } = report.counts;
   return language === 'ar'
-    ? `مطابق: ${matched} — يحتاج مراجعة: ${ambiguous} — بدون مقابل: ${unmatchedLegacy}`
-    : `Matched: ${matched} — needs review: ${ambiguous} — no counterpart: ${unmatchedLegacy}`;
+    ? `مطابق: ${matched} — تعارض: ${conflicts} — يحتاج مراجعة: ${ambiguous} — بدون مقابل: ${unmatchedLegacy}`
+    : `Matched: ${matched} — conflicts: ${conflicts} — needs review: ${ambiguous} — no counterpart: ${unmatchedLegacy}`;
+}
+
+/** The confirmation text shown before any write. The count is the exact write count. */
+export function applyConfirmationMessage(count: number, language: 'ar' | 'en'): string {
+  return language === 'ar'
+    ? `سيتم ربط ${count} سجلًا بالمراكز الهرمية المطابقة بناءً على تطابق الكود ونوع البيانات فقط. لن يتم تعديل السجلات التاريخية. هل تريد المتابعة؟`
+    : `${count} record(s) will be linked to their matching hierarchy nodes using exact code and category matches only. Historical production records will not be modified. Continue?`;
 }

@@ -94,7 +94,10 @@ import { listCostCenterHierarchyNodes, CostCenterHierarchyRecord } from '../../s
 import {
   reconcileLegacyWithHierarchy,
   summariseReconciliation,
+  safeLinkPlan,
+  applyConfirmationMessage,
 } from '../../services/legacyHierarchyReconciliationPure';
+import { applySafeLinks, describeApplyOutcome, ApplyLinksOutcome } from '../../services/legacyHierarchyLinkService';
 import { exportMasterDataToExcel } from '../../services/exportService';
 import { Badge } from '../common/Badge';
 import { Modal } from '../common/Modal';
@@ -224,6 +227,8 @@ export const MasterDataView: React.FC<MasterDataViewProps> = ({ onNavigate }) =>
    * only "not linked", rather than pretending there is something to choose.
    */
   const [hierarchyNodes, setHierarchyNodes] = useState<CostCenterHierarchyRecord[]>([]);
+  const [isApplyingLinks, setIsApplyingLinks] = useState<boolean>(false);
+  const [applyOutcome, setApplyOutcome] = useState<ApplyLinksOutcome | null>(null);
 
   /**
    * Master Data import permission - the EXISTING grants, no new key.
@@ -367,6 +372,60 @@ export const MasterDataView: React.FC<MasterDataViewProps> = ({ onNavigate }) =>
       hierarchyNodes.map((h) => ({ id: h.id, code: h.sheet1Code, name: h.name, type: h.type })),
     );
   }, [isEquipmentTab, items, activeTab, hierarchyNodes]);
+
+  /**
+   * The exact set of writes the Apply action would perform.
+   *
+   * Taken straight from the reconciliation - never recomputed with different
+   * rules at write time - so the number the user confirms is the number of
+   * documents touched. Conflicts and ambiguous codes cannot appear here: they
+   * never reach `matched`.
+   */
+  const plannedLinks = useMemo(
+    () => (reconciliation ? safeLinkPlan(reconciliation) : []),
+    [reconciliation],
+  );
+
+  /**
+   * Applies only the planned links.
+   *
+   * Each row is written on its own through the shared audited update, so a
+   * failure isolates to that row and the successful ones stay written. The
+   * current links are passed in so an already-correct row is skipped without a
+   * read, which is what makes running this twice a no-op.
+   */
+  const handleApplySafeLinks = async () => {
+    if (plannedLinks.length === 0) return;
+    const confirmed = window.confirm(applyConfirmationMessage(plannedLinks.length, language));
+    if (!confirmed) return;
+
+    setIsApplyingLinks(true);
+    setApplyOutcome(null);
+    try {
+      const currentLinks = new Map<string, string | null | undefined>(
+        items.map((i) => [String(i.id ?? ''), i.hierarchyNodeId]),
+      );
+      const outcome = await applySafeLinks(plannedLinks, { currentLinks });
+      setApplyOutcome(outcome);
+      // updateMasterDataItem already invalidated the collection cache; the live
+      // subscription below repaints the list with the new links.
+    } catch (err: any) {
+      setApplyOutcome({
+        successCount: 0,
+        failedCount: plannedLinks.length,
+        skippedCount: 0,
+        applied: [],
+        failed: plannedLinks.map((l) => ({
+          legacyId: l.legacyId, code: l.code, categoryId: l.categoryId,
+          error: String(err?.message ?? err), at: new Date().toISOString(),
+        })),
+        skipped: [],
+        plannedCount: plannedLinks.length,
+      });
+    } finally {
+      setIsApplyingLinks(false);
+    }
+  };
 
   /** How many equipment records on this tab still carry no link - §24/§26 reporting. */
   const unlinkedEquipmentCount = useMemo(
@@ -1292,6 +1351,54 @@ export const MasterDataView: React.FC<MasterDataViewProps> = ({ onNavigate }) =>
                 ? `أكواد تحتاج مراجعة يدوية (أكثر من مرشح): ${reconciliation.ambiguous.map((a) => a.code).join('، ')}`
                 : `Codes needing manual review (more than one candidate): ${reconciliation.ambiguous.map((a) => a.code).join(', ')}`}
             </p>
+          )}
+
+          {/*
+            Conflicts: the code points somewhere other than the link already
+            stored. Never applied - somebody set that link deliberately.
+          */}
+          {reconciliation.counts.conflicts > 0 && (
+            <p className="text-rose-800 font-semibold">
+              {language === 'ar'
+                ? `تعارض - مرتبطة سلفًا بعقدة مختلفة ولن تُستبدل تلقائيًا: ${reconciliation.conflicts.map((c) => c.legacyCode).join('، ')}`
+                : `Conflicts - already linked to a different node and never replaced automatically: ${reconciliation.conflicts.map((c) => c.legacyCode).join(', ')}`}
+            </p>
+          )}
+
+          {/* The only write action, and it applies the planned links only. */}
+          <div className="flex items-center gap-2 flex-wrap pt-1">
+            <button
+              id="apply-safe-links-btn"
+              type="button"
+              onClick={handleApplySafeLinks}
+              disabled={!canImportMasterData || plannedLinks.length === 0 || isApplyingLinks}
+              className="px-3 py-1.5 text-[11px] font-black text-slate-950 bg-amber-400 hover:bg-amber-500 disabled:opacity-50 rounded-lg cursor-pointer"
+              title={canImportMasterData
+                ? undefined
+                : (language === 'ar' ? 'تحتاج صلاحية تعديل البيانات الأساسية.' : 'Requires the Master Data edit permission.')}
+            >
+              {isApplyingLinks
+                ? (language === 'ar' ? 'جارٍ الربط...' : 'Linking...')
+                : (language === 'ar' ? `تطبيق المطابقات الآمنة (${plannedLinks.length})` : `Apply Safe Matches (${plannedLinks.length})`)}
+            </button>
+            <span className="text-[10px] font-semibold text-sky-800">
+              {language === 'ar'
+                ? 'يطبّق المطابقات المؤكدة فقط - لا يشمل المتعارضة ولا التي تحتاج مراجعة.'
+                : 'Applies confirmed matches only - never conflicts or rows needing review.'}
+            </span>
+          </div>
+
+          {applyOutcome && (
+            <div id="apply-safe-links-outcome" className="pt-1 space-y-0.5">
+              <p className="font-black text-emerald-900">{describeApplyOutcome(applyOutcome, language)}</p>
+              {applyOutcome.failedCount > 0 && (
+                <div className="max-h-24 overflow-y-auto text-[10px] text-rose-800 font-semibold">
+                  {applyOutcome.failed.map((f) => (
+                    <p key={f.legacyId}>{`${f.code}: ${f.error}`}</p>
+                  ))}
+                </div>
+              )}
+            </div>
           )}
           <p className="font-semibold text-sky-800">
             {language === 'ar'

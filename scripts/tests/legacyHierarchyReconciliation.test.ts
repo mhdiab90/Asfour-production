@@ -264,6 +264,145 @@ test('D3. §9 - Master Data shows the linked hierarchy path, not an id', () => {
   assert.ok(/id="equipment-hierarchy-node"/.test(src), 'the link is editable');
 });
 
+// ==================================================
+// E. CONFLICT PROTECTION + APPLY (§25 TEST 8-12, §10, §11, §12)
+//
+// The apply service writes through updateMasterDataItem, which reaches
+// Firebase, so its behaviour is exercised by re-implementing nothing: the
+// loop's CONTRACT is asserted here against the pure plan, and its wiring by
+// source inspection. What matters most is that a conflict can never reach the
+// plan at all - that safety is structural, not a check someone can skip.
+// ==================================================
+
+test('E1. TEST 9 / §10 / CRITICAL 4 - an existing DIFFERENT link is a CONFLICT, never overwritten', () => {
+  const report = rec.reconcileLegacyWithHierarchy(
+    [{ id: 'L-C', code: '5001', name: 'press', categoryId: 'presses', hierarchyNodeId: 'N-ELSEWHERE' }],
+    NODES,
+  );
+  assert.equal(report.matched.length, 0, 'it must not be reported as a plain match');
+  assert.equal(report.conflicts.length, 1);
+  assert.equal(report.conflicts[0].currentHierarchyNodeId, 'N-ELSEWHERE');
+  assert.equal(report.conflicts[0].proposedHierarchyNodeId, 'N-5001');
+  assert.deepEqual(rec.safeLinkPlan(report), [], 'and it can never reach the write plan');
+});
+
+test('E2. TEST 8 / §11 - an existing link to the SAME node is a no-op, not a rewrite', () => {
+  const report = rec.reconcileLegacyWithHierarchy(
+    [{ id: 'L-S', code: '5001', name: 'press', categoryId: 'presses', hierarchyNodeId: 'N-5001' }],
+    NODES,
+  );
+  assert.equal(report.conflicts.length, 0, 'agreeing with the code is not a conflict');
+  assert.equal(report.matched[0].alreadyLinked, true);
+  assert.deepEqual(rec.safeLinkPlan(report), [], 'nothing to write');
+});
+
+test('E3. §4/§28 - the safe count IS the planned write count', () => {
+  const report = run();
+  const plan = rec.safeLinkPlan(report);
+  // Every planned link corresponds to a matched, not-yet-linked row.
+  const writable = report.matched.filter((m: any) => !m.alreadyLinked);
+  assert.equal(plan.length, writable.length, 'the number confirmed is the number written');
+  for (const p of plan) {
+    assert.ok(report.matched.some((m: any) => m.legacyId === p.legacyId && m.hierarchyNodeId === p.hierarchyNodeId));
+  }
+});
+
+test('E4. §16 - the confirmation states the exact count and the safety guarantee', () => {
+  const ar = rec.applyConfirmationMessage(97, 'ar');
+  const en = rec.applyConfirmationMessage(97, 'en');
+  assert.ok(ar.includes('97') && en.includes('97'), 'the exact count appears');
+  assert.ok(ar.includes('لن يتم تعديل السجلات التاريخية'), 'and the historical-data guarantee');
+  assert.ok(/Historical production records will not be modified/.test(en));
+});
+
+test('E5. §5/CRITICAL 13 - the applier consumes the plan and never re-matches', () => {
+  const src = readCode('src/services/legacyHierarchyLinkService.ts');
+  assert.equal(/reconcileLegacyWithHierarchy|normaliseCode|groupBy/.test(src), false,
+    'the write phase must not contain matching logic of its own');
+  assert.ok(/plan: readonly SafeLink\[\]/.test(src), 'it takes the already-validated plan');
+});
+
+test('E6. §8/CRITICAL 12 - writes go through the shared audited update, not raw Firestore', () => {
+  const src = readCode('src/services/legacyHierarchyLinkService.ts');
+  assert.ok(/updateMasterDataItem\(collection, link\.legacyId, \{ hierarchyNodeId: link\.hierarchyNodeId \}\)/.test(src),
+    'one field, one document, through the shared path');
+  assert.equal(/getDocs|setDoc|writeBatch|deleteDoc|collection\(db/.test(src), false,
+    'no raw Firestore call may appear');
+  // The shared path is what carries audit + cache invalidation.
+  const svc = readCode('src/services/masterDataService.ts');
+  assert.ok(/logAuditAction\('UPDATE'/.test(svc) && /invalidateCachedCollection/.test(svc));
+});
+
+test('E7. TEST 11 / §12 / CRITICAL 9 - a failure isolates and never rolls back the rest', () => {
+  const src = readCode('src/services/legacyHierarchyLinkService.ts');
+  assert.ok(/for \(const link of plan\)/.test(src), 'one link at a time');
+  assert.ok(/try \{[\s\S]*?\} catch \(error: any\) \{/.test(src), 'each link has its own try/catch');
+  assert.equal(/rollback|revert|transaction|runTransaction/.test(src), false,
+    'there must be no rollback - 97 good links must survive 3 bad ones');
+  assert.ok(/successCount|failedCount|skippedCount/.test(src), 'all three outcomes are counted');
+});
+
+test('E8. TEST 12 / §11 - an already-correct row is skipped, so a second run writes nothing', () => {
+  const src = readCode('src/services/legacyHierarchyLinkService.ts');
+  assert.ok(/String\(current\) === link\.hierarchyNodeId/.test(src), 'the idempotency check exists');
+  assert.ok(/skipped\.push/.test(src), 'and is counted as skipped, not applied');
+  // The skip happens BEFORE the write.
+  const body = src.slice(src.indexOf('for (const link of plan)'));
+  assert.ok(body.indexOf('skipped.push') < body.indexOf('updateMasterDataItem'),
+    'the skip must short-circuit before writing');
+});
+
+test('E9. §7/CRITICAL 5 - the applier cannot touch a production document', () => {
+  const src = readCode('src/services/legacyHierarchyLinkService.ts');
+  for (const forbidden of ['pressId', 'furnaceId', 'productId', 'customerId', 'quantity', 'ProductionRecord', 'production']) {
+    assert.equal(src.includes(forbidden), false, `${forbidden} must not appear in the applier`);
+  }
+  // It writes exactly one field.
+  const writes = src.match(/updateMasterDataItem\([^)]*\)/g) || [];
+  assert.equal(writes.length, 1, 'exactly one write call site');
+  assert.ok(writes[0].includes('hierarchyNodeId'), 'writing only the link field');
+});
+
+test('E10. §24/CRITICAL 6 - nothing destructive exists in either module', () => {
+  for (const rel of ['src/services/legacyHierarchyLinkService.ts', 'src/services/legacyHierarchyReconciliationPure.ts']) {
+    const src = readCode(rel);
+    assert.equal(/deleteMasterDataItem|deleteDoc|\.remove\(|merge\(/.test(src), false,
+      `${rel} must not delete or merge`);
+  }
+});
+
+test('E11. §15/§22 - the action is gated on the existing Master Data permission', () => {
+  const src = readCode('src/components/masterData/MasterDataView.tsx');
+  assert.ok(/id="apply-safe-links-btn"/.test(src));
+  assert.ok(/disabled=\{!canImportMasterData \|\| plannedLinks\.length === 0/.test(src),
+    'no permission or no plan means no button');
+  for (const invented of ['reconciliation.apply', 'hierarchy.link', 'masterData.reconcile']) {
+    assert.equal(src.includes(invented), false, `must not invent the permission ${invented}`);
+  }
+});
+
+test('E12. §16 - the UI confirms before writing, and applies only the plan', () => {
+  const src = readCode('src/components/masterData/MasterDataView.tsx');
+  assert.ok(/window\.confirm\(applyConfirmationMessage\(plannedLinks\.length, language\)\)/.test(src),
+    'the confirmation uses the exact planned count');
+  assert.ok(/if \(!confirmed\) return;/.test(src), 'cancelling writes nothing');
+  assert.ok(/applySafeLinks\(plannedLinks/.test(src), 'only the plan is applied');
+  assert.ok(/safeLinkPlan\(reconciliation\)/.test(src), 'and the plan comes from the reconciliation');
+});
+
+test('E13. §28 - the outcome numbers reconcile against the plan', () => {
+  const src = readCode('src/services/legacyHierarchyLinkService.ts');
+  assert.ok(/plannedCount: plan\.length/.test(src), 'the outcome carries what was planned');
+  const line = rec.applyConfirmationMessage(3, 'en');
+  assert.ok(line.includes('3'));
+});
+
+test('E14. §29 - applying issues no per-record read', () => {
+  const src = readCode('src/services/legacyHierarchyLinkService.ts');
+  assert.equal(/getDoc\(|getDocs\(|fetchMasterData/.test(src), false,
+    'current links are passed in, never re-read per row');
+  assert.ok(/currentLinks\?: Map</.test(src), 'they arrive as a prebuilt map');
+});
 (async () => {
   await bootstrap();
   for (const { name, fn } of registered) {
