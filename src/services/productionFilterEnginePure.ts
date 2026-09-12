@@ -30,6 +30,7 @@
  */
 import {
   CodeSelection,
+  LegacyProductionField,
   MasterDataCategory,
   ProductionFilterField,
   getCategory,
@@ -89,6 +90,31 @@ export interface HierarchyContext {
 }
 
 /**
+ * Expands a selection through the hierarchy, when the category has one.
+ *
+ * Returns null for a flat category, so the caller falls through to matching the
+ * selected codes verbatim. Extracted so BOTH the stage-record resolver and the
+ * legacy-record resolver below share one expansion - there is exactly one
+ * descendant walk in this system, and it lives in hierarchyResolverPure.
+ */
+function expandSelectionCodes(
+  selection: CodeSelection,
+  category: MasterDataCategory,
+  hierarchy?: HierarchyContext,
+): { codes: string[]; expanded: boolean } | null {
+  if (!category.hierarchical) return null;
+  const index = hierarchy?.index ?? (hierarchy?.nodes ? buildHierarchyIndex(hierarchy.nodes) : null);
+  if (!index) return null;
+
+  const codes = resolveHierarchyCodes(index, selection.codes, { includeSelf: true });
+  // Codes the hierarchy does not know are still honoured verbatim rather than
+  // dropped - an unknown code must narrow, never silently widen.
+  const known = new Set(codes);
+  for (const c of selection.codes) if (!known.has(c)) codes.push(c);
+  return { codes, expanded: codes.length > selection.codes.length };
+}
+
+/**
  * Selection -> concrete filter.
  *
  * Order matters here: a category with no verified mapping is refused BEFORE any
@@ -119,24 +145,17 @@ export function resolveProductionFilter(
   if (!isNarrowing(selection)) return ALL_FILTER(selection.categoryId);
 
   // Hierarchical category: parent selection means parent + all descendants.
-  if (category.hierarchical) {
-    const index = hierarchy?.index ?? (hierarchy?.nodes ? buildHierarchyIndex(hierarchy.nodes) : null);
-    if (index) {
-      const codes = resolveHierarchyCodes(index, selection.codes, { includeSelf: true });
-      // Codes the hierarchy does not know are still honoured verbatim rather
-      // than dropped - an unknown code must narrow, never silently widen.
-      const known = new Set(codes);
-      for (const c of selection.codes) if (!known.has(c)) codes.push(c);
-      return {
-        applicable: true,
-        field: category.productionFilter,
-        matchValues: new Set(codes),
-        expandedFromHierarchy: codes.length > selection.codes.length,
-        resolvedCodeCount: codes.length,
-        reasonAr: `تم توسيع ${selection.codes.length} عنصر مختار إلى ${codes.length} كود شامل كل الفروع التابعة.`,
-        reasonEn: `${selection.codes.length} selected node(s) expanded to ${codes.length} code(s) including all descendants.`,
-      };
-    }
+  const expanded = expandSelectionCodes(selection, category, hierarchy);
+  if (expanded) {
+    return {
+      applicable: true,
+      field: category.productionFilter,
+      matchValues: new Set(expanded.codes),
+      expandedFromHierarchy: expanded.expanded,
+      resolvedCodeCount: expanded.codes.length,
+      reasonAr: `تم توسيع ${selection.codes.length} عنصر مختار إلى ${expanded.codes.length} كود شامل كل الفروع التابعة.`,
+      reasonEn: `${selection.codes.length} selected node(s) expanded to ${expanded.codes.length} code(s) including all descendants.`,
+    };
   }
 
   const values = new Set(selection.codes);
@@ -271,4 +290,142 @@ export function aggregateProductionForSelection<T extends Record<string, any>>(
     applicable: resolved.applicable,
     expandedFromHierarchy: resolved.expandedFromHierarchy,
   };
+}
+
+// --- Legacy production records ----------------------------------------------
+//
+// The Production Records screen reads the `production` collection, whose
+// documents are ProductionRecord - a DIFFERENT shape from UniversalStageRecord.
+// It has no stageType, but it does have pressId, furnaceId and shiftId. So the
+// same category means a different field here, declared separately on the
+// registry (`legacyProductionFields`) rather than guessed from the other one.
+//
+// Everything else is shared: the same CodeSelection, the same ONE/MULTIPLE/ALL
+// semantics, the same hierarchy expansion, the same dedupe. This is a second
+// FIELD MAPPING, not a second engine.
+
+export interface ResolvedLegacyProductionFilter {
+  /** False when this category cannot filter the legacy production records. */
+  applicable: boolean;
+  /** Every record field matched. A record matching ANY of them is included. */
+  fields: LegacyProductionField[];
+  /** Null means ALL - do not narrow on this dimension. */
+  matchValues: Set<string> | null;
+  expandedFromHierarchy: boolean;
+  resolvedCodeCount: number;
+  reasonAr: string;
+  reasonEn: string;
+}
+
+const ALL_LEGACY = (fields: LegacyProductionField[]): ResolvedLegacyProductionFilter => ({
+  applicable: true,
+  fields,
+  matchValues: null,
+  expandedFromHierarchy: false,
+  resolvedCodeCount: 0,
+  reasonAr: 'الكل - لا يتم تضييق هذا البعد.',
+  reasonEn: 'ALL - this dimension is not narrowed.',
+});
+
+/** Why a category cannot filter the Production Records screen, in the user's words. */
+export function legacyUnavailableReason(category: MasterDataCategory): { ar: string; en: string } {
+  return {
+    ar: `لا يوجد حقل في سجلات الإنتاج يربطها بـ"${category.labelAr}"، لذلك لا يمكن استخدامها كمرشّح هنا. متاحة بالكامل في البيانات الأساسية.`,
+    en: `Production records carry no field linking them to "${category.labelEn}", so it cannot filter this screen. Fully available in Master Data.`,
+  };
+}
+
+/**
+ * Selection -> concrete filter, for a legacy production record.
+ *
+ * Refuses an unmapped category BEFORE any hierarchy work, exactly as the
+ * stage-record resolver does, so a category with no verified relationship can
+ * never produce a populated match set.
+ */
+export function resolveLegacyProductionFilter(
+  selection: CodeSelection,
+  hierarchy?: HierarchyContext,
+): ResolvedLegacyProductionFilter {
+  const category = selection.categoryId ? getCategory(selection.categoryId) : undefined;
+  if (!selection.categoryId || !category) return ALL_LEGACY([]);
+
+  const fields = category.legacyProductionFields ?? [];
+  if (fields.length === 0) {
+    const reason = legacyUnavailableReason(category);
+    return {
+      applicable: false,
+      fields: [],
+      matchValues: null,
+      expandedFromHierarchy: false,
+      resolvedCodeCount: 0,
+      reasonAr: reason.ar,
+      reasonEn: reason.en,
+    };
+  }
+
+  if (!isNarrowing(selection)) return ALL_LEGACY(fields);
+
+  const expanded = expandSelectionCodes(selection, category, hierarchy);
+  if (expanded) {
+    return {
+      applicable: true,
+      fields,
+      matchValues: new Set(expanded.codes),
+      expandedFromHierarchy: expanded.expanded,
+      resolvedCodeCount: expanded.codes.length,
+      reasonAr: `تم توسيع ${selection.codes.length} عنصر مختار إلى ${expanded.codes.length} كود شامل كل الفروع التابعة.`,
+      reasonEn: `${selection.codes.length} selected node(s) expanded to ${expanded.codes.length} code(s) including all descendants.`,
+    };
+  }
+
+  const values = new Set(selection.codes);
+  return {
+    applicable: true,
+    fields,
+    matchValues: values,
+    expandedFromHierarchy: false,
+    resolvedCodeCount: values.size,
+    reasonAr: `${values.size} كود مختار.`,
+    reasonEn: `${values.size} selected code(s).`,
+  };
+}
+
+/**
+ * Applies a resolved legacy filter to already-fetched records.
+ *
+ * A record is included when ANY mapped field matches - a job belongs to a
+ * production centre whether that centre is the press that ran it or the furnace
+ * that fired it. Matching ALL fields would return almost nothing.
+ *
+ * An inapplicable category returns the records UNCHANGED rather than empty, for
+ * the same reason as the stage-record path: an empty table is indistinguishable
+ * from "this really has no production", which is the misleading answer this
+ * engine exists to prevent. The UI states the unavailability instead.
+ *
+ * Each record is tested once, so a record cannot be emitted twice even when two
+ * of its fields both match the selection.
+ */
+export function applyLegacyProductionFilter<T extends Record<string, any>>(
+  records: readonly T[],
+  resolved: ResolvedLegacyProductionFilter,
+): T[] {
+  if (!resolved.applicable || resolved.fields.length === 0 || resolved.matchValues == null) {
+    return [...records];
+  }
+  const wanted = resolved.matchValues;
+  return records.filter((r) =>
+    resolved.fields.some((f) => {
+      const value = r[f];
+      return value != null && wanted.has(String(value));
+    }),
+  );
+}
+
+/** One call: selection in, filtered legacy records out. */
+export function filterLegacyProductionRecords<T extends Record<string, any>>(
+  records: readonly T[],
+  selection: CodeSelection,
+  hierarchy?: HierarchyContext,
+): T[] {
+  return applyLegacyProductionFilter(records, resolveLegacyProductionFilter(selection, hierarchy));
 }

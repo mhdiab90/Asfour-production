@@ -25,9 +25,23 @@ import {
   X,
   Layers
 } from 'lucide-react';
-import { ProductionRecord, Shift, Press, Product, Customer, NavigationPage } from '../../types';
+import { ProductionRecord, Shift, Press, Furnace, Product, Customer, NavigationPage } from '../../types';
 import { subscribeProductionRecords, updateProductionRecord, deleteProductionRecord } from '../../services/productionService';
 import { fetchMasterData } from '../../services/masterDataService';
+/*
+ * Category -> code filtering. Both modules are already in production: the
+ * registry declares which record field each category maps to, and the engine
+ * turns a selection into a filter. This screen reuses them rather than deciding
+ * for itself what "Production Centers" means - which is how two screens end up
+ * quietly disagreeing about a total.
+ */
+import {
+  MasterDataCategory,
+  legacyProductionCategories,
+  legacyCodeSourceCategories,
+  normaliseSelection,
+} from '../../services/masterDataCategoryRegistry';
+import { filterLegacyProductionRecords } from '../../services/productionFilterEnginePure';
 /*
  * Row selection reuses the SAME primitives the Data Review screen already uses -
  * there is one selection architecture in this codebase, not two. These are pure
@@ -59,13 +73,22 @@ export const ProductionRecordsView: React.FC<ProductionRecordsViewProps> = ({ on
   // Filter Master Lists
   const [shifts, setShifts] = useState<Shift[]>([]);
   const [presses, setPresses] = useState<Press[]>([]);
+  const [furnaces, setFurnaces] = useState<Furnace[]>([]);
   const [products, setProducts] = useState<Product[]>([]);
   const [customers, setCustomers] = useState<Customer[]>([]);
 
   // Filter Values
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [filterShift, setFilterShift] = useState<string>('all');
-  const [filterPress, setFilterPress] = useState<string>('all');
+  /*
+   * Category -> code filter, replacing the press-only selector.
+   *
+   * ONE / MULTIPLE / ALL are not three separate controls: an empty code list IS
+   * ALL, exactly as normaliseSelection already defines it everywhere else. So
+   * ALL stays a mode and never materialises every code into an array.
+   */
+  const [filterCategoryId, setFilterCategoryId] = useState<string>('productionCenters');
+  const [filterCodes, setFilterCodes] = useState<string[]>([]);
   const [filterProduct, setFilterProduct] = useState<string>('all');
   const [startDate, setStartDate] = useState<string>('');
   const [endDate, setEndDate] = useState<string>('');
@@ -103,16 +126,55 @@ export const ProductionRecordsView: React.FC<ProductionRecordsViewProps> = ({ on
 
     fetchMasterData<Shift>('shifts').then(setShifts).catch(() => {});
     fetchMasterData<Press>('presses').then(setPresses).catch(() => {});
+    fetchMasterData<Furnace>('furnaces').then(setFurnaces).catch(() => {});
     fetchMasterData<Product>('products').then(setProducts).catch(() => {});
     fetchMasterData<Customer>('customers').then(setCustomers).catch(() => {});
 
     return () => unsubscribe();
   }, []);
 
+  /** Which categories can actually filter THIS screen - declared on the registry, never hard-coded here. */
+  const codeCategories = useMemo<MasterDataCategory[]>(() => legacyProductionCategories(), []);
+
+  /** The loaded Master Data, keyed by the category that owns it. */
+  const masterDataByCategory = useMemo<Record<string, Array<{ id?: string; code?: string; name?: string }>>>(
+    () => ({ presses, furnaces, products, customers, shifts }),
+    [presses, furnaces, products, customers, shifts],
+  );
+
+  /*
+   * The codes offered for the selected category.
+   *
+   * Read from the Master Data this screen already loaded, so a newly imported or
+   * edited code appears as soon as that cache refreshes - nothing about the list
+   * is hard-coded in this component, and no extra Firestore read is issued to
+   * build it. A category may draw on more than one collection (production
+   * centres are presses AND furnaces), which is why the sources come from the
+   * registry rather than from a switch here.
+   */
+  const availableCodes = useMemo(() => {
+    const out: Array<{ value: string; label: string; source: string }> = [];
+    const seen = new Set<string>();
+    for (const source of legacyCodeSourceCategories(filterCategoryId)) {
+      for (const item of masterDataByCategory[source.id] ?? []) {
+        const value = String(item.id ?? '');
+        if (!value || seen.has(value)) continue;
+        seen.add(value);
+        out.push({ value, label: item.name || item.code || value, source: source.labelAr });
+      }
+    }
+    return out;
+  }, [filterCategoryId, masterDataByCategory]);
+
+  /** Empty codes = ALL. One = ONE. Several = MULTIPLE. The shared semantics, unchanged. */
+  const codeSelection = useMemo(
+    () => normaliseSelection(filterCategoryId, filterCodes, filterCodes.length === 0),
+    [filterCategoryId, filterCodes],
+  );
+
   // Filter logic
-  const filteredRecords = records.filter((rec) => {
+  const filteredRecords = filterLegacyProductionRecords(records.filter((rec) => {
     if (filterShift !== 'all' && rec.shiftId !== filterShift) return false;
-    if (filterPress !== 'all' && rec.pressId !== filterPress) return false;
     if (filterProduct !== 'all' && rec.productId !== filterProduct) return false;
     if (startDate && rec.date < startDate) return false;
     if (endDate && rec.date > endDate) return false;
@@ -128,7 +190,7 @@ export const ProductionRecordsView: React.FC<ProductionRecordsViewProps> = ({ on
     }
 
     return true;
-  });
+  }), codeSelection);
 
   /*
    * The ids actually on screen right now.
@@ -238,7 +300,7 @@ export const ProductionRecordsView: React.FC<ProductionRecordsViewProps> = ({ on
   const clearFilters = () => {
     setSearchQuery('');
     setFilterShift('all');
-    setFilterPress('all');
+    setFilterCodes([]);
     setFilterProduct('all');
     setStartDate('');
     setEndDate('');
@@ -288,7 +350,7 @@ export const ProductionRecordsView: React.FC<ProductionRecordsViewProps> = ({ on
         </div>
 
         {/* Dropdown Filters */}
-        <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 gap-2.5 pt-2 border-t border-slate-100 text-xs">
+        <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-6 gap-2.5 pt-2 border-t border-slate-100 text-xs">
           {/* Shift */}
           <div>
             <label className="block text-[11px] font-bold text-slate-500 mb-1">الوردية</label>
@@ -304,17 +366,51 @@ export const ProductionRecordsView: React.FC<ProductionRecordsViewProps> = ({ on
             </select>
           </div>
 
-          {/* Press */}
+          {/*
+            Code Type -> Codes, replacing the press-only selector.
+
+            The category list and each category's code list both come from the
+            shared registry and the already-loaded Master Data, so adding a
+            category or a code never means editing this component.
+          */}
           <div>
-            <label className="block text-[11px] font-bold text-slate-500 mb-1">المكبس</label>
+            <label className="block text-[11px] font-bold text-slate-500 mb-1">نوع الأكواد</label>
             <select
-              value={filterPress}
-              onChange={(e) => setFilterPress(e.target.value)}
+              id="production-records-code-category"
+              value={filterCategoryId}
+              onChange={(e) => { setFilterCategoryId(e.target.value); setFilterCodes([]); }}
               className="w-full bg-slate-50 border border-slate-200 rounded-xl px-2.5 py-1.5 font-semibold text-slate-700"
             >
-              <option value="all">كل المكابس</option>
-              {presses.map(p => (
-                <option key={p.id} value={p.id}>{p.name}</option>
+              {codeCategories.map((c) => (
+                <option key={c.id} value={c.id}>{c.labelAr}</option>
+              ))}
+            </select>
+          </div>
+
+          <div>
+            <label className="block text-[11px] font-bold text-slate-500 mb-1">
+              الأكواد
+              <span className="font-normal text-slate-400">
+                {' '}({filterCodes.length === 0
+                  ? 'كل الأكواد'
+                  : filterCodes.length === 1
+                  ? 'كود واحد'
+                  : `عدة أكواد: ${filterCodes.length}`})
+              </span>
+            </label>
+            <select
+              id="production-records-codes"
+              multiple
+              size={3}
+              value={filterCodes}
+              onChange={(e) =>
+                setFilterCodes(Array.from(e.target.selectedOptions, (o) => o.value))
+              }
+              className="w-full bg-slate-50 border border-slate-200 rounded-xl px-2.5 py-1.5 font-semibold text-slate-700"
+              title="اترك الاختيار فارغًا ليعني كل الأكواد. اختر كودًا واحدًا أو عدة أكواد للتضييق."
+            >
+              {availableCodes.map((c) => (
+                <option key={c.value} value={c.value}>{c.label}</option>
               ))}
             </select>
           </div>
@@ -358,7 +454,7 @@ export const ProductionRecordsView: React.FC<ProductionRecordsViewProps> = ({ on
         </div>
 
         {/* Clear filter shortcut */}
-        {(searchQuery || filterShift !== 'all' || filterPress !== 'all' || filterProduct !== 'all' || startDate || endDate) && (
+        {(searchQuery || filterShift !== 'all' || filterCodes.length > 0 || filterProduct !== 'all' || startDate || endDate) && (
           <div className="flex justify-end pt-1">
             <button
               type="button"

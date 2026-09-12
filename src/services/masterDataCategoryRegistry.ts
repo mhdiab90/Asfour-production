@@ -27,6 +27,32 @@ import { ProductionStageType } from '../types';
 /** Which field of a production record this category filters on. */
 export type ProductionFilterField = 'stageType' | 'productId' | 'productCode' | 'customerId';
 
+/**
+ * Fields verified to exist on a LEGACY production record - the documents in the
+ * `production` collection that the Production Records screen reads.
+ *
+ * This is a DIFFERENT record type from UniversalStageRecord, with a different
+ * verified field set, which is why it needs its own declaration rather than
+ * reusing ProductionFilterField:
+ *
+ *   - `stageType` does NOT exist here (every document in this collection is a
+ *     pressing record; the stage is implied, not stored).
+ *   - `pressId` / `furnaceId` / `shiftId` DO exist here, and are written by
+ *     ProductionEntryForm on every save. They are absent from the other seven
+ *     stage collections, which is exactly why `productionFilter` above leaves
+ *     presses and furnaces unmapped for Production Review.
+ *
+ * Each name below was read off the ProductionRecord interface and the form that
+ * writes it. Nothing is inferred.
+ */
+export type LegacyProductionField =
+  | 'pressId'
+  | 'furnaceId'
+  | 'productId'
+  | 'productCode'
+  | 'customerId'
+  | 'shiftId';
+
 export interface MasterDataCategory {
   id: string;
   labelAr: string;
@@ -64,6 +90,26 @@ export interface MasterDataCategory {
    * `null` means: usable in Master Data, never offered as a production filter.
    */
   productionFilter: ProductionFilterField | null;
+  /**
+   * How this category matches a LEGACY production record, when it does at all.
+   *
+   * A LIST because one category can legitimately match on more than one field:
+   * a production centre is identified by the press that ran the job OR the
+   * furnace that fired it, and a record naming either belongs to that centre.
+   * ANY listed field matching includes the record - never all of them.
+   *
+   * Undefined/empty means the same thing `productionFilter: null` means one
+   * field up: fully usable in Master Data, never offered as a filter here.
+   */
+  legacyProductionFields?: LegacyProductionField[];
+  /**
+   * Which categories supply this one's code list on the legacy screen.
+   *
+   * Defaults to the category itself. It exists because "production centres" is
+   * not a collection - the actual centres live in `presses` and `furnaces`, and
+   * the selector has to offer both under one heading.
+   */
+  legacyCodeSources?: string[];
 }
 
 export const MASTER_DATA_CATEGORIES: MasterDataCategory[] = [
@@ -85,6 +131,12 @@ export const MASTER_DATA_CATEGORIES: MasterDataCategory[] = [
     // codebase, so this category is not marked hierarchical. Marking it so
     // would promise descendants that do not exist.
     productionFilter: 'stageType',
+    // On the legacy `production` collection there is no stageType; a centre is
+    // identified by the press that ran the job or the furnace that fired it.
+    // Both fields were verified present on ProductionRecord and are written by
+    // ProductionEntryForm. The codes come from those two collections.
+    legacyProductionFields: ['pressId', 'furnaceId'],
+    legacyCodeSources: ['presses', 'furnaces'],
   },
   {
     id: 'products',
@@ -99,6 +151,7 @@ export const MASTER_DATA_CATEGORIES: MasterDataCategory[] = [
     supportsEdit: true,
     // VERIFIED: production records carry productId and productCode.
     productionFilter: 'productId',
+    legacyProductionFields: ['productId', 'productCode'],
   },
   {
     id: 'customers',
@@ -113,6 +166,7 @@ export const MASTER_DATA_CATEGORIES: MasterDataCategory[] = [
     supportsEdit: true,
     // VERIFIED: production records carry customerId.
     productionFilter: 'customerId',
+    legacyProductionFields: ['customerId'],
   },
   {
     id: 'materials',
@@ -161,6 +215,9 @@ export const MASTER_DATA_CATEGORIES: MasterDataCategory[] = [
     // stages' records, so it stays Master-Data-only until the relationship
     // exists across the record set rather than in one stage.
     productionFilter: null,
+    // On the legacy pressing collection, though, pressId is present on every
+    // document - so presses DO filter that screen.
+    legacyProductionFields: ['pressId'],
   },
   {
     id: 'furnaces',
@@ -174,6 +231,9 @@ export const MASTER_DATA_CATEGORIES: MasterDataCategory[] = [
     supportsImport: true,
     supportsEdit: true,
     productionFilter: null,
+    // furnaceId is optional on a legacy record (a job may not be fired), but
+    // when present it is a real reference to this collection.
+    legacyProductionFields: ['furnaceId'],
   },
   {
     id: 'mills',
@@ -200,6 +260,7 @@ export const MASTER_DATA_CATEGORIES: MasterDataCategory[] = [
     supportsImport: true,
     supportsEdit: true,
     productionFilter: null,
+    legacyProductionFields: ['shiftId'],
   },
   {
     id: 'financialAccounts',
@@ -278,6 +339,27 @@ export function productionFilterCategories(): MasterDataCategory[] {
 
 export function supportsProductionFilter(id: string): boolean {
   return getCategory(id)?.productionFilter != null;
+}
+
+/** Categories that can filter the LEGACY Production Records screen. */
+export function legacyProductionCategories(): MasterDataCategory[] {
+  return MASTER_DATA_CATEGORIES.filter((c) => (c.legacyProductionFields?.length ?? 0) > 0);
+}
+
+export function supportsLegacyProductionFilter(id: string): boolean {
+  return (getCategory(id)?.legacyProductionFields?.length ?? 0) > 0;
+}
+
+/**
+ * Which categories supply the code list for one category on the legacy screen.
+ * Returns the category itself unless it names other sources.
+ */
+export function legacyCodeSourceCategories(id: string): MasterDataCategory[] {
+  const category = getCategory(id);
+  if (!category) return [];
+  const sources = category.legacyCodeSources;
+  if (!sources || sources.length === 0) return [category];
+  return sources.map((s) => getCategory(s)).filter((c): c is MasterDataCategory => Boolean(c));
 }
 
 /** Categories backed by a real, browsable store - i.e. everything except the virtual stage list. */

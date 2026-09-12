@@ -314,8 +314,270 @@ test('C5. §10 - no new permission was introduced for selection', () => {
   }
 });
 
+// ==================================================
+// D. PRODUCTION RECORDS CODE FILTER (§22 TEST 1-18, §23)
+//
+// The legacy `production` collection is a DIFFERENT record shape from
+// UniversalStageRecord: no stageType, but real pressId / furnaceId / shiftId.
+// These exercise the real registry + real engine against that shape.
+// ==================================================
+
+let reg: any;
+let eng: any;
+let hier: any;
+async function bootstrapCodeFilter() {
+  const load = (rel: string) => import(pathToFileURL(path.join(ROOT, rel)).href);
+  reg = await load('src/services/masterDataCategoryRegistry.ts');
+  eng = await load('src/services/productionFilterEnginePure.ts');
+  hier = await load('src/services/hierarchyResolverPure.ts');
+}
+
+/** Legacy production records, shaped exactly like ProductionRecord. */
+const LEGACY = [
+  { id: 'r1', date: '2026-09-01', shiftId: 's1', pressId: 'p1', furnaceId: 'f1', productId: 'pr1', productCode: 'BAR25', customerId: 'c1' },
+  { id: 'r2', date: '2026-09-02', shiftId: 's1', pressId: 'p2', furnaceId: 'f1', productId: 'pr2', productCode: 'BHA30', customerId: 'c1' },
+  { id: 'r3', date: '2026-09-03', shiftId: 's2', pressId: 'p1', productId: 'pr1', productCode: 'BAR25', customerId: 'c2' },
+  { id: 'r4', date: '2026-09-04', shiftId: 's2', pressId: 'p3', furnaceId: 'f2', productId: 'pr3', productCode: 'BSI10', customerId: 'c2' },
+];
+const ids = (rows: any[]) => rows.map((r) => r.id).sort();
+
+test('D1. TEST 1 - Production Centers is a real category for this screen', () => {
+  const c = reg.getCategory('productionCenters');
+  assert.deepEqual(c.legacyProductionFields, ['pressId', 'furnaceId'],
+    'a centre is the press that ran the job OR the furnace that fired it');
+  assert.deepEqual(c.legacyCodeSources, ['presses', 'furnaces'],
+    'its codes come from the two equipment collections, not from a hard-coded list');
+});
+
+test('D2. TEST 2 - Products maps to the verified product fields', () => {
+  assert.deepEqual(reg.getCategory('products').legacyProductionFields, ['productId', 'productCode']);
+});
+
+test('D3. TEST 3 - switching category changes which codes are relevant', () => {
+  const centres = reg.legacyCodeSourceCategories('productionCenters').map((c: any) => c.id);
+  const products = reg.legacyCodeSourceCategories('products').map((c: any) => c.id);
+  assert.deepEqual(centres, ['presses', 'furnaces']);
+  assert.deepEqual(products, ['products']);
+  // No overlap - a product code can never appear under production centres.
+  assert.equal(centres.some((c: string) => products.includes(c)), false);
+});
+
+test('D4. TEST 4 - ONE code returns only the matching records', () => {
+  const sel = reg.normaliseSelection('productionCenters', ['p1'], false);
+  assert.equal(sel.mode, 'ONE');
+  assert.deepEqual(ids(eng.filterLegacyProductionRecords(LEGACY, sel)), ['r1', 'r3']);
+});
+
+test('D5. TEST 5 - MULTIPLE codes match ANY of them', () => {
+  const sel = reg.normaliseSelection('productionCenters', ['p1', 'p3'], false);
+  assert.equal(sel.mode, 'MULTIPLE');
+  assert.deepEqual(ids(eng.filterLegacyProductionRecords(LEGACY, sel)), ['r1', 'r3', 'r4']);
+});
+
+test('D6. TEST 6 - ALL returns everything and stays a MODE', () => {
+  const sel = reg.normaliseSelection('productionCenters', [], true);
+  assert.equal(sel.mode, 'ALL');
+  assert.deepEqual(sel.codes, [], 'ALL must never materialise the code list');
+  const resolved = eng.resolveLegacyProductionFilter(sel);
+  assert.equal(resolved.matchValues, null, 'ALL must not build a match set');
+  assert.equal(eng.filterLegacyProductionRecords(LEGACY, sel).length, LEGACY.length);
+});
+
+test('D7. an empty code list IS ALL - the same semantics used everywhere else', () => {
+  const sel = reg.normaliseSelection('productionCenters', [], false);
+  assert.equal(sel.mode, 'ALL');
+});
+
+test('D8. a production centre matches on EITHER field, never both', () => {
+  // f1 is a furnace; r1 and r2 were fired in it despite different presses.
+  const sel = reg.normaliseSelection('productionCenters', ['f1'], false);
+  assert.deepEqual(ids(eng.filterLegacyProductionRecords(LEGACY, sel)), ['r1', 'r2']);
+});
+
+test('D9. TEST 10 - a record matching two selected codes appears ONCE', () => {
+  // r1 has pressId p1 AND furnaceId f1 - both selected.
+  const sel = reg.normaliseSelection('productionCenters', ['p1', 'f1'], false);
+  const out = eng.filterLegacyProductionRecords(LEGACY, sel);
+  assert.deepEqual(ids(out), ['r1', 'r2', 'r3']);
+  assert.equal(out.filter((r: any) => r.id === 'r1').length, 1, 'r1 must not be emitted twice');
+  assert.equal(eng.dedupeRecordsById(out).length, out.length, 'the result is already duplicate-free');
+});
+
+test('D10. TEST 4 - Products filter by id or by code', () => {
+  assert.deepEqual(
+    ids(eng.filterLegacyProductionRecords(LEGACY, reg.normaliseSelection('products', ['pr1'], false))),
+    ['r1', 'r3'],
+  );
+  assert.deepEqual(
+    ids(eng.filterLegacyProductionRecords(LEGACY, reg.normaliseSelection('products', ['BSI10'], false))),
+    ['r4'],
+  );
+});
+
+test('D11. TEST 5 - Customers use the verified customerId', () => {
+  assert.deepEqual(reg.getCategory('customers').legacyProductionFields, ['customerId']);
+  assert.deepEqual(
+    ids(eng.filterLegacyProductionRecords(LEGACY, reg.normaliseSelection('customers', ['c2'], false))),
+    ['r3', 'r4'],
+  );
+});
+
+test('D12. TEST 11 - Financial Accounts stay Master-Data-only', () => {
+  const c = reg.getCategory('financialAccounts');
+  assert.equal(c.legacyProductionFields ?? undefined, undefined,
+    'no production field may be claimed for financial accounts');
+  assert.equal(reg.supportsLegacyProductionFilter('financialAccounts'), false);
+  const resolved = eng.resolveLegacyProductionFilter(reg.normaliseSelection('financialAccounts', ['1101'], false));
+  assert.equal(resolved.applicable, false);
+  assert.ok(resolved.reasonAr.length > 0 && resolved.reasonEn.length > 0, 'the gap must be stated, not hidden');
+  // Critically: it must NOT silently return an empty table.
+  assert.equal(eng.filterLegacyProductionRecords(LEGACY, reg.normaliseSelection('financialAccounts', ['1101'], false)).length,
+    LEGACY.length, 'an unmappable category must not look like "no production"');
+});
+
+test('D13. TEST 12 - Cost Centers stay Master-Data-only', () => {
+  for (const id of ['costCenters', 'hierarchicalCostCenters']) {
+    assert.equal(reg.supportsLegacyProductionFilter(id), false, `${id} must not filter production records`);
+  }
+});
+
+test('D14. §24 - the filterable set is EXACTLY the verified relationships', () => {
+  const filterable = reg.legacyProductionCategories().map((c: any) => c.id).sort();
+  assert.deepEqual(filterable,
+    ['customers', 'furnaces', 'presses', 'productionCenters', 'products', 'shifts'].sort(),
+    'no category may become filterable without a verified field');
+  // Every claimed field must be a real ProductionRecord field.
+  const REAL = new Set(['pressId', 'furnaceId', 'productId', 'productCode', 'customerId', 'shiftId']);
+  for (const c of reg.legacyProductionCategories()) {
+    for (const f of c.legacyProductionFields) {
+      assert.ok(REAL.has(f), `${c.id} claims ${f}, which is not a verified ProductionRecord field`);
+    }
+  }
+});
+
+test('D15. TEST 7/8/9 + §23 - hierarchy expansion works, but no legacy category is hierarchical today', () => {
+  // The mechanism is real and shared - prove it expands parent -> descendants.
+  const nodes = [
+    { id: 'presses', code: 'presses', parentId: null },
+    { id: 'bokher', code: 'bokher', parentId: 'presses' },
+    { id: 'bokher-900-2', code: 'bokher-900-2', parentId: 'bokher' },
+    { id: 'bokher-900-3', code: 'bokher-900-3', parentId: 'bokher' },
+  ];
+  const index = hier.buildHierarchyIndex(nodes);
+  assert.deepEqual(hier.resolveHierarchyCodes(index, ['presses'], { includeSelf: true }).sort(),
+    ['bokher', 'bokher-900-2', 'bokher-900-3', 'presses']);
+  assert.deepEqual(hier.resolveHierarchyCodes(index, ['bokher'], { includeSelf: true }).sort(),
+    ['bokher', 'bokher-900-2', 'bokher-900-3']);
+  assert.deepEqual(hier.resolveHierarchyCodes(index, ['bokher-900-2'], { includeSelf: true }),
+    ['bokher-900-2']);
+
+  // But NONE of the categories that can filter this screen is hierarchical, so
+  // that expansion cannot currently apply here. This asserts the honest state of
+  // the system: presses/furnaces master data carries no parent field, and no
+  // production record references a hierarchy node.
+  for (const c of reg.legacyProductionCategories()) {
+    assert.notEqual(c.hierarchical, true,
+      `${c.id} is marked hierarchical but nothing links production records to hierarchy nodes`);
+  }
+});
+
+test('D16. §24 - no hierarchy-to-production field was invented anywhere', () => {
+  for (const rel of [
+    'src/services/masterDataCategoryRegistry.ts',
+    'src/services/productionFilterEnginePure.ts',
+    'src/components/production/ProductionRecordsView.tsx',
+  ]) {
+    const src = readCode(rel);
+    for (const invented of ['productionCenterId', 'hierarchyNodeId', 'pressHierarchyId', 'costCenterId']) {
+      assert.equal(src.includes(invented), false, `${rel} must not invent ${invented}`);
+    }
+  }
+});
+
+test('D17. §8 - there is still exactly ONE descendant walk in the system', () => {
+  const engine = readCode('src/services/productionFilterEnginePure.ts');
+  assert.ok(/resolveHierarchyCodes/.test(engine), 'the engine must delegate expansion');
+  assert.equal(/function\s+\w*[Dd]escendant|while\s*\(queue|stack\.pop\(\)/.test(engine), false,
+    'the engine must not walk the tree itself');
+  // Both resolvers share one expansion helper.
+  const shared = (engine.match(/expandSelectionCodes\(/g) || []).length;
+  assert.ok(shared >= 3, `both resolvers must call the shared expansion (found ${shared} references)`);
+});
+
+// --- wiring ---------------------------------------------------------------
+
+const PRV = 'src/components/production/ProductionRecordsView.tsx';
+
+test('D18. TEST 13 - the code list is driven by Master Data, never hard-coded', () => {
+  const src = readCode(PRV);
+  assert.ok(/legacyCodeSourceCategories\(filterCategoryId\)/.test(src),
+    'the sources must come from the registry');
+  assert.ok(/legacyProductionCategories\(\)/.test(src), 'the category list must come from the registry');
+  assert.ok(/fetchMasterData<Furnace>\('furnaces'\)/.test(src), 'furnace master data must be loaded');
+  // No literal press/centre list left in the component.
+  assert.equal(/const\s+(PRESSES|CENTERS|CODE_LIST)\s*=/.test(src), false, 'no hard-coded code list');
+});
+
+test('D19. §2 - the press-only selector is gone, replaced by category -> code', () => {
+  const src = readCode(PRV);
+  assert.equal(/filterPress/.test(src), false, 'the press-only filter state must be gone');
+  assert.ok(/id="production-records-code-category"/.test(src), 'the category selector must exist');
+  assert.ok(/id="production-records-codes"/.test(src), 'the dependent code selector must exist');
+  // The code selector depends on the category.
+  assert.ok(/availableCodes/.test(src), 'the code options must come from the category-derived list');
+  assert.ok(/setFilterCategoryId\(e\.target\.value\); setFilterCodes\(\[\]\)/.test(src),
+    'changing category must clear the now-unrelated codes');
+});
+
+test('D20. §18 - filtering goes through the shared engine, not a local reimplementation', () => {
+  const src = readCode(PRV);
+  assert.ok(/filterLegacyProductionRecords\(/.test(src), 'must call the shared engine');
+  assert.ok(/normaliseSelection\(/.test(src), 'must use the shared selection semantics');
+  assert.equal(/rec\.pressId ===|rec\.furnaceId ===/.test(src), false,
+    'the component must not match production fields by hand');
+});
+
+test('D21. TEST 14/15 - the existing date, shift, product and search filters survive', () => {
+  const src = readCode(PRV);
+  for (const kept of ['filterShift', 'filterProduct', 'startDate', 'endDate', 'searchQuery']) {
+    assert.ok(src.includes(kept), `${kept} must still exist`);
+  }
+  // They are applied BEFORE the code filter, so the two compose.
+  assert.ok(/filterLegacyProductionRecords\(records\.filter\(/.test(src),
+    'the code filter must compose with the existing predicate, not replace it');
+});
+
+test('D22. TEST 16 - row selection still prunes against the newly filtered set', () => {
+  const src = readCode(PRV);
+  assert.ok(/pruneToVisible\(prev, visibleIds\)/.test(src), 'pruning must remain');
+  assert.ok(/filteredRecords\.map\(\(r\) => r\.id\)/.test(src),
+    'visibleIds must derive from the SAME filtered list the code filter produced');
+});
+
+test('D23. TEST 17/18 - Edit and individual Delete are untouched', () => {
+  const src = readCode(PRV);
+  assert.ok(/handleOpenEdit/.test(src), 'row Edit must remain');
+  assert.ok(/updateProductionRecord\(/.test(src), 'the edit write path must remain');
+  const deletes = (src.match(/deleteProductionRecord\(/g) || []).length;
+  assert.equal(deletes, 1, `the single-row delete must remain exactly one call site, found ${deletes}`);
+  for (const forbidden of ['handleBulkDelete', 'bulkDelete', 'deleteSelected', 'deleteStageRecord', 'handleBulkEdit']) {
+    assert.equal(src.includes(forbidden), false, `${forbidden} must not be introduced by a filtering task`);
+  }
+});
+
+test('D24. §19 - filtering issues no query per code and no extra read', () => {
+  const src = readCode(PRV);
+  assert.equal(/getDocs|query\(collection/.test(src), false, 'no direct Firestore query may be added');
+  // The only master-data reads are the cache-first fetches, one per collection.
+  const fetches = (src.match(/fetchMasterData</g) || []).length;
+  assert.ok(fetches <= 5, `expected at most one cache-first read per collection, found ${fetches}`);
+  assert.equal(/availableCodes[\s\S]{0,300}fetchMasterData/.test(src), false,
+    'building the code list must not trigger a read');
+});
+
 (async () => {
   await bootstrap();
+  await bootstrapCodeFilter();
   for (const { name, fn } of registered) {
     try {
       await fn();

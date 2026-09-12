@@ -37,7 +37,7 @@ const DEPLOYMENT_ID_INJECTED = typeof __BUILD_DEPLOYMENT_ID__ === 'string' ? __B
 
 export const CURRENT_APP_VERSION: AppVersionInfo = {
   /** Set by the automatic release planner from the classified change set - see releasePlannerPure.ts. */
-  version: '3.8.0',
+  version: '3.9.0',
   buildId: BUILD_ID_INJECTED,
   buildTimestamp: BUILD_TIMESTAMP_INJECTED,
   gitCommit: COMMIT_SHA_INJECTED,
@@ -46,6 +46,16 @@ export const CURRENT_APP_VERSION: AppVersionInfo = {
   environment: 'production',
   releaseDate: '2026-08-22',
   changelog: [
+    {
+      version: '3.9.0',
+      date: '2026-09-12',
+      highlights: [
+        'تصفية سجلات الإنتاج حسب نوع الأكواد ثم الأكواد بدلاً من المكبس فقط',
+        'المراكز الإنتاجية تشمل المكابس والأفران معًا، مع العملاء والورديات والمنتجات',
+        'كود واحد أو عدة أكواد أو كل الأكواد، وقائمة الأكواد مصدرها البيانات الأساسية',
+        'الحسابات المالية ومراكز التكلفة تبقى بيانات أساسية فقط لعدم وجود ارتباط فعلي بسجلات الإنتاج'
+      ]
+    },
     {
       version: '3.8.0',
       date: '2026-09-12',
