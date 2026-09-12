@@ -22,6 +22,7 @@
  */
 import { UniversalStageRecord, ProductionStageType, MultiDimensionFilter } from '../types';
 import { STAGE_DISPLAY_NAMES, STAGE_COLLECTION_NAMES } from './stageRecordService';
+import { applyHierarchyScopeToStageRecords } from './productionFilterEnginePure';
 
 /** English counterpart to STAGE_DISPLAY_NAMES (stageRecordService.ts), which is Arabic-only. Additive - existing Arabic-only call sites are untouched. */
 export const STAGE_DISPLAY_NAMES_EN: Record<ProductionStageType, string> = {
@@ -202,8 +203,26 @@ export function rankRows(rows: AggregatedReportRow[], metric: RankingMetric, dir
   return (direction === 'best' ? sorted : [...sorted].reverse()).slice(0, limit);
 }
 
-export function filterUniversalRecords(records: UniversalStageRecord[], filters: MultiDimensionFilter): UniversalStageRecord[] {
-  return records.filter((r) => {
+/**
+ * Applies the report filters, plus an OPTIONAL hierarchy scope.
+ *
+ * `hierarchyScope` is the resolved set of equipment ids a hierarchy selection
+ * expanded to (resolveHierarchyEquipmentScope in productionFilterEnginePure -
+ * the one shared resolver; nothing here walks the tree). Pass null/undefined
+ * and this behaves EXACTLY as it always has, which is what keeps a report with
+ * no hierarchy selection byte-identical to before.
+ *
+ * The scope is an additional AND, applied alongside date, stage, product,
+ * customer, employee, shift and press - it never replaces or relaxes any of
+ * them, and it never changes a quantity.
+ */
+export function filterUniversalRecords(
+  records: UniversalStageRecord[],
+  filters: MultiDimensionFilter,
+  hierarchyScope?: Set<string> | null,
+): UniversalStageRecord[] {
+  const scoped = applyHierarchyScopeToStageRecords(records, hierarchyScope ?? null);
+  return scoped.filter((r) => {
     if (filters.startDate && r.date < filters.startDate) return false;
     if (filters.endDate && r.date > filters.endDate) return false;
     if (filters.stageType && filters.stageType !== 'all' && r.stageType !== filters.stageType) return false;

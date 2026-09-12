@@ -229,7 +229,15 @@ test('G1. export receives the AGGREGATED filtered rows, never the raw record set
   assert.match(viewCode, /exportAggregatedReportToExcel\(\s*reportRows,/);
   assert.match(viewCode, /const reportRows = useMemo\(/);
   assert.match(viewCode, /aggregateByDimension\(filteredRecords,/);
-  assert.match(viewCode, /const filteredRecords = useMemo\(\(\) => filterUniversalRecords\(records, filters\)/);
+  /*
+   * `filteredRecords` must still be built by filterUniversalRecords over the
+   * fetched records and the current filters. It now also receives an optional
+   * hierarchy scope, so this matches the call rather than the exact one-line
+   * formatting it happened to have - the invariant is where the data comes
+   * from, not how the arguments are wrapped.
+   */
+  assert.match(viewCode, /const filteredRecords = useMemo\(/);
+  assert.match(viewCode, /filterUniversalRecords\(\s*records,\s*filters/);
   assert.equal(/exportAggregatedReportToExcel\(\s*records\b/.test(viewCode), false,
     'export must not be handed the unfiltered record set');
 });

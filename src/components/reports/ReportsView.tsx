@@ -39,6 +39,18 @@ import {
 import { UniversalStageRecord, NavigationPage, ProductionStageType, MultiDimensionFilter } from '../../types';
 import { fetchUniversalStageRecords } from '../../services/stageRecordService';
 import { exportAggregatedReportToExcel } from '../../services/exportService';
+/*
+ * Hierarchy scope for reports.
+ *
+ * Everything here is the SAME machinery Production Records already uses: the
+ * same node reader, the same shared resolver, the same node: selection
+ * encoding. Reports consume it - they do not reimplement it.
+ */
+import { fetchMasterData } from '../../services/masterDataService';
+import { listCostCenterHierarchyNodes, CostCenterHierarchyRecord } from '../../services/costCenterHierarchyService';
+import { buildHierarchyIndex, getNodePath } from '../../services/hierarchyResolverPure';
+import { asNodeSelection, resolveHierarchyEquipmentScope } from '../../services/productionFilterEnginePure';
+import { Press, Furnace } from '../../types';
 import {
   REPORT_CATEGORIES,
   aggregateByDimension,
@@ -115,6 +127,17 @@ export const ReportsView: React.FC<ReportsViewProps> = () => {
   const [startDate, setStartDate] = useState<string>(prefill?.startDate || '');
   const [endDate, setEndDate] = useState<string>(prefill?.endDate || '');
   const [drillDownRow, setDrillDownRow] = useState<AggregatedReportRow | null>(null);
+
+  /*
+   * Hierarchy scope - an ADDITIONAL report dimension.
+   *
+   * Empty selection means no scope at all, and the report then behaves exactly
+   * as it did before this existed. That equivalence is the point: a report
+   * without a hierarchy selection must not change by so much as a decimal.
+   */
+  const [hierarchyNodes, setHierarchyNodes] = useState<CostCenterHierarchyRecord[]>([]);
+  const [equipment, setEquipment] = useState<Array<Press | Furnace>>([]);
+  const [selectedNodes, setSelectedNodes] = useState<string[]>([]);
   const setAssistantSelection = useSetAssistantSelection();
 
   const category = REPORT_CATEGORIES.find((c) => c.id === categoryId) || REPORT_CATEGORIES[0];
@@ -203,7 +226,75 @@ export const ReportsView: React.FC<ReportsViewProps> = () => {
     return () => { cancelled = true; };
   }, [refreshTrigger, filters]);
 
-  const filteredRecords = useMemo(() => filterUniversalRecords(records, filters), [records, filters]);
+  /* Nodes and equipment, read once through the existing cache-first paths. */
+  useEffect(() => {
+    listCostCenterHierarchyNodes()
+      .then(setHierarchyNodes)
+      .catch(() => { /* an unavailable hierarchy only costs the scope selector */ });
+    Promise.all([
+      fetchMasterData<Press>('presses').catch(() => [] as Press[]),
+      fetchMasterData<Furnace>('furnaces').catch(() => [] as Furnace[]),
+    ])
+      .then(([p, f]) => setEquipment([...p, ...f]))
+      .catch(() => { /* same */ });
+  }, []);
+
+  const hierarchyIndex = useMemo(
+    () =>
+      buildHierarchyIndex(
+        hierarchyNodes.map((node) => ({
+          ...node,
+          id: node.id,
+          code: node.sheet1Code,
+          parentId: node.parentSheet1Code,
+        })),
+      ),
+    [hierarchyNodes],
+  );
+
+  const equipmentLinks = useMemo(
+    () => equipment.map((e) => ({ id: e.id, hierarchyNodeId: (e as any).hierarchyNodeId })),
+    [equipment],
+  );
+
+  /**
+   * The selected nodes expanded to the equipment ids the report may include.
+   *
+   * Resolved ONCE per selection - never a walk per node and never a query per
+   * child - and deduplicated before a single record is examined, which is what
+   * makes overlapping branches safe to select together.
+   *
+   * null = nothing selected = no scope. An empty Set = nodes selected but
+   * nothing linked to them, which the empty state reports differently from
+   * "no production".
+   */
+  const hierarchyScope = useMemo(
+    () =>
+      resolveHierarchyEquipmentScope(
+        selectedNodes,
+        { index: hierarchyIndex },
+        { equipment: equipmentLinks },
+      ),
+    [selectedNodes, hierarchyIndex, equipmentLinks],
+  );
+
+  /** Node options, labelled by full path so branches are distinguishable. */
+  const nodeOptions = useMemo(
+    () =>
+      hierarchyNodes.map((node) => ({
+        value: asNodeSelection(node.id),
+        label:
+          getNodePath(hierarchyIndex, node.id, (x: any) => x.name || x.sheet1Code, ' ← ') ||
+          node.name ||
+          node.sheet1Code,
+      })),
+    [hierarchyNodes, hierarchyIndex],
+  );
+
+  const filteredRecords = useMemo(
+    () => filterUniversalRecords(records, filters, hierarchyScope),
+    [records, filters, hierarchyScope],
+  );
 
   const reportRows = useMemo(
     () => aggregateByDimension(filteredRecords, category.dimension, language),
@@ -327,6 +418,44 @@ export const ReportsView: React.FC<ReportsViewProps> = () => {
             {ALL_STAGES.map((s) => <option key={s} value={s}>{getStageDisplayName(s, language)}</option>)}
           </select>
         </div>
+        {/*
+          Hierarchy scope - an ADDITIONAL dimension beside stage and period.
+
+          Leaving it empty means no scope, and the report is then identical to
+          what it produced before this control existed. Selecting a parent node
+          includes every descendant node's linked equipment.
+        */}
+        {nodeOptions.length > 0 && (
+          <div className="flex items-center gap-2 text-xs">
+            <span className="text-slate-500 font-bold">
+              {language === 'ar' ? 'المركز الإنتاجي' : 'Production centre'}:
+            </span>
+            <select
+              id="reports-hierarchy-scope"
+              multiple
+              size={1}
+              value={selectedNodes}
+              onChange={(e) => setSelectedNodes(Array.from(e.target.selectedOptions, (o) => o.value))}
+              className="bg-slate-50 border border-slate-200 rounded-xl px-2.5 py-1.5 text-xs font-bold max-w-[260px]"
+              title={language === 'ar'
+                ? 'اترك الاختيار فارغًا ليشمل التقرير كل البيانات كالمعتاد. اختيار عقدة يشمل كل المراكز التابعة لها.'
+                : 'Leave empty for the report to cover everything as before. Selecting a node includes all of its descendants.'}
+            >
+              {nodeOptions.map((o) => (
+                <option key={o.value} value={o.value}>{o.label}</option>
+              ))}
+            </select>
+            {selectedNodes.length > 0 && (
+              <button
+                type="button"
+                onClick={() => setSelectedNodes([])}
+                className="text-[11px] font-bold text-amber-700 hover:text-amber-900 cursor-pointer"
+              >
+                {language === 'ar' ? 'إلغاء النطاق' : 'Clear scope'}
+              </button>
+            )}
+          </div>
+        )}
         <div className="flex items-center gap-2 text-xs">
           <span className="text-slate-500 font-bold">{t.period}:</span>
           <input type="date" value={startDate} onChange={(e) => setStartDate(e.target.value)} className="bg-slate-50 border border-slate-200 rounded-xl px-2.5 py-1 text-xs" />
@@ -334,6 +463,30 @@ export const ReportsView: React.FC<ReportsViewProps> = () => {
           <input type="date" value={endDate} onChange={(e) => setEndDate(e.target.value)} className="bg-slate-50 border border-slate-200 rounded-xl px-2.5 py-1 text-xs" />
         </div>
       </div>
+
+      {/*
+        What the current scope actually means, in the user's words - never an
+        internal id. Distinguishes "nothing is linked to these nodes" from
+        "these nodes had no production", which are very different answers.
+      */}
+      {selectedNodes.length > 0 && (
+        <div
+          id="reports-hierarchy-scope-note"
+          className={`rounded-2xl px-4 py-3 text-xs font-bold border ${
+            hierarchyScope && hierarchyScope.size === 0
+              ? 'bg-amber-50 border-amber-200 text-amber-900'
+              : 'bg-sky-50 border-sky-200 text-sky-900'
+          }`}
+        >
+          {hierarchyScope && hierarchyScope.size === 0
+            ? (language === 'ar'
+                ? 'لا توجد معدات مرتبطة بهذا التسلسل - التقرير فارغ لعدم وجود ارتباط، وليس لعدم وجود إنتاج. يمكن ربط المعدات من البيانات الأساسية.'
+                : 'No equipment is linked to this hierarchy selection - the report is empty because nothing is linked, not because there is no production. Equipment can be linked from Master Data.')
+            : (language === 'ar'
+                ? `نطاق التقرير: ${selectedNodes.length} عقدة مختارة، ويشمل جميع المراكز التابعة لها (${hierarchyScope ? hierarchyScope.size : 0} معدة مرتبطة).`
+                : `Report scope: ${selectedNodes.length} selected node(s), including all descendants (${hierarchyScope ? hierarchyScope.size : 0} linked equipment record(s)).`)}
+        </div>
+      )}
 
       {isLoading ? (
         <div className="bg-white rounded-2xl p-10 border border-slate-200 shadow-xs text-center text-xs text-slate-400">{t.loading}</div>

@@ -545,3 +545,85 @@ export function resolveLegacyProductionFilterWithEquipment(
       : `${resolved.ids.length} selected equipment record(s).`,
   };
 }
+
+// --- Hierarchy scope for STAGE records (reporting) ---------------------------
+//
+// Reports read UniversalStageRecord, not the legacy ProductionRecord, so they
+// need their own way to ask "which equipment does this record refer to?".
+//
+// WHAT IS AND IS NOT POSSIBLE HERE, stated plainly:
+// A stage record keeps its source document under `rawData`. For PRESSING
+// records that document is the legacy production document, so it carries
+// pressId/furnaceId. The other seven stage collections carry no equipment
+// reference at all. So a hierarchy scope over press/furnace nodes can only ever
+// match pressing records - and a record with no equipment reference is NOT
+// silently kept, because "belongs to the Presses branch" is false for it.
+//
+// That is deliberate and is the same rule as unlinked equipment: membership
+// must be provable, never assumed.
+
+/**
+ * Every equipment id a stage record refers to.
+ *
+ * ALL of them, not the first match: a pressing record names both the press that
+ * ran the job and the furnace that fired it, and it legitimately belongs to
+ * both branches. Returning only the first would make a furnace-branch report
+ * silently miss it.
+ *
+ * Reads `rawData` only - the verified source document - and never invents a
+ * field. An empty array means "this record references no equipment", which is
+ * the honest answer for the seven non-pressing stages.
+ */
+export function stageRecordEquipmentIds(record: Record<string, any>): string[] {
+  const raw = record?.rawData || {};
+  const ids = [raw.pressId, raw.furnaceId, raw.machineId, raw.equipmentId]
+    .map((v) => (v == null ? '' : String(v)))
+    .filter(Boolean);
+  return [...new Set(ids)];
+}
+
+/**
+ * Turns selected hierarchy nodes into the equipment id set a report may include.
+ *
+ * Returns null when nothing is selected, so the caller keeps its existing
+ * behaviour untouched - a report with no hierarchy selection must aggregate
+ * exactly what it aggregated before.
+ *
+ * An empty (non-null) Set is meaningfully different: the nodes ARE selected but
+ * nothing is linked to them. The caller can then say "no linked equipment"
+ * rather than showing a zero that looks like "no production".
+ */
+export function resolveHierarchyEquipmentScope(
+  nodeSelections: readonly string[],
+  hierarchy?: HierarchyContext,
+  equipment?: EquipmentContext,
+): Set<string> | null {
+  const nodes = nodeSelections.filter(isNodeSelection).map(nodeIdFromSelection);
+  if (nodes.length === 0) return null;
+
+  const index = hierarchy?.index ?? (hierarchy?.nodes ? buildHierarchyIndex(hierarchy.nodes) : null);
+  const byNode = equipment?.byNode ?? (equipment?.equipment ? buildEquipmentByNode(equipment.equipment) : null);
+  if (!index || !byNode) return null;
+
+  // One resolution for the whole selection - never one walk per node, and never
+  // a query per child. Overlapping branches deduplicate here, before any record
+  // is examined, which is what stops a record being counted twice later.
+  return new Set(resolveEquipmentForHierarchyNodes(index, byNode, nodes, { includeSelf: true }));
+}
+
+/**
+ * Keeps only the records whose equipment falls inside the resolved scope.
+ *
+ * `scope === null` returns the records untouched - the no-selection path is
+ * byte-identical to not calling this at all.
+ *
+ * Each record is tested once and emitted at most once, so a record matching the
+ * scope through BOTH its press and its furnace still appears a single time.
+ */
+export function applyHierarchyScopeToStageRecords<T extends Record<string, any>>(
+  records: readonly T[],
+  scope: Set<string> | null,
+): T[] {
+  if (scope == null) return [...records];
+  return records.filter((r) => stageRecordEquipmentIds(r).some((id) => scope.has(id)));
+}
