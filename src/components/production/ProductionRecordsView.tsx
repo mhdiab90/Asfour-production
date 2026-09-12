@@ -3,7 +3,7 @@
  * Features comprehensive filtering (Date, Shift, Press, Product, Customer),
  * real-time aggregate KPI metrics, single record editing, deletion, and Excel export.
  */
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { 
   FileText, 
   Search, 
@@ -28,6 +28,21 @@ import {
 import { ProductionRecord, Shift, Press, Product, Customer, NavigationPage } from '../../types';
 import { subscribeProductionRecords, updateProductionRecord, deleteProductionRecord } from '../../services/productionService';
 import { fetchMasterData } from '../../services/masterDataService';
+/*
+ * Row selection reuses the SAME primitives the Data Review screen already uses -
+ * there is one selection architecture in this codebase, not two. These are pure
+ * functions over an id list: no Firestore, no writes, no reads.
+ */
+import {
+  EMPTY_SELECTION_STATE,
+  toggleRow,
+  selectAllVisible,
+  deselectAll,
+  pruneToVisible,
+  selectionCount,
+  isSelected,
+  areAllVisibleSelected,
+} from '../../services/bulkEditPure';
 import { exportProductionRecordsToExcel } from '../../services/exportService';
 import { Badge } from '../common/Badge';
 import { Modal } from '../common/Modal';
@@ -59,6 +74,18 @@ export const ProductionRecordsView: React.FC<ProductionRecordsViewProps> = ({ on
   const [editingRecord, setEditingRecord] = useState<ProductionRecord | null>(null);
   const [isEditModalOpen, setIsEditModalOpen] = useState<boolean>(false);
   const [deleteConfirmRecord, setDeleteConfirmRecord] = useState<ProductionRecord | null>(null);
+
+  /**
+   * Explicit row selection - UI state only, never persisted and never read back
+   * from Firestore. Keyed on the record's own document id, never on the row
+   * index, so sorting, refiltering and live snapshot refreshes cannot silently
+   * move a selection onto a different record.
+   *
+   * This is the selection FOUNDATION only. Nothing acts on it yet: there is no
+   * bulk action here, and deliberately no bulk delete - see the note above the
+   * selection toolbar.
+   */
+  const [selection, setSelection] = useState(EMPTY_SELECTION_STATE);
   const [isUpdating, setIsUpdating] = useState<boolean>(false);
 
   useEffect(() => {
@@ -102,6 +129,36 @@ export const ProductionRecordsView: React.FC<ProductionRecordsViewProps> = ({ on
 
     return true;
   });
+
+  /*
+   * The ids actually on screen right now.
+   *
+   * Derived from the SAME `filteredRecords` the table renders, so "select all
+   * visible" can never mean more than what the user can see - no extra fetch and
+   * no extra Firestore read. `filteredRecords` is rebuilt on every render, so the
+   * list is memoised on the id sequence itself; otherwise the pruning effect
+   * below would see a new array identity every render and loop.
+   *
+   * A record without a document id cannot be addressed safely, so it is excluded
+   * rather than given a synthetic key.
+   */
+  const visibleIdKey = filteredRecords.map((r) => r.id ?? '').join('|');
+  const visibleIds = useMemo(
+    () => filteredRecords.map((r) => r.id).filter((id): id is string => Boolean(id)),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [visibleIdKey],
+  );
+
+  /**
+   * A row that leaves the current filter must not stay selected.
+   *
+   * Without this, changing a filter would leave ids selected for records the
+   * user can no longer see, and any future bulk operation could act on them.
+   * Pruning makes the counter visibly drop, so nothing is dropped silently.
+   */
+  useEffect(() => {
+    setSelection((prev) => (prev.selectedIds.length ? pruneToVisible(prev, visibleIds) : prev));
+  }, [visibleIds]);
 
   // Calculate live aggregations of filtered list (Factory Standard: TON is primary)
   let totalProductionTons = 0;
@@ -385,10 +442,55 @@ export const ProductionRecordsView: React.FC<ProductionRecordsViewProps> = ({ on
             </p>
           </div>
         ) : (
+          <>
+          {/*
+            Selection summary and controls.
+
+            There is deliberately NO bulk action here - this is the selection
+            foundation only. In particular there is no bulk delete: deleting many
+            production records at once is a separate, explicit decision that has
+            not been taken.
+          */}
+          <div className="px-4 py-3 border-b border-slate-200 flex items-center gap-3 flex-wrap text-xs">
+            <span className="font-bold text-slate-600">
+              الظاهر: <span className="text-slate-900">{visibleIds.length}</span>
+            </span>
+            <span className="font-bold text-slate-600">
+              المحدد: <span id="production-records-selected-count" className="text-sky-700">{selectionCount(selection)}</span>
+            </span>
+            <button
+              type="button"
+              onClick={() => setSelection(selectAllVisible(selection, visibleIds))}
+              disabled={visibleIds.length === 0}
+              className="px-3 py-1.5 font-bold text-slate-700 bg-slate-100 hover:bg-slate-200 disabled:opacity-50 rounded-lg cursor-pointer"
+            >
+              تحديد الكل
+            </button>
+            <button
+              type="button"
+              onClick={() => setSelection(deselectAll())}
+              disabled={selectionCount(selection) === 0}
+              className="px-3 py-1.5 font-bold text-slate-700 bg-slate-100 hover:bg-slate-200 disabled:opacity-50 rounded-lg cursor-pointer"
+            >
+              إلغاء تحديد الكل
+            </button>
+          </div>
           <div className="overflow-x-auto">
             <table className="w-full text-right text-xs">
               <thead className="bg-slate-50 border-b border-slate-200 text-slate-600 font-bold">
                 <tr>
+                  <th className="px-4 py-3.5 w-10">
+                    <input
+                      id="production-records-select-all"
+                      type="checkbox"
+                      className="w-4 h-4 accent-sky-600 cursor-pointer align-middle"
+                      aria-label="تحديد كل السجلات الظاهرة"
+                      checked={areAllVisibleSelected(selection, visibleIds)}
+                      onChange={(e) =>
+                        setSelection(e.target.checked ? selectAllVisible(selection, visibleIds) : deselectAll())
+                      }
+                    />
+                  </th>
                   <th className="px-4 py-3.5">التاريخ والوردية</th>
                   <th className="px-4 py-3.5">المكبس / الفرن</th>
                   <th className="px-4 py-3.5">المنتج والمواصفة</th>
@@ -403,6 +505,22 @@ export const ProductionRecordsView: React.FC<ProductionRecordsViewProps> = ({ on
               <tbody className="divide-y divide-slate-100 font-medium text-slate-700">
                 {filteredRecords.map((rec) => (
                   <tr key={rec.id} className="hover:bg-slate-50/80 transition-colors">
+                    {/*
+                      Selection only. This checkbox never opens, edits, approves
+                      or deletes anything - the row's own actions in the
+                      الإجراءات column remain the only way to do that.
+                    */}
+                    <td className="px-4 py-3 w-10">
+                      <input
+                        type="checkbox"
+                        className="w-4 h-4 accent-sky-600 cursor-pointer align-middle disabled:opacity-40"
+                        aria-label="تحديد السجل"
+                        disabled={!rec.id}
+                        checked={rec.id ? isSelected(selection, rec.id) : false}
+                        onChange={() => { if (rec.id) setSelection(toggleRow(selection, rec.id)); }}
+                      />
+                    </td>
+
                     <td className="px-4 py-3">
                       <div className="font-bold text-slate-900 font-mono">{rec.date}</div>
                       <div className="text-[11px] text-slate-500">{rec.shiftName}</div>
@@ -533,6 +651,7 @@ export const ProductionRecordsView: React.FC<ProductionRecordsViewProps> = ({ on
               </tbody>
             </table>
           </div>
+          </>
         )}
       </div>
 

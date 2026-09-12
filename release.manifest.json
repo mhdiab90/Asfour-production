@@ -1,9 +1,9 @@
 {
   "_doc": "Release Manifest precursor. Describes WHAT is being released so the gate checks a committed declaration rather than whatever flags an operator typed. commitSha/buildId/deploymentId are left null until a release is cut - the gate fills the comparison from the build itself, and only enforces a field that is set here. This is NOT the Change Registry: no change IDs, no Firestore, no UI.",
-  "version": "3.7.0",
-  "releaseId": "REL-2026-0005",
+  "version": "3.8.0",
+  "releaseId": "REL-2026-0006",
   "changeIds": [
-    "UI-0010"
+    "MOD-0011"
   ],
   "commitSha": null,
   "buildId": null,
@@ -19,7 +19,8 @@
     "استيراد الحسابات المالية",
     "parentSheet1Code",
     "التوابع",
-    "financial-accounts-import-modal"
+    "financial-accounts-import-modal",
+    "production-records-selected-count"
   ],
   "_markerNotes": {
     "ai-provider-management": "AI Provider Management route - absent means the AI Assistant closure was dropped",
@@ -32,7 +33,8 @@
     "استيراد الحسابات المالية": "The Import Financial Accounts action in Master Data",
     "parentSheet1Code": "Hierarchy parent link - proves hierarchy editing/resolution is present",
     "التوابع": "The Descendants column - proves the shared hierarchy resolver is wired to the UI",
-    "financial-accounts-import-modal": "The dedicated Financial Accounts importer's own dialog id - absent means the action still routes to Historical Excel Import"
+    "financial-accounts-import-modal": "The dedicated Financial Accounts importer's own dialog id - absent means the action still routes to Historical Excel Import",
+    "production-records-selected-count": "The Production Records selection counter - absent means the row-selection foundation was dropped"
   },
   "tests": [
     "buildIdentity",
@@ -44,16 +46,18 @@
     "reportsView",
     "stageRecordCache",
     "masterDataBulk",
-    "masterData2"
+    "masterData2",
+    "productionRecordsSelection"
   ],
   "deployCommand": "firebase deploy --only hosting --project asfourproduction-70e6e",
   "treeClean": true,
   "_changeNotes": {
+    "MOD-0011": "Row-selection foundation for the Production Records table: per-row and header checkboxes in a dedicated column, a visible/selected counter, select-all-visible and deselect-all controls, and pruning of stale selections on filter change. Reuses the existing bulkEditPure selection primitives rather than adding a second selection architecture. Selection is UI state only - no Firestore read or write - and no bulk action of any kind is attached to it; in particular no bulk delete",
     "UI-0010": "Financial Accounts import opens a dedicated Master Data importer instead of the Historical Excel Import screen: the action no longer navigates to the bulk-entry route (which App.tsx renders as DataImportView); a new in-place modal reuses the existing financialAccounts schema, XLSX reader, row validation, duplicate detection and chunked commit, adds sheet selection and parent/cycle relationship checks, and keeps partial import so invalid rows never block valid ones",
     "DB-0009": "Category-first Master Data over an extensible registry; Financial Accounts master data with Excel import and hierarchical editing (new financialAccounts collection and its Firestore rule); one shared generic hierarchy resolver reused by Master Data, Production Review and production aggregation; hierarchical cost-centre editing with cycle, self-parent and unknown-parent protection"
   },
-  "previousVersion": "3.6.0",
+  "previousVersion": "3.7.0",
   "versionBump": "MINOR",
   "classificationConfidence": "HIGH",
-  "previousReleaseId": "REL-2026-0004"
+  "previousReleaseId": "REL-2026-0005"
 }

@@ -37,7 +37,7 @@ const DEPLOYMENT_ID_INJECTED = typeof __BUILD_DEPLOYMENT_ID__ === 'string' ? __B
 
 export const CURRENT_APP_VERSION: AppVersionInfo = {
   /** Set by the automatic release planner from the classified change set - see releasePlannerPure.ts. */
-  version: '3.7.0',
+  version: '3.8.0',
   buildId: BUILD_ID_INJECTED,
   buildTimestamp: BUILD_TIMESTAMP_INJECTED,
   gitCommit: COMMIT_SHA_INJECTED,
@@ -46,6 +46,16 @@ export const CURRENT_APP_VERSION: AppVersionInfo = {
   environment: 'production',
   releaseDate: '2026-08-22',
   changelog: [
+    {
+      version: '3.8.0',
+      date: '2026-09-12',
+      highlights: [
+        'تحديد صفوف سجلات الإنتاج: مربع اختيار لكل سجل وفي رأس الجدول',
+        'تحديد الكل الظاهر وإلغاء تحديد الكل مع عداد للسجلات المحددة',
+        'إلغاء تحديد السجلات المخفية تلقائيًا عند تغيير الفلاتر',
+        'التحديد لا يغيّر أي بيانات ولا يوجد حذف جماعي'
+      ]
+    },
     {
       version: '3.7.0',
       date: '2026-09-12',
