@@ -1,9 +1,9 @@
 {
   "_doc": "Release Manifest precursor. Describes WHAT is being released so the gate checks a committed declaration rather than whatever flags an operator typed. commitSha/buildId/deploymentId are left null until a release is cut - the gate fills the comparison from the build itself, and only enforces a field that is set here. This is NOT the Change Registry: no change IDs, no Firestore, no UI.",
-  "version": "3.6.0",
-  "releaseId": "REL-2026-0004",
+  "version": "3.7.0",
+  "releaseId": "REL-2026-0005",
   "changeIds": [
-    "DB-0009"
+    "UI-0010"
   ],
   "commitSha": null,
   "buildId": null,
@@ -18,7 +18,8 @@
     "financialAccounts",
     "استيراد الحسابات المالية",
     "parentSheet1Code",
-    "التوابع"
+    "التوابع",
+    "financial-accounts-import-modal"
   ],
   "_markerNotes": {
     "ai-provider-management": "AI Provider Management route - absent means the AI Assistant closure was dropped",
@@ -30,7 +31,8 @@
     "financialAccounts": "The new Financial Accounts collection - absent means the Master Data 2.0 closure was dropped",
     "استيراد الحسابات المالية": "The Import Financial Accounts action in Master Data",
     "parentSheet1Code": "Hierarchy parent link - proves hierarchy editing/resolution is present",
-    "التوابع": "The Descendants column - proves the shared hierarchy resolver is wired to the UI"
+    "التوابع": "The Descendants column - proves the shared hierarchy resolver is wired to the UI",
+    "financial-accounts-import-modal": "The dedicated Financial Accounts importer's own dialog id - absent means the action still routes to Historical Excel Import"
   },
   "tests": [
     "buildIdentity",
@@ -47,10 +49,11 @@
   "deployCommand": "firebase deploy --only hosting --project asfourproduction-70e6e",
   "treeClean": true,
   "_changeNotes": {
+    "UI-0010": "Financial Accounts import opens a dedicated Master Data importer instead of the Historical Excel Import screen: the action no longer navigates to the bulk-entry route (which App.tsx renders as DataImportView); a new in-place modal reuses the existing financialAccounts schema, XLSX reader, row validation, duplicate detection and chunked commit, adds sheet selection and parent/cycle relationship checks, and keeps partial import so invalid rows never block valid ones",
     "DB-0009": "Category-first Master Data over an extensible registry; Financial Accounts master data with Excel import and hierarchical editing (new financialAccounts collection and its Firestore rule); one shared generic hierarchy resolver reused by Master Data, Production Review and production aggregation; hierarchical cost-centre editing with cycle, self-parent and unknown-parent protection"
   },
-  "previousVersion": "3.5.0",
+  "previousVersion": "3.6.0",
   "versionBump": "MINOR",
-  "classificationConfidence": "MEDIUM",
-  "previousReleaseId": "REL-2026-0003"
+  "classificationConfidence": "HIGH",
+  "previousReleaseId": "REL-2026-0004"
 }

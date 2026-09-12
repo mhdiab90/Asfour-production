@@ -30,7 +30,7 @@
  * hierarchy in the system. There is no second descendant walk here.
  */
 import { resolveParentCode } from './costCenterHierarchyPure';
-import { HierarchyNodeInput } from './hierarchyResolverPure';
+import { HierarchyNodeInput, buildHierarchyIndex, detectExistingCycles } from './hierarchyResolverPure';
 
 /** Firestore collection. New - see the docblock above for why nothing existed to reuse. */
 export const FINANCIAL_ACCOUNTS_COLLECTION = 'financialAccounts';
@@ -229,4 +229,87 @@ export function assessCodeChangeImpact(
     reasonAr: `${affectedChildCodes.length} حساب فرعي يشير إلى هذا الكود كأصل، وتغييره سيفصلها عن التسلسل الهرمي. انقل الحسابات الفرعية أولاً.`,
     reasonEn: `${affectedChildCodes.length} child account(s) reference this code as their parent; changing it would detach them. Re-parent the children first.`,
   };
+}
+
+// --- Import-time relationship checks -----------------------------------------
+
+export interface AccountImportRowIssue {
+  rowNumber: number;
+  errors: string[];
+}
+
+/**
+ * Checks the relationships an import file states, ROW BY ROW.
+ *
+ * The shared importer already covers required fields and duplicate codes. What
+ * it cannot know is whether a stated `parentCode` means anything, so this adds
+ * exactly two checks and no more:
+ *
+ *   1. the parent must resolve - to an account already stored OR to another row
+ *      in the same file. A parent naming nothing would silently detach the
+ *      account from every report that walks the tree.
+ *   2. the file must not describe a cycle (A under B, B under C, C under A).
+ *      Detected through the SHARED resolver, never a second graph walk here.
+ *
+ * Row-independent by construction: each problem is attached to its own row, so
+ * the valid rows in a mixed file stay importable. Rows already rejected by the
+ * shared importer are simply not passed in.
+ *
+ * A row that states no parent is a root and is always fine - a flat account
+ * list is a legitimate import.
+ */
+export function validateAccountImportRelationships(
+  rows: ReadonlyArray<{ rowNumber: number; data: Record<string, unknown> }>,
+  existingCodes: ReadonlySet<string>,
+): AccountImportRowIssue[] {
+  const issues = new Map<number, string[]>();
+  const addIssue = (rowNumber: number, message: string) => {
+    const list = issues.get(rowNumber);
+    if (list) list.push(message);
+    else issues.set(rowNumber, [message]);
+  };
+
+  const inFile = new Map<string, number>();
+  for (const row of rows) {
+    const code = normaliseAccountCode(row.data.code);
+    if (code && !inFile.has(code)) inFile.set(code, row.rowNumber);
+  }
+
+  for (const row of rows) {
+    const code = normaliseAccountCode(row.data.code);
+    const parent = normaliseAccountCode(row.data.parentCode);
+    if (!parent) continue; // a root account - always valid
+
+    if (parent === code) {
+      addIssue(row.rowNumber, `الحساب "${code}" مُعرَّف كأصل لنفسه. / Account "${code}" is set as its own parent.`);
+      continue;
+    }
+    if (!existingCodes.has(parent) && !inFile.has(parent)) {
+      addIssue(
+        row.rowNumber,
+        `كود الحساب الأصل "${parent}" غير موجود في قاعدة البيانات ولا في نفس الملف. / Parent account "${parent}" exists neither in the database nor in this file.`,
+      );
+    }
+  }
+
+  // Cycle detection across the file plus what is already stored, through the
+  // shared resolver - the same one Master Data editing and reporting use.
+  const nodes: HierarchyNodeInput[] = rows.map((row) => ({
+    id: normaliseAccountCode(row.data.code),
+    code: normaliseAccountCode(row.data.code),
+    parentId: normaliseAccountCode(row.data.parentCode) || null,
+  }));
+  for (const cycle of detectExistingCycles(buildHierarchyIndex(nodes))) {
+    const chain = cycle.join(' -> ');
+    for (const member of cycle) {
+      const rowNumber = inFile.get(member);
+      if (rowNumber !== undefined) {
+        addIssue(rowNumber, `حلقة مغلقة في شجرة الحسابات: ${chain} / Cycle in the account tree: ${chain}`);
+      }
+    }
+  }
+
+  return [...issues.entries()]
+    .map(([rowNumber, errors]) => ({ rowNumber, errors }))
+    .sort((a, b) => a.rowNumber - b.rowNumber);
 }

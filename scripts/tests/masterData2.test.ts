@@ -861,6 +861,166 @@ test('I10. §34 - no new per-code or per-child query was introduced', () => {
   }
 });
 
+// ==================================================
+// J. FINANCIAL ACCOUNT IMPORT ROUTING (§14 TEST 1-8)
+//
+// The defect: "Import Financial Accounts" called onNavigate('bulk-entry'), and
+// App.tsx routes BOTH `bulk-entry` AND `historical-import` to <DataImportView />
+// - the Historical Excel Import centre. So a Master Data import opened the
+// historical production importer.
+//
+// These assertions are about the shipped wiring, so they read the real source.
+// Comments are stripped first (readCode), so a test can never be satisfied by
+// the prose explaining it.
+// ==================================================
+
+const MDV = 'src/components/masterData/MasterDataView.tsx';
+const IMPORT_MODAL = 'src/components/masterData/FinancialAccountsImportModal.tsx';
+
+test('J1. TEST 1 - the Financial Accounts import action opens the dedicated importer', () => {
+  const src = readCode(MDV);
+  const start = src.indexOf("activeTab === 'financialAccounts' && (");
+  assert.ok(start > 0, 'the Financial Accounts action block must exist');
+  const block = src.slice(start, start + 1200);
+  assert.ok(
+    /setIsAccountsImportOpen\(true\)/.test(block),
+    'the action must open the dedicated Financial Accounts importer',
+  );
+  assert.ok(
+    /<FinancialAccountsImportModal/.test(src) && /isOpen=\{isAccountsImportOpen\}/.test(src),
+    'the dedicated importer must actually be rendered inside Master Data',
+  );
+});
+
+test('J2. TEST 2 - Master Data never navigates to the Historical Import route for accounts', () => {
+  const src = readCode(MDV);
+  const start = src.indexOf("activeTab === 'financialAccounts' && (");
+  const block = src.slice(start, start + 1200);
+  for (const route of ["'bulk-entry'", "'historical-import'"]) {
+    assert.equal(
+      block.includes(`onNavigate(${route})`),
+      false,
+      `the Financial Accounts import action must not navigate to ${route}`,
+    );
+  }
+  // And the importer itself must never navigate anywhere at all.
+  const modal = readCode(IMPORT_MODAL);
+  assert.equal(
+    /onNavigate|historical-import|bulk-entry/.test(modal),
+    false,
+    'the dedicated importer must not navigate; it stays inside Master Data',
+  );
+});
+
+test('J3. TEST 2b - the prefill that pointed at the bulk-entry route is gone', () => {
+  assert.equal(
+    /BULK_IMPORT_PREFILL_KEY/.test(readCode(MDV)),
+    false,
+    'Master Data must no longer hand a prefill to the bulk-entry route',
+  );
+  assert.equal(
+    /BULK_IMPORT_PREFILL_KEY/.test(readCode('src/components/bulk/BulkEntryView.tsx')),
+    false,
+    'the now-unset prefill mechanism must not be left behind',
+  );
+});
+
+test('J4. TEST 3 - the importer reuses the shipped financialAccounts schema, and defines no second one', () => {
+  const src = readCode(IMPORT_MODAL);
+  assert.ok(/MASTER_DATA_SCHEMAS/.test(src), 'must read the existing schema registry');
+  assert.ok(/MASTER_DATA_SCHEMAS\.financialAccounts/.test(src), 'must use the financialAccounts schema entry');
+  assert.equal(/fields:\s*\[/.test(src), false, 'must not declare a second field list of its own');
+  assert.equal(/XLSX\.read/.test(src), false, 'must not open a second XLSX reader');
+});
+
+test('J5. TEST 4/5 - preview and validation run through the existing import services', () => {
+  const src = readCode(IMPORT_MODAL);
+  for (const fn of ['listImportSheetNames', 'parseImportFile', 'validateImportData', 'commitBulkImport']) {
+    assert.ok(src.includes(fn), `must reuse ${fn} rather than reimplementing it`);
+  }
+  assert.ok(
+    /validateAccountImportRelationships/.test(src),
+    'must additionally check the parent relationships the shared importer cannot know about',
+  );
+});
+
+test('J6. TEST 5 - only importable rows are written; a bad row cannot block the valid ones', () => {
+  const src = readCode(IMPORT_MODAL);
+  assert.ok(
+    /status === 'valid' \|\| row\.status === 'NEW'/.test(src),
+    'the writable set must be exactly the shared valid/NEW rule',
+  );
+  // The execute button is driven by the READY count, never by the whole file being clean.
+  assert.ok(/summary\.ready === 0/.test(src), 'execution must be gated on the ready count');
+  assert.equal(
+    /summary\.invalid > 0|problemRows\.length > 0 \|\|/.test(src),
+    false,
+    'the presence of a bad row must not block execution',
+  );
+});
+
+test('J7. TEST 6 - imported accounts appear without a reload', () => {
+  const mdv = readCode(MDV);
+  // The list is a live listener, so new documents arrive on their own.
+  assert.ok(/subscribeMasterData/.test(mdv), 'the Master Data list must stay a live subscription');
+  assert.ok(/onImported=\{/.test(mdv), 'the importer must report completion back to the screen');
+  assert.equal(
+    /window\.location\.reload/.test(mdv + readCode(IMPORT_MODAL)),
+    false,
+    'a full application reload must never be required',
+  );
+  assert.ok(
+    /invalidateCachedCollection/.test(readCode('src/services/bulkImportService.ts')),
+    'the shared commit path must invalidate the cached collection',
+  );
+});
+
+test('J8. TEST 7 - Historical Import is untouched and still routed', () => {
+  const app = readCode('src/App.tsx');
+  assert.ok(/currentPage === 'historical-import'/.test(app), 'the historical-import route must still exist');
+  assert.ok(/<DataImportView\s*\/>/.test(app), 'Historical Import must still render');
+  assert.equal(
+    /FinancialAccounts/.test(readCode('src/components/admin/DataImportView.tsx')),
+    false,
+    'the Historical Import screen must carry no Financial Accounts special-casing',
+  );
+});
+
+test('J9. TEST 8 - import is gated on the EXISTING Master Data permission, no new key', () => {
+  const mdv = readCode(MDV);
+  assert.ok(/canImportMasterData/.test(mdv), 'a permission gate must exist');
+  assert.ok(/masterData\.inlineAdd|excel\.import/.test(mdv), 'it must reuse existing permission keys');
+  const modal = readCode(IMPORT_MODAL);
+  assert.ok(/!canImport/.test(modal), 'the importer must honour the gate');
+  assert.ok(/disabled=\{!canImport/.test(modal), 'the execute button must be disabled without permission');
+  for (const invented of ['financialAccounts.import', 'masterData.import', 'accounts.import']) {
+    assert.equal((mdv + modal).includes(invented), false, `must not invent the permission ${invented}`);
+  }
+});
+
+test('J10. the sheet picker extends the shared parser additively (no caller breaks)', () => {
+  const src = readCode('src/services/bulkImportService.ts');
+  assert.ok(
+    /export async function parseImportFile\(file: File, sheetName\?: string\)/.test(src),
+    'sheetName must be OPTIONAL so every existing caller is unaffected',
+  );
+  assert.ok(/export async function listImportSheetNames/.test(src), 'sheet names must be listable');
+  assert.ok(/SheetNames\.includes\(sheetName\)/.test(src), 'an unknown sheet must fall back to the first');
+});
+
+test('J11. §12 - no Firestore rule, collection or migration was touched by this fix', () => {
+  const modal = readCode(IMPORT_MODAL);
+  assert.equal(
+    /firebase\/firestore|getDocs|writeBatch|collection\(db/.test(modal),
+    false,
+    'the importer must go through the existing service layer, never Firestore directly',
+  );
+  assert.ok(
+    /FINANCIAL_ACCOUNTS_COLLECTION/.test(readCode('src/services/financialAccountsPure.ts')),
+    'the already-deployed collection must still be the target',
+  );
+});
+
 (async () => {
   await bootstrap();
   for (const { name, fn } of registered) {

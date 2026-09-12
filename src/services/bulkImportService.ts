@@ -207,8 +207,38 @@ export const MASTER_DATA_SCHEMAS: Record<MasterDataTab, { title: string; fields:
   }
 };
 
-// Parse file content (.xlsx, .xls, .csv, .tsv)
-export async function parseImportFile(file: File): Promise<Record<string, any>[]> {
+/**
+ * Lists the worksheet names in an uploaded workbook, so a caller can offer a
+ * sheet picker instead of silently assuming the first one.
+ *
+ * Additive: `parseImportFile` still defaults to the first sheet, so every
+ * existing caller behaves exactly as before.
+ */
+export async function listImportSheetNames(file: File): Promise<string[]> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      try {
+        const workbook = XLSX.read(new Uint8Array(e.target?.result as ArrayBuffer), { type: 'array' });
+        resolve(workbook.SheetNames.slice());
+      } catch {
+        reject(new Error('فشل قراءة الملف. تأكد من أن صيغة الملف صالحة (Excel أو CSV). / Could not read the file.'));
+      }
+    };
+    reader.onerror = () => reject(new Error('حدث خطأ أثناء قراءة الملف. / Error reading the file.'));
+    reader.readAsArrayBuffer(file);
+  });
+}
+
+/**
+ * Parse file content (.xlsx, .xls, .csv, .tsv).
+ *
+ * `sheetName` is optional and defaults to the first sheet - the exact previous
+ * behaviour - so no existing caller changes. An unknown sheet name falls back
+ * to the first sheet rather than throwing, since a stale picker selection must
+ * not turn into a hard failure.
+ */
+export async function parseImportFile(file: File, sheetName?: string): Promise<Record<string, any>[]> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
 
@@ -216,8 +246,8 @@ export async function parseImportFile(file: File): Promise<Record<string, any>[]
       try {
         const data = new Uint8Array(e.target?.result as ArrayBuffer);
         const workbook = XLSX.read(data, { type: 'array' });
-        const firstSheetName = workbook.SheetNames[0];
-        const worksheet = workbook.Sheets[firstSheetName];
+        const chosen = sheetName && workbook.SheetNames.includes(sheetName) ? sheetName : workbook.SheetNames[0];
+        const worksheet = workbook.Sheets[chosen];
         const json = XLSX.utils.sheet_to_json<Record<string, any>>(worksheet, { defval: '' });
         resolve(json);
       } catch (err) {

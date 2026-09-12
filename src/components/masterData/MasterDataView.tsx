@@ -77,7 +77,8 @@ import {
 } from '../../services/masterDataCategoryRegistry';
 import { buildHierarchyIndex, getNodePath } from '../../services/hierarchyResolverPure';
 import { validateAccountForSave } from '../../services/financialAccountService';
-import { BULK_IMPORT_PREFILL_KEY } from '../bulk/BulkEntryView';
+import { FinancialAccountsImportModal } from './FinancialAccountsImportModal';
+import { useAuth } from '../../context/AuthContext';
 import { exportMasterDataToExcel } from '../../services/exportService';
 import { Badge } from '../common/Badge';
 import { Modal } from '../common/Modal';
@@ -197,6 +198,23 @@ export const MasterDataView: React.FC<MasterDataViewProps> = ({ onNavigate }) =>
    * selection already follows.
    */
   const [selectedCodes, setSelectedCodes] = useState<string[]>([]);
+  const [isAccountsImportOpen, setIsAccountsImportOpen] = useState<boolean>(false);
+
+  /**
+   * Master Data import permission - the EXISTING grants, no new key.
+   *
+   * Exactly the rule DataImportView and ChineseMillsImportPanel already apply
+   * for "may create Master Data", plus the existing excel.import grant. A user
+   * without it can still open the importer and review a file; the execute
+   * button stays disabled.
+   */
+  const { adminUser, isSuperAdmin, hasPermission } = useAuth();
+  const canImportMasterData = useMemo(() => {
+    if (isSuperAdmin) return true;
+    if (!adminUser) return false;
+    if (adminUser.role === 'SUPER_ADMIN' || adminUser.role === 'ADMIN') return true;
+    return hasPermission('masterData.inlineAdd') || hasPermission('excel.import');
+  }, [adminUser, isSuperAdmin, hasPermission]);
   const [analyzedItems, setAnalyzedItems] = useState<CodeAnalysisItem[]>([]);
   const [isApplyingAnalysis, setIsApplyingAnalysis] = useState<boolean>(false);
   const [analysisAppliedMessage, setAnalysisAppliedMessage] = useState<string | null>(null);
@@ -909,10 +927,16 @@ export const MasterDataView: React.FC<MasterDataViewProps> = ({ onNavigate }) =>
             <button
               id="master-data-import-financial-accounts-btn"
               type="button"
-              onClick={() => {
-                try { sessionStorage.setItem(BULK_IMPORT_PREFILL_KEY, 'financialAccounts'); } catch { /* a blocked sessionStorage only costs the preselection */ }
-                onNavigate('bulk-entry');
-              }}
+              /*
+               * Opens the DEDICATED Financial Accounts importer, in place.
+               *
+               * This used to call onNavigate('bulk-entry'), and App.tsx routes
+               * both `bulk-entry` and `historical-import` to <DataImportView />
+               * - the Historical Excel Import centre. Importing a chart of
+               * accounts must never leave Master Data, so it no longer
+               * navigates at all.
+               */
+              onClick={() => setIsAccountsImportOpen(true)}
               className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl font-bold text-slate-950 bg-amber-400 hover:bg-amber-500 transition-colors cursor-pointer"
               title={language === 'ar' ? 'استيراد الحسابات المالية من ملف Excel باستخدام محرك الاستيراد الحالي' : 'Import financial accounts from Excel using the existing import engine'}
             >
@@ -2366,6 +2390,24 @@ export const MasterDataView: React.FC<MasterDataViewProps> = ({ onNavigate }) =>
       />
 
       {/* Cost Center Hierarchy - a separate, additive Master Data section (see the pseudo-tab button above); entirely local/Firestore-independent browsing except for the manually-gated Phase 4B execution action inside it */}
+      {/*
+        The dedicated Financial Accounts importer. Rendered here, inside Master
+        Data - it never navigates, so the user cannot land in Historical Import.
+      */}
+      <FinancialAccountsImportModal
+        isOpen={isAccountsImportOpen}
+        onClose={() => setIsAccountsImportOpen(false)}
+        existingCodes={activeTab === 'financialAccounts' ? items.map((a) => String(a.code ?? '')).filter(Boolean) : []}
+        canImport={canImportMasterData}
+        onImported={() => {
+          // The list behind this modal is a live subscribeMasterData listener,
+          // so imported accounts arrive on their own; commitBulkImport also
+          // invalidated the shared cache. Only the stale code selection needs
+          // clearing - it was made against the pre-import list.
+          setSelectedCodes([]);
+        }}
+      />
+
       <CostCenterHierarchyPanel
         isOpen={isHierarchyPanelOpen}
         onClose={() => setIsHierarchyPanelOpen(false)}
