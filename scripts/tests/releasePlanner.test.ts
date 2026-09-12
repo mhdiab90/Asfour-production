@@ -419,8 +419,21 @@ test('I1. the committed manifest is internally consistent', () => {
 });
 
 test('I2. a release that under-states its bump is BLOCKED', () => {
-  // A MINOR release relabelled PATCH - the exact mislabelling the gate exists for.
-  const r = gateWith({ versionBump: 'PATCH' });
+  /*
+   * Builds the mislabel from the manifest's own numbers rather than assuming
+   * the current release is MINOR. It used to override versionBump to PATCH,
+   * which silently became a no-op the first time a genuine PATCH release was
+   * cut - the test then passed a gate it was supposed to be probing.
+   *
+   * Here the version is raised a full MINOR above previousVersion while the
+   * declared bump stays PATCH, so the two genuinely disagree whatever the real
+   * release happens to be.
+   */
+  const base = JSON.parse(readSource('release.manifest.json'));
+  const understated = cr.applyBump(base.previousVersion, 'MINOR');
+  const r = gateWith({ version: understated, versionBump: 'PATCH' });
+  assert.notEqual(understated, cr.applyBump(base.previousVersion, 'PATCH'),
+    'the fixture must actually be a mislabel');
   assert.equal(r.code, 1, 'a mislabelled bump must block the release');
   assert.match(r.out, /FAIL {2}declared version matches the classified bump/);
 });

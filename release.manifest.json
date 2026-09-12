@@ -27,7 +27,6 @@
     "productionCenters",
     "dashboard-equipment-filter",
     "production-records-hierarchy-path",
-    "equipment-reconciliation-status",
     "master-data-reconcile-btn"
   ],
   "_markerNotes": {
@@ -49,7 +48,6 @@
     "productionCenters": "The assistant generateReport hierarchy parameter - absent means the AI hierarchy integration was dropped",
     "dashboard-equipment-filter": "The stage-dependent Dashboard equipment selector - absent means it reverted to the fixed press list",
     "production-records-hierarchy-path": "The Production Records drill-down breadcrumb - absent means the multi-level selector was dropped",
-    "equipment-reconciliation-status": "The Master Data legacy-code reconciliation dry run - absent means the reconciliation audit was dropped",
     "master-data-reconcile-btn": "The Reconcile Codes with Hierarchy entry point - absent means the reconciliation panel is unreachable again"
   },
   "tests": [
