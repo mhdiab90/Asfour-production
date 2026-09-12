@@ -47,6 +47,12 @@ import {
 import { ProductionStageType, NavigationPage, UniversalStageRecord, Press, Furnace, MultiDimensionFilter } from '../../types';
 import { fetchUniversalStageRecords } from '../../services/stageRecordService';
 import { fetchMasterData } from '../../services/masterDataService';
+/*
+ * Which equipment a stage actually records - declared once on the shared
+ * registry, read off the entry forms rather than assumed. This is what stops
+ * the equipment selector offering presses while a furnace stage is selected.
+ */
+import { equipmentCategoriesForStage, stageRecordsEquipment } from '../../services/masterDataCategoryRegistry';
 import {
   ALL_STAGES,
   getStageDisplayName,
@@ -95,6 +101,7 @@ export { DASHBOARD_DATE_PRESETS, DASHBOARD_DEFAULT_DATE_PRESET, isValidCustomRan
 
 export interface DashboardEntityFilters {
   pressId?: string;
+  furnaceId?: string;
   employeeId?: string;
   customerId?: string;
   productId?: string;
@@ -190,6 +197,52 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigate }) => {
   const [entityFilters, setEntityFilters] = useState<DashboardEntityFilters>(DASHBOARD_DEFAULT_ENTITY_FILTERS);
   const [sortField, setSortField] = useState<RankingMetric>(DASHBOARD_DEFAULT_SORT_FIELD);
   const [sortDirection, setSortDirection] = useState<'best' | 'worst'>(DASHBOARD_DEFAULT_SORT_DIRECTION);
+
+  /**
+   * The equipment the CURRENT stage can actually be filtered by.
+   *
+   * Driven entirely by the registry declaration and the already-loaded master
+   * data - no equipment name appears in this component, so a stage that starts
+   * recording equipment needs no change here. Each option carries the field it
+   * filters on, because a press and a furnace are different fields on the
+   * record.
+   */
+  const equipmentOptions = useMemo(() => {
+    const byCategory: Record<string, Array<{ id?: string; code?: string; name?: string }>> = {
+      presses,
+      furnaces,
+    };
+    const groups: Array<{ categoryId: string; labelAr: string; labelEn: string; field: 'pressId' | 'furnaceId'; items: Array<{ id: string; label: string }> }> = [];
+    for (const category of equipmentCategoriesForStage(stageType)) {
+      const field = category.id === 'furnaces' ? 'furnaceId' : 'pressId';
+      const items = (byCategory[category.id] ?? [])
+        .map((e) => ({ id: String(e.id ?? ''), label: e.code || e.name || String(e.id ?? '') }))
+        .filter((e) => e.id);
+      if (items.length > 0) groups.push({ categoryId: category.id, labelAr: category.labelAr, labelEn: category.labelEn, field, items });
+    }
+    return groups;
+  }, [stageType, presses, furnaces]);
+
+  const equipmentAvailable = stageRecordsEquipment(stageType);
+
+  /**
+   * A stage change must not leave the previous stage's equipment selected.
+   *
+   * Switching from pressing to a stage that records no equipment would
+   * otherwise keep filtering on a press id that stage's records never carry -
+   * silently returning nothing. Clearing back to "all equipment" is the
+   * deterministic, visible behaviour.
+   */
+  useEffect(() => {
+    const valid = new Set(equipmentOptions.flatMap((g) => g.items.map((i) => i.id)));
+    setEntityFilters((prev) => {
+      const pressOk = !prev.pressId || valid.has(prev.pressId);
+      const furnaceOk = !prev.furnaceId || valid.has(prev.furnaceId);
+      if (pressOk && furnaceOk) return prev;
+      return { ...prev, pressId: pressOk ? prev.pressId : undefined, furnaceId: furnaceOk ? prev.furnaceId : undefined };
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [equipmentOptions]);
 
   const setAssistantSelection = useSetAssistantSelection();
 
@@ -332,6 +385,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigate }) => {
     stageType: stageType === 'all' ? undefined : stageType,
     shiftId: shiftId || undefined,
     pressId: entityFilters.pressId,
+    furnaceId: entityFilters.furnaceId,
     employeeId: entityFilters.employeeId,
     customerId: entityFilters.customerId,
     productId: entityFilters.productId,
@@ -398,6 +452,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigate }) => {
       : (language === 'ar' ? 'كل الورديات' : 'All Shifts');
     const entityParts = [
       entityFilters.pressId ? `${language === 'ar' ? 'مكبس' : 'Press'}: ${presses.find((p) => p.id === entityFilters.pressId)?.code || entityFilters.pressId}` : null,
+      entityFilters.furnaceId ? `${language === 'ar' ? 'فرن' : 'Furnace'}: ${furnaces.find((f) => f.id === entityFilters.furnaceId)?.code || entityFilters.furnaceId}` : null,
       entityFilters.employeeId ? `${language === 'ar' ? 'موظف' : 'Employee'}: ${employees.find((e) => e.id === entityFilters.employeeId)?.name || entityFilters.employeeId}` : null,
       entityFilters.customerId ? `${language === 'ar' ? 'عميل' : 'Customer'}: ${customers.find((c) => c.id === entityFilters.customerId)?.name || entityFilters.customerId}` : null,
       entityFilters.productId ? `${language === 'ar' ? 'منتج' : 'Product'}: ${products.find((p) => p.id === entityFilters.productId)?.name || entityFilters.productId}` : null,
@@ -601,15 +656,52 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigate }) => {
             ))}
           </select>
 
-          {/* Press filter */}
+          {/*
+            Equipment filter - follows the selected stage.
+
+            It used to be a fixed press list, which meant choosing a furnace or
+            mill stage still offered presses: a filter that could only ever
+            return nothing. The options now come from what the stage actually
+            records, and a stage that records no equipment says so instead of
+            offering a list that cannot match.
+
+            The value encodes its own field ("pressId:abc"), because a press and
+            a furnace are different fields on the record.
+          */}
           <select
-            value={entityFilters.pressId || ''}
-            onChange={(e) => setEntityFilters((prev) => ({ ...prev, pressId: e.target.value || undefined }))}
-            className="bg-slate-800 text-slate-200 border border-slate-700 rounded px-2 py-1.5 text-xs font-bold"
+            id="dashboard-equipment-filter"
+            value={entityFilters.furnaceId ? `furnaceId:${entityFilters.furnaceId}` : entityFilters.pressId ? `pressId:${entityFilters.pressId}` : ''}
+            disabled={!equipmentAvailable || equipmentOptions.length === 0}
+            onChange={(e) => {
+              const raw = e.target.value;
+              if (!raw) { setEntityFilters((prev) => ({ ...prev, pressId: undefined, furnaceId: undefined })); return; }
+              const [field, id] = raw.split(':');
+              setEntityFilters((prev) => ({
+                ...prev,
+                pressId: field === 'pressId' ? id : undefined,
+                furnaceId: field === 'furnaceId' ? id : undefined,
+              }));
+            }}
+            className="bg-slate-800 text-slate-200 border border-slate-700 rounded px-2 py-1.5 text-xs font-bold disabled:opacity-50"
+            title={
+              equipmentAvailable
+                ? undefined
+                : (language === 'ar'
+                    ? 'سجلات هذه المرحلة لا تتضمن معدة، لذلك لا يمكن التصفية بالمعدات هنا.'
+                    : 'Records for this stage carry no equipment reference, so they cannot be filtered by equipment.')
+            }
           >
-            <option value="">{language === 'ar' ? 'كل المكابس' : 'All Presses'}</option>
-            {presses.map((p) => (
-              <option key={p.id} value={p.id}>{p.code}</option>
+            <option value="">
+              {equipmentAvailable
+                ? (language === 'ar' ? 'كل المعدات' : 'All equipment')
+                : (language === 'ar' ? 'لا توجد معدات لهذه المرحلة' : 'No equipment for this stage')}
+            </option>
+            {equipmentOptions.map((group) => (
+              <optgroup key={group.categoryId} label={language === 'ar' ? group.labelAr : group.labelEn}>
+                {group.items.map((item) => (
+                  <option key={`${group.field}:${item.id}`} value={`${group.field}:${item.id}`}>{item.label}</option>
+                ))}
+              </optgroup>
             ))}
           </select>
 

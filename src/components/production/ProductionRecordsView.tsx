@@ -51,7 +51,26 @@ import {
  * as: record -> pressId/furnaceId -> equipment -> hierarchyNodeId -> ancestors.
  */
 import { listCostCenterHierarchyNodes, CostCenterHierarchyRecord } from '../../services/costCenterHierarchyService';
-import { buildHierarchyIndex, getNodePath } from '../../services/hierarchyResolverPure';
+import { buildHierarchyIndex, getNodePath, buildEquipmentByNode } from '../../services/hierarchyResolverPure';
+/*
+ * Multi-level drill-down state. The selector owns WHAT the user picked; every
+ * question about the tree is answered by the shared resolver, so there is still
+ * exactly one traversal in the system.
+ */
+import {
+  EMPTY_HIERARCHY_SELECTION,
+  levelOptions,
+  selectAtLevel,
+  goBack,
+  clearSelection,
+  currentNodeId,
+  equipmentUnderSelection,
+  toggleEquipment,
+  selectAllEquipment,
+  deselectAllEquipment,
+  resolveSelectedEquipment,
+  selectionPathLabels,
+} from '../../services/hierarchySelectorPure';
 /*
  * Row selection reuses the SAME primitives the Data Review screen already uses -
  * there is one selection architecture in this codebase, not two. These are pure
@@ -85,6 +104,8 @@ export const ProductionRecordsView: React.FC<ProductionRecordsViewProps> = ({ on
   const [presses, setPresses] = useState<Press[]>([]);
   const [furnaces, setFurnaces] = useState<Furnace[]>([]);
   const [hierarchyNodes, setHierarchyNodes] = useState<CostCenterHierarchyRecord[]>([]);
+  /** Where the user has drilled to, and what they ticked. Depth is whatever the data has. */
+  const [hierarchySelection, setHierarchySelection] = useState(EMPTY_HIERARCHY_SELECTION);
   const [products, setProducts] = useState<Product[]>([]);
   const [customers, setCustomers] = useState<Customer[]>([]);
 
@@ -240,6 +261,47 @@ export const ProductionRecordsView: React.FC<ProductionRecordsViewProps> = ({ on
     return out;
   }, [filterCategoryId, masterDataByCategory, hierarchyNodes, hierarchyIndex, equipmentLinks]);
 
+  /** node id -> equipment linked to it, built once. */
+  const equipmentByNode = useMemo(() => buildEquipmentByNode(equipmentLinks), [equipmentLinks]);
+
+  /** One entry per level to draw: roots, then the chosen node's children, and so on. */
+  const hierarchyLevels = useMemo(
+    () => levelOptions(hierarchyIndex, hierarchySelection),
+    [hierarchyIndex, hierarchySelection],
+  );
+
+  /** The equipment hanging below the branch currently drilled into. */
+  const branchEquipment = useMemo(
+    () => equipmentUnderSelection(hierarchyIndex, equipmentByNode, hierarchySelection),
+    [hierarchyIndex, equipmentByNode, hierarchySelection],
+  );
+
+  /** Readable breadcrumb - labels from the data, never a constant. */
+  const hierarchyCrumbs = useMemo(
+    () => selectionPathLabels(hierarchyIndex, hierarchySelection, (x: any) => x.name || x.sheet1Code || x.id),
+    [hierarchyIndex, hierarchySelection],
+  );
+
+  /**
+   * What the hierarchy drill-down actually filters on.
+   *
+   * null when nothing is drilled into, so the screen keeps its existing
+   * behaviour untouched. Otherwise: the whole branch, or exactly what was
+   * ticked - the shared rule, decided in one place.
+   */
+  const hierarchyEquipmentIds = useMemo(
+    () => resolveSelectedEquipment(hierarchyIndex, equipmentByNode, hierarchySelection),
+    [hierarchyIndex, equipmentByNode, hierarchySelection],
+  );
+
+  const equipmentNameById = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const e of [...presses, ...furnaces]) {
+      if (e.id) map.set(String(e.id), e.name || e.code || String(e.id));
+    }
+    return map;
+  }, [presses, furnaces]);
+
   /** Empty codes = ALL. One = ONE. Several = MULTIPLE. The shared semantics, unchanged. */
   const codeSelection = useMemo(
     () => normaliseSelection(filterCategoryId, filterCodes, filterCodes.length === 0),
@@ -264,6 +326,19 @@ export const ProductionRecordsView: React.FC<ProductionRecordsViewProps> = ({ on
     }
 
     return true;
+  }).filter((rec) => {
+    /*
+     * The hierarchy drill-down, applied as one more AND beside date, shift,
+     * product and search. null means nothing was drilled into, so this is the
+     * identity case and the screen behaves exactly as before.
+     *
+     * Matches on the record's OWN equipment fields - a job belongs to the branch
+     * whether it names the press or the furnace - and each record is tested
+     * once, so it can never be emitted twice.
+     */
+    if (hierarchyEquipmentIds == null) return true;
+    const wanted = new Set(hierarchyEquipmentIds);
+    return [rec.pressId, rec.furnaceId].some((v) => v != null && wanted.has(String(v)));
   }), codeSelection, { index: hierarchyIndex }, { equipment: equipmentLinks });
 
   /*
@@ -375,6 +450,7 @@ export const ProductionRecordsView: React.FC<ProductionRecordsViewProps> = ({ on
     setSearchQuery('');
     setFilterShift('all');
     setFilterCodes([]);
+    setHierarchySelection(clearSelection());
     setFilterProduct('all');
     setStartDate('');
     setEndDate('');
@@ -439,6 +515,112 @@ export const ProductionRecordsView: React.FC<ProductionRecordsViewProps> = ({ on
               ))}
             </select>
           </div>
+
+          {/*
+            Multi-level production-centre drill-down.
+
+            Level 1 is the hierarchy's real roots; every later level is exactly
+            the chosen node's children. Levels are drawn from the data, so the
+            depth is whatever the hierarchy has and no centre name appears here.
+
+            Stopping at any level means the whole branch below it; ticking
+            equipment narrows to exactly what is ticked.
+          */}
+          {hierarchyLevels.length > 0 && hierarchyIndex.size > 0 && (
+            <div className="col-span-2 sm:col-span-3 md:col-span-6 border-t border-slate-100 pt-2 space-y-2">
+              <div className="flex items-center gap-2 flex-wrap">
+                <span className="text-[11px] font-bold text-slate-500">المراكز الإنتاجية</span>
+                {hierarchyCrumbs.length > 0 && (
+                  <span id="production-records-hierarchy-path" className="text-[11px] font-bold text-sky-700">
+                    {hierarchyCrumbs.join(' ← ')}
+                  </span>
+                )}
+                {hierarchySelection.path.length > 0 && (
+                  <>
+                    <button
+                      type="button"
+                      onClick={() => setHierarchySelection(goBack(hierarchySelection))}
+                      className="px-2 py-1 text-[11px] font-bold text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-lg cursor-pointer"
+                    >
+                      رجوع مستوى
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setHierarchySelection(clearSelection())}
+                      className="px-2 py-1 text-[11px] font-bold text-amber-700 hover:text-amber-900 cursor-pointer"
+                    >
+                      مسح الاختيار
+                    </button>
+                  </>
+                )}
+              </div>
+
+              <div className="flex flex-wrap gap-2">
+                {hierarchyLevels.map((lvl) => (
+                  <select
+                    key={lvl.level}
+                    id={`production-records-hierarchy-level-${lvl.level}`}
+                    value={lvl.selectedId || ''}
+                    onChange={(e) => setHierarchySelection(selectAtLevel(hierarchySelection, lvl.level, e.target.value || null))}
+                    className="bg-slate-50 border border-slate-200 rounded-xl px-2.5 py-1.5 text-xs font-semibold text-slate-700 min-w-[140px]"
+                  >
+                    <option value="">{`المستوى ${lvl.level} - الكل`}</option>
+                    {lvl.optionIds.map((id) => {
+                      const node: any = hierarchyIndex.byId.get(id);
+                      return <option key={id} value={id}>{node?.name || node?.sheet1Code || id}</option>;
+                    })}
+                  </select>
+                ))}
+              </div>
+
+              {/* Equipment checkboxes for the current branch. */}
+              {currentNodeId(hierarchySelection) && (
+                <div className="space-y-1.5">
+                  <div className="flex items-center gap-2 flex-wrap text-[11px]">
+                    <span className="font-bold text-slate-500">
+                      المعدات ({branchEquipment.length}) — المحدد: <span className="text-sky-700">{hierarchySelection.equipmentIds.length}</span>
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => setHierarchySelection(selectAllEquipment(hierarchyIndex, equipmentByNode, hierarchySelection))}
+                      disabled={branchEquipment.length === 0}
+                      className="px-2 py-1 font-bold text-slate-700 bg-slate-100 hover:bg-slate-200 disabled:opacity-50 rounded-lg cursor-pointer"
+                    >
+                      تحديد الكل
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setHierarchySelection(deselectAllEquipment(hierarchySelection))}
+                      disabled={hierarchySelection.equipmentIds.length === 0}
+                      className="px-2 py-1 font-bold text-slate-700 bg-slate-100 hover:bg-slate-200 disabled:opacity-50 rounded-lg cursor-pointer"
+                    >
+                      إلغاء تحديد الكل
+                    </button>
+                    {hierarchySelection.equipmentIds.length === 0 && branchEquipment.length > 0 && (
+                      <span className="text-slate-400">بدون تحديد = كل معدات هذا الفرع</span>
+                    )}
+                  </div>
+                  {branchEquipment.length === 0 ? (
+                    <p className="text-[11px] text-amber-700 font-bold">لا توجد معدات مرتبطة بهذا الفرع في البيانات الأساسية.</p>
+                  ) : (
+                    <div className="flex flex-wrap gap-x-4 gap-y-1 max-h-28 overflow-y-auto">
+                      {branchEquipment.map((id) => (
+                        <label key={id} className="flex items-center gap-1.5 text-[11px] font-semibold text-slate-700 cursor-pointer">
+                          <input
+                            type="checkbox"
+                            className="w-3.5 h-3.5 accent-sky-600 cursor-pointer"
+                            checked={hierarchySelection.equipmentIds.includes(id)}
+                            onChange={() => setHierarchySelection(toggleEquipment(hierarchySelection, id))}
+                          />
+                          <span>{equipmentNameById.get(id) || id}</span>
+                        </label>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
 
           {/*
             Code Type -> Codes, replacing the press-only selector.
@@ -528,7 +710,7 @@ export const ProductionRecordsView: React.FC<ProductionRecordsViewProps> = ({ on
         </div>
 
         {/* Clear filter shortcut */}
-        {(searchQuery || filterShift !== 'all' || filterCodes.length > 0 || filterProduct !== 'all' || startDate || endDate) && (
+        {(searchQuery || filterShift !== 'all' || filterCodes.length > 0 || hierarchySelection.path.length > 0 || filterProduct !== 'all' || startDate || endDate) && (
           <div className="flex justify-end pt-1">
             <button
               type="button"

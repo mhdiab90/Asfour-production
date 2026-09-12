@@ -231,6 +231,12 @@ export function filterUniversalRecords(
     if (filters.employeeId && !r.workers?.some((w) => w.employeeId === filters.employeeId)) return false;
     if (filters.shiftId && (r.rawData?.shiftId || '') !== filters.shiftId) return false;
     if (filters.pressId && (r.rawData?.pressId || '') !== filters.pressId) return false;
+    /*
+     * Additive, and inert unless set. Pressing records name the furnace that
+     * fired them, so a furnace is a real equipment filter on that stage. The
+     * Reports screen never sets this, so its results are unchanged.
+     */
+    if (filters.furnaceId && (r.rawData?.furnaceId || '') !== filters.furnaceId) return false;
     return true;
   });
 }

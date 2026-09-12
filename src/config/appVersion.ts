@@ -37,7 +37,7 @@ const DEPLOYMENT_ID_INJECTED = typeof __BUILD_DEPLOYMENT_ID__ === 'string' ? __B
 
 export const CURRENT_APP_VERSION: AppVersionInfo = {
   /** Set by the automatic release planner from the classified change set - see releasePlannerPure.ts. */
-  version: '3.12.0',
+  version: '3.13.0',
   buildId: BUILD_ID_INJECTED,
   buildTimestamp: BUILD_TIMESTAMP_INJECTED,
   gitCommit: COMMIT_SHA_INJECTED,
@@ -46,6 +46,16 @@ export const CURRENT_APP_VERSION: AppVersionInfo = {
   environment: 'production',
   releaseDate: '2026-08-22',
   changelog: [
+    {
+      version: '3.13.0',
+      date: '2026-09-12',
+      highlights: [
+        'تصفية سجلات الإنتاج بمستويات متعددة: مركز إنتاجي ← فرع ← معدات باختيار متعدد',
+        'التوقف عند أي مستوى يعني كل الفروع التابعة، وتحديد المعدات يحصر النطاق فيها',
+        'قائمة المعدات في لوحة التحكم تتبع المرحلة المختارة ولم تعد تعرض المكابس دائمًا',
+        'المرحلة التي لا تسجّل معدات تُظهر ذلك بوضوح بدلاً من قائمة لا تطابق شيئًا'
+      ]
+    },
     {
       version: '3.12.0',
       date: '2026-09-12',

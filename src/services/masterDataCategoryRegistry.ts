@@ -367,6 +367,55 @@ export function supportsLegacyProductionFilter(id: string): boolean {
   return (getCategory(id)?.legacyProductionFields?.length ?? 0) > 0;
 }
 
+/**
+ * Which equipment categories each production STAGE actually records.
+ *
+ * Read off the entry forms, one by one, not assumed:
+ *
+ *   pressing        ProductionEntryForm writes pressId AND furnaceId on every
+ *                   save, into the legacy `production` collection.
+ *   everything else writes NO equipment reference at all. RotaryFurnaceEntryForm
+ *                   stores no furnaceId; the two mill forms store `millType`,
+ *                   which is a free-text box ("مثال: طاحونة صينية 1"), not a
+ *                   reference to a mill master record.
+ *
+ * So an equipment filter is only meaningful on the pressing stage. Offering one
+ * elsewhere would match nothing while looking like it worked - which is exactly
+ * the defect this map exists to end: the Dashboard used to show the PRESS list
+ * no matter which stage was chosen.
+ *
+ * Adding a stage that starts recording equipment is one line here.
+ */
+export const STAGE_EQUIPMENT_CATEGORIES: Record<string, string[]> = {
+  pressing: ['presses', 'furnaces'],
+  rotary_furnace: [],
+  chinese_mills: [],
+  tube_ball_mills: [],
+  mortar_concrete: [],
+  mixing: [],
+  lightweight_foam: [],
+  sorting: [],
+};
+
+/**
+ * The equipment categories selectable for a stage.
+ *
+ * `all` means no stage has been chosen, so every category that ANY stage
+ * records is offered - the union, never a hard-coded list.
+ */
+export function equipmentCategoriesForStage(stage: string | undefined | null): MasterDataCategory[] {
+  const ids =
+    !stage || stage === 'all'
+      ? [...new Set(Object.values(STAGE_EQUIPMENT_CATEGORIES).flat())]
+      : STAGE_EQUIPMENT_CATEGORIES[stage] ?? [];
+  return ids.map((id) => getCategory(id)).filter((c): c is MasterDataCategory => Boolean(c));
+}
+
+/** True when this stage records any equipment at all - what decides whether the selector is usable. */
+export function stageRecordsEquipment(stage: string | undefined | null): boolean {
+  return equipmentCategoriesForStage(stage).length > 0;
+}
+
 /** True when this category's codes may be hierarchy nodes resolved via equipment links. */
 export function supportsEquipmentHierarchy(id: string): boolean {
   return getCategory(id)?.equipmentHierarchy === true;
