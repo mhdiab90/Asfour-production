@@ -95,8 +95,10 @@ import {
   reconcileLegacyWithHierarchy,
   summariseReconciliation,
   safeLinkPlan,
+  applyConfirmationMessage,
   RECONCILABLE_EQUIPMENT_CATEGORIES,
 } from '../../services/legacyHierarchyReconciliationPure';
+import { applySafeLinks, describeApplyOutcome, ApplyLinksOutcome } from '../../services/legacyHierarchyLinkService';
 import { exportMasterDataToExcel } from '../../services/exportService';
 import { Badge } from '../common/Badge';
 import { Modal } from '../common/Modal';
@@ -227,6 +229,10 @@ export const MasterDataView: React.FC<MasterDataViewProps> = ({ onNavigate }) =>
    */
   const [hierarchyNodes, setHierarchyNodes] = useState<CostCenterHierarchyRecord[]>([]);
   const [isReconcileOpen, setIsReconcileOpen] = useState<boolean>(false);
+  const [isApplyingLinks, setIsApplyingLinks] = useState<boolean>(false);
+  const [applyOutcome, setApplyOutcome] = useState<ApplyLinksOutcome | null>(null);
+  /** Bumped after a successful apply so the equipment list is re-read and the panel recomputes. */
+  const [equipmentRefresh, setEquipmentRefresh] = useState<number>(0);
   /**
    * Every equipment record, not just the tab on screen.
    *
@@ -311,14 +317,17 @@ export const MasterDataView: React.FC<MasterDataViewProps> = ({ onNavigate }) =>
   useEffect(() => {
     Promise.all(
       RECONCILABLE_EQUIPMENT_CATEGORIES.map((categoryId) =>
-        fetchMasterData<any>(MASTER_DATA_COLLECTIONS[categoryId as MasterDataTab])
+        // `skipCache` after an apply: updateMasterDataItem invalidated the
+        // collection, and the panel must recompute from what was actually
+        // written rather than from a stale copy.
+        fetchMasterData<any>(MASTER_DATA_COLLECTIONS[categoryId as MasterDataTab], { skipCache: equipmentRefresh > 0 })
           .then((rows) => rows.map((r) => ({ ...r, __categoryId: categoryId })))
           .catch(() => [] as Array<Record<string, any>>),
       ),
     )
       .then((groups) => setAllEquipment(groups.flat()))
       .catch(() => { /* an unavailable collection only shrinks the report */ });
-  }, []);
+  }, [equipmentRefresh]);
 
   // Load auxiliary lists (departments & furnaces for dropdowns)
   useEffect(() => {
@@ -409,6 +418,53 @@ export const MasterDataView: React.FC<MasterDataViewProps> = ({ onNavigate }) =>
     () => (reconciliation ? safeLinkPlan(reconciliation) : []),
     [reconciliation],
   );
+
+  /**
+   * Applies the planned links - and nothing else.
+   *
+   * `plannedLinks` is the already-validated plan the panel is displaying, so
+   * the number in the confirmation is the number of documents touched. Nothing
+   * is re-matched here: conflicts and ambiguous codes never entered the plan,
+   * so they cannot be written even by mistake.
+   *
+   * Each link is applied independently through the shared audited update, so
+   * one failure leaves the others written and retryable. Afterwards the
+   * equipment list is re-read so the panel recomputes - the applied rows stop
+   * being pending safe matches, and conflicts and no-counterpart rows are
+   * untouched because nothing wrote to them.
+   */
+  const handleApplySafeLinks = async () => {
+    if (plannedLinks.length === 0 || !canImportMasterData) return;
+    if (!window.confirm(applyConfirmationMessage(plannedLinks.length, language))) return;
+
+    setIsApplyingLinks(true);
+    setApplyOutcome(null);
+    try {
+      const currentLinks = new Map<string, string | null | undefined>(
+        allEquipment.map((e) => [String(e.id ?? ''), e.hierarchyNodeId]),
+      );
+      const outcome = await applySafeLinks(plannedLinks, { currentLinks });
+      setApplyOutcome(outcome);
+      if (outcome.successCount > 0) setEquipmentRefresh((v) => v + 1);
+    } catch (err: any) {
+      // A failure that stopped the whole run is reported as such - never as a
+      // partial success, and never silently.
+      setApplyOutcome({
+        successCount: 0,
+        failedCount: plannedLinks.length,
+        skippedCount: 0,
+        applied: [],
+        failed: plannedLinks.map((l) => ({
+          legacyId: l.legacyId, code: l.code, categoryId: l.categoryId,
+          error: String(err?.message ?? err), at: new Date().toISOString(),
+        })),
+        skipped: [],
+        plannedCount: plannedLinks.length,
+      });
+    } finally {
+      setIsApplyingLinks(false);
+    }
+  };
 
   /** How many equipment records on this tab still carry no link - §24/§26 reporting. */
   const unlinkedEquipmentCount = useMemo(
@@ -2818,13 +2874,18 @@ export const MasterDataView: React.FC<MasterDataViewProps> = ({ onNavigate }) =>
               <button
                 id="reconcile-apply-btn"
                 type="button"
-                disabled
-                className="px-4 py-2 text-xs font-extrabold text-slate-500 bg-slate-200 rounded-xl cursor-not-allowed"
-                title={language === 'ar'
-                  ? 'التطبيق يتم في خطوة منفصلة - هذه الشاشة للعرض فقط.'
-                  : 'Applying happens in a separate step - this screen is read-only.'}
+                onClick={handleApplySafeLinks}
+                disabled={!canImportMasterData || plannedLinks.length === 0 || isApplyingLinks}
+                className="px-4 py-2 text-xs font-extrabold text-slate-950 bg-amber-400 hover:bg-amber-500 disabled:opacity-50 disabled:cursor-not-allowed rounded-xl cursor-pointer"
+                title={!canImportMasterData
+                  ? (language === 'ar' ? 'تحتاج صلاحية تعديل البيانات الأساسية.' : 'Requires the Master Data edit permission.')
+                  : (language === 'ar'
+                      ? 'يطبّق المطابقات المؤكدة فقط - لا يشمل التعارضات ولا التي بدون مقابل.'
+                      : 'Applies confirmed matches only - never conflicts or no-counterpart rows.')}
               >
-                {language === 'ar' ? 'تطبيق المطابقات الآمنة' : 'Apply Safe Matches'}
+                {isApplyingLinks
+                  ? (language === 'ar' ? 'جارٍ الربط...' : 'Linking...')
+                  : (language === 'ar' ? `تطبيق المطابقات الآمنة (${plannedLinks.length})` : `Apply Safe Matches (${plannedLinks.length})`)}
               </button>
               <button
                 type="button"
@@ -2835,10 +2896,22 @@ export const MasterDataView: React.FC<MasterDataViewProps> = ({ onNavigate }) =>
               </button>
             </div>
           </div>
+          {applyOutcome && (
+            <div id="reconcile-apply-outcome" className="rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2 space-y-1">
+              <p className="text-xs font-black text-emerald-900">{describeApplyOutcome(applyOutcome, language)}</p>
+              {applyOutcome.failedCount > 0 && (
+                <div className="max-h-24 overflow-y-auto text-[10px] text-rose-800 font-semibold">
+                  {applyOutcome.failed.map((f) => (
+                    <p key={f.legacyId}>{`${f.code}: ${f.error}`}</p>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
           <p className="text-[10px] text-slate-500">
             {language === 'ar'
-              ? 'هذه الشاشة لا تُعدّل أي بيانات - لا سجلات أساسية ولا سجلات إنتاج. الربط اليدوي متاح من زر التعديل بجانب كل سجل معدة.'
-              : 'This screen modifies nothing - no master data and no production records. Manual linking remains available from the Edit action on each equipment row.'}
+              ? 'يُكتب حقل واحد فقط (عقدة التسلسل الهرمي) على سجل المعدة - لا تُعدَّل أي سجلات إنتاج تاريخية، ولا تُستبدل أي رابطة قائمة مختلفة.'
+              : 'Exactly one field (the hierarchy node) is written on the equipment record - no historical production record is modified, and no existing different link is replaced.'}
           </p>
         </div>
       </Modal>

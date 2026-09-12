@@ -387,9 +387,14 @@ test('E11. §22 - no permission was invented for the reconciliation screen', () 
   for (const invented of ['reconciliation.apply', 'hierarchy.link', 'masterData.reconcile']) {
     assert.equal(src.includes(invented), false, `must not invent the permission ${invented}`);
   }
-  // The screen carries no write path at all, so there is nothing to gate.
-  assert.equal(/applySafeLinks|legacyHierarchyLinkService/.test(src), false,
-    'the apply path is not reachable from this screen');
+  /*
+   * The apply path IS reachable again - that is this release's purpose, and
+   * 3.15.1's read-only state was the deliberate intermediate step. What §22
+   * actually requires is that it reuses the existing permission, which the
+   * gating below asserts.
+   */
+  assert.ok(/applySafeLinks\(/.test(src), 'the apply path is wired');
+  assert.ok(/disabled=\{!canImportMasterData/.test(src), 'and gated on the existing permission');
 });
 
 test('E12. §16 - the confirmation and the plan-only rule live in the shared modules', () => {
@@ -501,17 +506,25 @@ test('F6. §11 - an explicit empty state replaces the old disappearance', () => 
     'and it is chosen by the data state, not by hiding the panel');
 });
 
-test('F7. TEST 8/9 / §7 / §16 - opening the panel writes nothing', () => {
+test('F7. §7 - merely OPENING the panel still writes nothing', () => {
+  /*
+   * Narrowed from "the screen has no write path" - which was true only while
+   * the action was disabled - to the property that outlives that: viewing the
+   * reconciliation is read-only, and a write happens only on an explicit,
+   * confirmed click.
+   */
   const src = readCode(MDV);
-  // The apply service is not even imported in this release.
-  assert.equal(/legacyHierarchyLinkService|applySafeLinks|describeApplyOutcome/.test(src), false,
-    'the write path must not be reachable from this screen');
-  // The Apply button is present but inert.
-  const btnAt = src.indexOf('reconcile-apply-btn');
-  assert.ok(btnAt > 0, 'the button is shown so the next step is discoverable');
-  const block = src.slice(btnAt, btnAt + 400);
-  assert.ok(/disabled/.test(block), 'and it is disabled');
-  assert.equal(/onClick/.test(block), false, 'with no handler at all');
+  // Opening is just state.
+  assert.ok(/onClick=\{\(\) => setIsReconcileOpen\(true\)\}/.test(src), 'the entry point only opens the panel');
+  // The write is behind the confirmation, inside the handler.
+  const handlerAt = src.indexOf('const handleApplySafeLinks');
+  assert.ok(handlerAt > 0, 'the apply handler exists');
+  const body = src.slice(handlerAt, handlerAt + 900);
+  assert.ok(body.indexOf('window.confirm') < body.indexOf('applySafeLinks('),
+    'nothing is written before the user confirms');
+  // And the reconciliation itself is a pure computation, not a write.
+  assert.equal(/useMemo\([\s\S]{0,200}applySafeLinks/.test(src), false,
+    'rendering must never trigger an apply');
 });
 
 test('F8. TEST 9 - no production write path exists anywhere on this screen', () => {
@@ -560,6 +573,194 @@ test('F12. §10 - rows show business fields, never internal ids', () => {
   // The node/legacy ids are used as React keys only, never rendered as text.
   assert.equal(/<td[^>]*>\{m\.hierarchyNodeId\}/.test(block), false, 'a node id must never be shown');
   assert.equal(/<td[^>]*>\{m\.legacyId\}/.test(block), false, 'a legacy id must never be shown');
+});
+// ==================================================
+// G. THE APPLY ACTION IS ENABLED (§18 TEST 1-11)
+//
+// The applier service itself is unchanged since 3.15.0 and is still covered by
+// group E. What is new is the wiring: the button now has a handler, and after a
+// successful write the panel re-reads the equipment so the applied rows stop
+// being pending safe matches.
+//
+// The counts on the live screen (7 safe / 0 review / 1 no-counterpart / 17
+// conflicts) come from real Firestore data this suite cannot reach, so what is
+// asserted here is the RULE that produces them: the plan is exactly the safe
+// matches, and conflicts and no-counterpart rows cannot enter it.
+// ==================================================
+
+const MDVIEW = 'src/components/masterData/MasterDataView.tsx';
+
+test('G1. TEST 1 - the plan is exactly the safe matches, whatever the data', () => {
+  /*
+   * Mirrors the live shape: several safe, several conflicting, one with no
+   * counterpart. The plan must equal the safe ones and nothing else.
+   */
+  const legacy = [
+    { id: 'S1', code: '101', name: 'a', categoryId: 'presses' },
+    { id: 'S2', code: '102', name: 'b', categoryId: 'presses' },
+    { id: 'S3', code: '103', name: 'c', categoryId: 'furnaces' },
+    { id: 'C1', code: '201', name: 'd', categoryId: 'presses', hierarchyNodeId: 'N-OTHER-1' },
+    { id: 'C2', code: '202', name: 'e', categoryId: 'presses', hierarchyNodeId: 'N-OTHER-2' },
+    { id: 'U1', code: '999', name: 'f', categoryId: 'presses' },
+  ];
+  const nodes = [
+    { id: 'N-101', code: '101', name: 'x', type: 'EQUIPMENT' },
+    { id: 'N-102', code: '102', name: 'y', type: 'EQUIPMENT' },
+    { id: 'N-103', code: '103', name: 'z', type: 'EQUIPMENT' },
+    { id: 'N-201', code: '201', name: 'p', type: 'EQUIPMENT' },
+    { id: 'N-202', code: '202', name: 'q', type: 'EQUIPMENT' },
+  ];
+  const report = rec.reconcileLegacyWithHierarchy(legacy, nodes);
+  const plan = rec.safeLinkPlan(report);
+
+  assert.equal(report.counts.matched, 3, 'three safe matches');
+  assert.equal(report.counts.conflicts, 2, 'two conflicts');
+  assert.equal(report.counts.unmatchedLegacy, 1, 'one with no counterpart');
+  assert.equal(plan.length, report.counts.matched, 'the plan size IS the safe count');
+  assert.deepEqual(plan.map((p: any) => p.legacyId).sort(), ['S1', 'S2', 'S3']);
+});
+
+test('G2. TEST 3/4 / §14/§15 - conflicts and no-counterpart rows can never be written', () => {
+  const legacy = [
+    { id: 'C1', code: '201', name: 'd', categoryId: 'presses', hierarchyNodeId: 'N-OTHER' },
+    { id: 'U1', code: '999', name: 'f', categoryId: 'presses' },
+  ];
+  const nodes = [{ id: 'N-201', code: '201', name: 'p', type: 'EQUIPMENT' }];
+  const report = rec.reconcileLegacyWithHierarchy(legacy, nodes);
+  assert.deepEqual(rec.safeLinkPlan(report), [], 'zero writes planned');
+  assert.equal(report.counts.conflicts, 1);
+  assert.equal(report.counts.unmatchedLegacy, 1);
+  // Both survive for manual review.
+  assert.equal(report.conflicts[0].legacyId, 'C1');
+  assert.equal(report.unmatchedLegacy[0].id, 'U1');
+});
+
+test('G3. TEST 2 / §2 - the button applies the displayed plan and nothing else', () => {
+  const src = readCode(MDVIEW);
+  assert.ok(/onClick=\{handleApplySafeLinks\}/.test(src), 'the button is wired');
+  assert.ok(/applySafeLinks\(plannedLinks, \{ currentLinks \}\)/.test(src),
+    'it applies exactly the plan the panel is showing');
+  assert.ok(/const plannedLinks = useMemo\(/.test(src), 'and the plan comes from the reconciliation');
+  // No re-matching inside the write path.
+  assert.equal(/handleApplySafeLinks[\s\S]{0,700}reconcileLegacyWithHierarchy/.test(src), false,
+    'matching must not be re-run during execution');
+});
+
+test('G4. §3 - the confirmation names the exact planned count', () => {
+  const src = readCode(MDVIEW);
+  assert.ok(/window\.confirm\(applyConfirmationMessage\(plannedLinks\.length, language\)\)/.test(src),
+    'the confirmation uses the planned count, not a literal');
+  assert.ok(/if \(!window\.confirm\([\s\S]{0,80}\) return;/.test(src), 'cancelling writes nothing');
+  const msg = rec.applyConfirmationMessage(7, 'ar');
+  assert.ok(msg.includes('7'), 'the count appears verbatim');
+  assert.ok(msg.includes('لن يتم تعديل السجلات التاريخية'), 'and the historical guarantee');
+});
+
+test('G5. §5 / TEST 5/6 - existing-link protection is structural, not a UI check', () => {
+  // Same target -> no-op; different target -> conflict, absent from the plan.
+  const same = rec.reconcileLegacyWithHierarchy(
+    [{ id: 'X', code: '101', name: 'a', categoryId: 'presses', hierarchyNodeId: 'N-101' }],
+    [{ id: 'N-101', code: '101', name: 'x', type: 'EQUIPMENT' }],
+  );
+  assert.deepEqual(rec.safeLinkPlan(same), [], 'already correct - nothing to write');
+  assert.equal(same.counts.conflicts, 0, 'agreeing is not a conflict');
+
+  const diff = rec.reconcileLegacyWithHierarchy(
+    [{ id: 'Y', code: '101', name: 'a', categoryId: 'presses', hierarchyNodeId: 'N-ELSEWHERE' }],
+    [{ id: 'N-101', code: '101', name: 'x', type: 'EQUIPMENT' }],
+  );
+  assert.deepEqual(rec.safeLinkPlan(diff), [], 'a different link is never overwritten');
+  assert.equal(diff.counts.conflicts, 1);
+});
+
+test('G6. TEST 7 / §7 - a failure leaves the other links applied', () => {
+  const svc = readCode('src/services/legacyHierarchyLinkService.ts');
+  assert.ok(/for \(const link of plan\)/.test(svc), 'one link at a time');
+  assert.equal(/rollback|runTransaction|writeBatch/.test(svc), false, 'no rollback, no batch');
+  assert.ok(/failed\.push\(/.test(svc), 'a failure is recorded and the loop continues');
+  // The UI reports the split rather than a bare success.
+  const src = readCode(MDVIEW);
+  assert.ok(/describeApplyOutcome\(applyOutcome, language\)/.test(src), 'the outcome is shown');
+  assert.ok(/applyOutcome\.failedCount > 0/.test(src), 'failures are listed, not hidden');
+});
+
+test('G7. TEST 8 / §8 - a second run writes nothing', () => {
+  const svc = readCode('src/services/legacyHierarchyLinkService.ts');
+  assert.ok(/String\(current\) === link\.hierarchyNodeId/.test(svc), 'the idempotency check');
+  const body = svc.slice(svc.indexOf('for (const link of plan)'));
+  assert.ok(body.indexOf('skipped.push') < body.indexOf('updateMasterDataItem'),
+    'the skip short-circuits before the write');
+  // The UI supplies the current links so the check has something to compare.
+  const src = readCode(MDVIEW);
+  assert.ok(/currentLinks = new Map<string, string \| null \| undefined>\(/.test(src));
+  assert.ok(/allEquipment\.map\(\(e\) => \[String\(e\.id \?\? ''\), e\.hierarchyNodeId\]\)/.test(src),
+    'built from what is actually stored');
+});
+
+test('G8. TEST 11 / §10/§16 - the panel re-reads after a successful apply', () => {
+  const src = readCode(MDVIEW);
+  assert.ok(/if \(outcome\.successCount > 0\) setEquipmentRefresh/.test(src),
+    'a successful write triggers a refresh');
+  assert.ok(/skipCache: equipmentRefresh > 0/.test(src),
+    'and the refresh bypasses the cache so it sees what was written');
+  assert.ok(/\}, \[equipmentRefresh\]\);/.test(src), 'the load effect re-runs on it');
+  // Master Data shows the resulting path.
+  assert.ok(/hierarchyLabelFor\(item\.hierarchyNodeId\)/.test(src), 'the linked path is rendered');
+});
+
+test('G9. TEST 9/10 / §4/§11 - one field is written, and nothing production-side', () => {
+  const svc = readCode('src/services/legacyHierarchyLinkService.ts');
+  const writes = svc.match(/updateMasterDataItem\([^)]*\)/g) || [];
+  assert.equal(writes.length, 1, 'exactly one write call site');
+  assert.ok(writes[0].includes('hierarchyNodeId'), 'writing only the link field');
+  for (const forbidden of ['pressId', 'furnaceId', 'productId', 'customerId', 'quantity', 'ProductionRecord']) {
+    assert.equal(svc.includes(forbidden), false, `${forbidden} must not appear in the applier`);
+  }
+  // The audited path is what carries the audit entry and the invalidation.
+  const md = readCode('src/services/masterDataService.ts');
+  assert.ok(/logAuditAction\('UPDATE'/.test(md) && /invalidateCachedCollection/.test(md));
+});
+
+test('G10. §6 - the apply path writes through the shared service, never raw Firestore', () => {
+  /*
+   * Scoped to the reconciliation path. MasterDataView legitimately contains one
+   * pre-existing writeBatch - the "Analyze Current Codes" products update,
+   * which predates all of this work - so forbidding raw Firestore across the
+   * whole 2800-line component would assert something that was never true.
+   */
+  const src = readCode(MDVIEW);
+  assert.ok(/applySafeLinks\(/.test(src), 'the apply goes through the service');
+  const handlerAt = src.indexOf('const handleApplySafeLinks');
+  const body = src.slice(handlerAt, handlerAt + 1200);
+  assert.equal(/getDocs|setDoc|writeBatch|deleteDoc|collection\(db|doc\(db/.test(body), false,
+    'the apply handler itself must contain no raw Firestore call');
+  // And the service it calls is equally clean.
+  assert.equal(/getDocs|setDoc|writeBatch|deleteDoc|collection\(db/.test(readCode('src/services/legacyHierarchyLinkService.ts')), false,
+    'nor may the applier service');
+});
+
+test('G11. §12/§13 - Reports, AI, Dashboard and Production Records were not modified', () => {
+  for (const rel of [
+    'src/components/reports/ReportsView.tsx',
+    'src/assistant/tools/stageReportTools.ts',
+    'src/components/dashboard/DashboardView.tsx',
+    'src/components/production/ProductionRecordsView.tsx',
+  ]) {
+    const src = readCode(rel);
+    assert.equal(/applySafeLinks|legacyHierarchyLinkService/.test(src), false,
+      `${rel} must not gain a write path`);
+  }
+});
+
+test('G12. §1 - permission gating is unchanged and no key was invented', () => {
+  const src = readCode(MDVIEW);
+  assert.ok(/disabled=\{!canImportMasterData \|\| plannedLinks\.length === 0/.test(src),
+    'no permission or an empty plan disables the action');
+  assert.ok(/if \(plannedLinks\.length === 0 \|\| !canImportMasterData\) return;/.test(src),
+    'and the handler refuses too, not just the button');
+  for (const invented of ['reconciliation.apply', 'hierarchy.link', 'masterData.reconcile']) {
+    assert.equal(src.includes(invented), false, `must not invent ${invented}`);
+  }
 });
 (async () => {
   await bootstrap();

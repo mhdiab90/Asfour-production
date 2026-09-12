@@ -37,7 +37,7 @@ const DEPLOYMENT_ID_INJECTED = typeof __BUILD_DEPLOYMENT_ID__ === 'string' ? __B
 
 export const CURRENT_APP_VERSION: AppVersionInfo = {
   /** Set by the automatic release planner from the classified change set - see releasePlannerPure.ts. */
-  version: '3.15.1',
+  version: '3.16.0',
   buildId: BUILD_ID_INJECTED,
   buildTimestamp: BUILD_TIMESTAMP_INJECTED,
   gitCommit: COMMIT_SHA_INJECTED,
@@ -46,6 +46,16 @@ export const CURRENT_APP_VERSION: AppVersionInfo = {
   environment: 'production',
   releaseDate: '2026-08-22',
   changelog: [
+    {
+      version: '3.16.0',
+      date: '2026-09-12',
+      highlights: [
+        'تفعيل زر تطبيق المطابقات الآمنة مع تأكيد يذكر عدد السجلات بدقة',
+        'يُكتب حقل واحد فقط على سجل المعدة - التعارضات وبدون مقابل لا تُكتب إطلاقًا',
+        'فشل أي سجل لا يلغي الباقي، وتشغيل العملية مرتين لا يكتب شيئًا',
+        'تحديث الشاشة بعد الربط ليظهر المسار الهرمي فورًا'
+      ]
+    },
     {
       version: '3.15.1',
       date: '2026-09-12',
