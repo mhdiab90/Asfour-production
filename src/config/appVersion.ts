@@ -37,7 +37,7 @@ const DEPLOYMENT_ID_INJECTED = typeof __BUILD_DEPLOYMENT_ID__ === 'string' ? __B
 
 export const CURRENT_APP_VERSION: AppVersionInfo = {
   /** Set by the automatic release planner from the classified change set - see releasePlannerPure.ts. */
-  version: '3.15.0',
+  version: '3.15.1',
   buildId: BUILD_ID_INJECTED,
   buildTimestamp: BUILD_TIMESTAMP_INJECTED,
   gitCommit: COMMIT_SHA_INJECTED,
@@ -46,6 +46,16 @@ export const CURRENT_APP_VERSION: AppVersionInfo = {
   environment: 'production',
   releaseDate: '2026-08-22',
   changelog: [
+    {
+      version: '3.15.1',
+      date: '2026-09-12',
+      highlights: [
+        'إضافة زر ظاهر: مطابقة الأكواد مع التسلسل الهرمي ضمن أدوات البيانات الأساسية',
+        'الشاشة كانت مخفية عندما تكون النتائج صفرًا أو عند تصفح تبويب آخر - تم إصلاح ذلك',
+        'عرض المطابقات الآمنة والتي تحتاج مراجعة وبدون مقابل والتعارضات دائمًا',
+        'عرض فقط في هذه المرحلة - لا يتم تعديل أي بيانات عند فتح الشاشة'
+      ]
+    },
     {
       version: '3.15.0',
       date: '2026-09-12',

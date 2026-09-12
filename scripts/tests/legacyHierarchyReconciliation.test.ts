@@ -29,6 +29,11 @@ console.log('legacyHierarchyReconciliation.test.ts');
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, '../..');
 
+/** Raw source, line endings normalised - used where the assertion is about literal UI text. */
+function readSource(rel: string): string {
+  return fs.readFileSync(path.join(ROOT, rel), 'utf-8').replace(/\r\n/g, '\n');
+}
+
 function readCode(rel: string): string {
   return fs.readFileSync(path.join(ROOT, rel), 'utf-8')
     .replace(/\r\n/g, '\n')
@@ -371,23 +376,37 @@ test('E10. §24/CRITICAL 6 - nothing destructive exists in either module', () =>
   }
 });
 
-test('E11. §15/§22 - the action is gated on the existing Master Data permission', () => {
+test('E11. §22 - no permission was invented for the reconciliation screen', () => {
+  /*
+   * Retargeted. This asserted the Apply button's WIRING inside MasterDataView,
+   * which the read-only release deliberately removed: applying is a separate
+   * step, and two entry points were not wanted. The property it guarded -
+   * that no new permission exists - is still asserted, here and in F10.
+   */
   const src = readCode('src/components/masterData/MasterDataView.tsx');
-  assert.ok(/id="apply-safe-links-btn"/.test(src));
-  assert.ok(/disabled=\{!canImportMasterData \|\| plannedLinks\.length === 0/.test(src),
-    'no permission or no plan means no button');
   for (const invented of ['reconciliation.apply', 'hierarchy.link', 'masterData.reconcile']) {
     assert.equal(src.includes(invented), false, `must not invent the permission ${invented}`);
   }
+  // The screen carries no write path at all, so there is nothing to gate.
+  assert.equal(/applySafeLinks|legacyHierarchyLinkService/.test(src), false,
+    'the apply path is not reachable from this screen');
 });
 
-test('E12. §16 - the UI confirms before writing, and applies only the plan', () => {
-  const src = readCode('src/components/masterData/MasterDataView.tsx');
-  assert.ok(/window\.confirm\(applyConfirmationMessage\(plannedLinks\.length, language\)\)/.test(src),
-    'the confirmation uses the exact planned count');
-  assert.ok(/if \(!confirmed\) return;/.test(src), 'cancelling writes nothing');
-  assert.ok(/applySafeLinks\(plannedLinks/.test(src), 'only the plan is applied');
-  assert.ok(/safeLinkPlan\(reconciliation\)/.test(src), 'and the plan comes from the reconciliation');
+test('E12. §16 - the confirmation and the plan-only rule live in the shared modules', () => {
+  /*
+   * Also retargeted, for the same reason. The confirmation text and the
+   * "apply only the plan" guarantee are properties of the reconciliation module
+   * and the applier service - not of a button that this release removed - so
+   * they are asserted where they actually live and cannot be lost.
+   */
+  const msg = rec.applyConfirmationMessage(42, 'ar');
+  assert.ok(msg.includes('42'), 'the confirmation names the exact count');
+  assert.ok(msg.includes('لن يتم تعديل السجلات التاريخية'), 'and the historical-data guarantee');
+
+  const svc = readCode('src/services/legacyHierarchyLinkService.ts');
+  assert.ok(/plan: readonly SafeLink\[\]/.test(svc), 'the applier takes only the validated plan');
+  assert.equal(/reconcileLegacyWithHierarchy|normaliseCode/.test(svc), false,
+    'and never re-derives which links are safe');
 });
 
 test('E13. §28 - the outcome numbers reconcile against the plan', () => {
@@ -402,6 +421,145 @@ test('E14. §29 - applying issues no per-record read', () => {
   assert.equal(/getDoc\(|getDocs\(|fetchMasterData/.test(src), false,
     'current links are passed in, never re-read per row');
   assert.ok(/currentLinks\?: Map</.test(src), 'they arrive as a prebuilt map');
+});
+// ==================================================
+// F. THE UI IS REACHABLE (§15 TEST 1-10)
+//
+// V3.15.0 shipped the reconciliation but nobody could find it. The banner was
+// gated on THREE conditions at once: being on an equipment tab, AND a non-zero
+// matched count, OR a non-zero ambiguous count. With the hierarchy not yet
+// imported both counts are zero, so the feature did not exist on screen at all -
+// on any tab. These assertions pin the fix so it cannot silently regress.
+// ==================================================
+
+const MDV = 'src/components/masterData/MasterDataView.tsx';
+
+test('F1. TEST 1 - a visible entry point exists among the Master Data utilities', () => {
+  const src = readCode(MDV);
+  assert.ok(/id="master-data-reconcile-btn"/.test(src), 'the button must exist');
+  assert.ok(/setIsReconcileOpen\(true\)/.test(src), 'and it must open the panel');
+  // It sits with the other utilities, not buried in the code list.
+  const btnAt = src.indexOf('master-data-reconcile-btn');
+  const qualityAt = src.indexOf('master-data-quality-report-btn');
+  assert.ok(qualityAt > 0 && Math.abs(btnAt - qualityAt) < 2500,
+    'it belongs beside the existing Master Data utility actions');
+});
+
+test('F2. TEST 2 / §5 / §11 - the panel is NOT hidden by zero counts or by the active tab', () => {
+  const src = readCode(MDV);
+  // The old triple gate is gone.
+  assert.equal(/reconciliation\.counts\.matched > 0 \|\| reconciliation\.counts\.ambiguous > 0/.test(src), false,
+    'a zero-count gate must never hide the feature again');
+  assert.equal(/isEquipmentTab && reconciliation/.test(src), false,
+    'and it must not depend on which tab is open');
+  // The panel opens purely on user intent.
+  assert.ok(/isOpen=\{isReconcileOpen\}/.test(src), 'visibility is the open flag alone');
+});
+
+test('F3. §8 - reconciliation spans ALL equipment categories, not the current tab', () => {
+  const src = readCode(MDV);
+  assert.ok(/RECONCILABLE_EQUIPMENT_CATEGORIES\.map\(/.test(src), 'every equipment category is loaded');
+  assert.ok(/allEquipment\.map\(/.test(src), 'and reconciled together');
+  assert.equal(/categoryId: activeTab/.test(src), false, 'never scoped to the tab on screen');
+});
+
+test('F4. TEST 3 / §3 / §13 - this is NOT the Cost Center hierarchy feature', () => {
+  const src = readSource(MDV);
+  // Both exist, and they are different controls with different labels.
+  assert.ok(src.includes('مطابقة الأكواد مع التسلسل الهرمي'), 'the reconciliation label');
+  assert.ok(src.includes('التسلسل الهرمي لمراكز التكلفة'), 'the cost-centre browser label still exists');
+  const code = readCode(MDV);
+  const reconcileBtn = code.indexOf('master-data-reconcile-btn');
+  const costCentreBtn = code.indexOf('master-data-cost-center-hierarchy-btn');
+  assert.ok(reconcileBtn > 0 && costCentreBtn > 0 && reconcileBtn !== costCentreBtn,
+    'two separate buttons');
+  // The reconciliation button must not open the cost-centre panel.
+  const block = code.slice(reconcileBtn - 400, reconcileBtn + 400);
+  assert.equal(/setIsHierarchyPanelOpen/.test(block), false,
+    'the reconciliation entry point must not open the Cost Center browser');
+});
+
+test('F5. TEST 4-7 - all four counts are rendered, including zeroes', () => {
+  const src = readCode(MDV);
+  for (const bucket of ['safe', 'review', 'none', 'conflict']) {
+    assert.ok(src.includes(`'${bucket}'`), `the ${bucket} bucket must be rendered`);
+  }
+  assert.ok(/counts\.matched/.test(src), 'safe matches');
+  assert.ok(/counts\.ambiguous/.test(src), 'needs review');
+  assert.ok(/counts\.unmatchedLegacy/.test(src), 'no counterpart');
+  assert.ok(/counts\.conflicts/.test(src), 'conflicts');
+  // The counts are not wrapped in a "> 0" condition.
+  assert.equal(/counts\.conflicts > 0 &&[\s\S]{0,80}reconcile-count/.test(src), false,
+    'a zero count must still render its card');
+});
+
+test('F6. §11 - an explicit empty state replaces the old disappearance', () => {
+  const src = readSource(MDV);
+  assert.ok(src.includes('لا توجد بيانات للمطابقة'), 'the zero-data message must exist');
+  const code = readCode(MDV);
+  assert.ok(/allEquipment\.length === 0 \|\| hierarchyNodes\.length === 0/.test(code),
+    'and it is chosen by the data state, not by hiding the panel');
+});
+
+test('F7. TEST 8/9 / §7 / §16 - opening the panel writes nothing', () => {
+  const src = readCode(MDV);
+  // The apply service is not even imported in this release.
+  assert.equal(/legacyHierarchyLinkService|applySafeLinks|describeApplyOutcome/.test(src), false,
+    'the write path must not be reachable from this screen');
+  // The Apply button is present but inert.
+  const btnAt = src.indexOf('reconcile-apply-btn');
+  assert.ok(btnAt > 0, 'the button is shown so the next step is discoverable');
+  const block = src.slice(btnAt, btnAt + 400);
+  assert.ok(/disabled/.test(block), 'and it is disabled');
+  assert.equal(/onClick/.test(block), false, 'with no handler at all');
+});
+
+test('F8. TEST 9 - no production write path exists anywhere on this screen', () => {
+  const src = readCode(MDV);
+  for (const forbidden of ['pressId', 'productionQuantity', 'ProductionRecord', 'deleteProductionRecord']) {
+    assert.equal(src.includes(forbidden), false, `${forbidden} must not appear in Master Data`);
+  }
+  // The only master-data write is the pre-existing per-row Edit save.
+  const writes = (src.match(/updateMasterDataItem\(/g) || []).length;
+  assert.equal(writes, 1, `expected only the existing row-Edit save, found ${writes}`);
+});
+
+test('F9. TEST 10 - the existing Master Data category UI is untouched', () => {
+  const src = readCode(MDV);
+  for (const kept of [
+    'master-data-quality-btn', 'master-data-quality-report-btn', 'master-data-export-btn',
+    'master-data-add-btn', 'master-data-cost-center-hierarchy-btn', 'equipment-hierarchy-node',
+  ]) {
+    assert.ok(src.includes(kept), `${kept} must still exist`);
+  }
+  assert.ok(/subscribeMasterData/.test(src), 'the live category list is unchanged');
+});
+
+test('F10. §12 - no new permission was introduced for viewing the reconciliation', () => {
+  const src = readCode(MDV);
+  for (const invented of ['reconciliation.view', 'hierarchy.reconcile', 'masterData.reconcile']) {
+    assert.equal(src.includes(invented), false, `must not invent ${invented}`);
+  }
+});
+
+test('F11. §6 - the panel uses the existing engine, not a second matcher', () => {
+  const src = readCode(MDV);
+  assert.ok(/reconcileLegacyWithHierarchy\(/.test(src), 'the shared engine');
+  assert.ok(/safeLinkPlan\(reconciliation\)/.test(src), 'and the shared plan');
+  assert.equal(/normaliseCode|levenshtein|similarity/.test(src), false,
+    'no matching logic may live in the component');
+});
+
+test('F12. §10 - rows show business fields, never internal ids', () => {
+  const src = readCode(MDV);
+  const modalAt = src.indexOf('master-data-reconcile-modal');
+  const block = src.slice(modalAt, modalAt + 6000);
+  for (const shown of ['legacyCode', 'legacyCategory', 'legacyName', 'hierarchyName']) {
+    assert.ok(block.includes(shown), `${shown} must be displayed`);
+  }
+  // The node/legacy ids are used as React keys only, never rendered as text.
+  assert.equal(/<td[^>]*>\{m\.hierarchyNodeId\}/.test(block), false, 'a node id must never be shown');
+  assert.equal(/<td[^>]*>\{m\.legacyId\}/.test(block), false, 'a legacy id must never be shown');
 });
 (async () => {
   await bootstrap();

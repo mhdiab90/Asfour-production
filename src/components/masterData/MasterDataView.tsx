@@ -95,9 +95,8 @@ import {
   reconcileLegacyWithHierarchy,
   summariseReconciliation,
   safeLinkPlan,
-  applyConfirmationMessage,
+  RECONCILABLE_EQUIPMENT_CATEGORIES,
 } from '../../services/legacyHierarchyReconciliationPure';
-import { applySafeLinks, describeApplyOutcome, ApplyLinksOutcome } from '../../services/legacyHierarchyLinkService';
 import { exportMasterDataToExcel } from '../../services/exportService';
 import { Badge } from '../common/Badge';
 import { Modal } from '../common/Modal';
@@ -227,8 +226,16 @@ export const MasterDataView: React.FC<MasterDataViewProps> = ({ onNavigate }) =>
    * only "not linked", rather than pretending there is something to choose.
    */
   const [hierarchyNodes, setHierarchyNodes] = useState<CostCenterHierarchyRecord[]>([]);
-  const [isApplyingLinks, setIsApplyingLinks] = useState<boolean>(false);
-  const [applyOutcome, setApplyOutcome] = useState<ApplyLinksOutcome | null>(null);
+  const [isReconcileOpen, setIsReconcileOpen] = useState<boolean>(false);
+  /**
+   * Every equipment record, not just the tab on screen.
+   *
+   * Reconciliation spans presses, furnaces and mills together, so tying it to
+   * `items` (one tab) was part of why it was unreachable: you had to already be
+   * on the right tab to see it at all.
+   */
+  const [allEquipment, setAllEquipment] = useState<Array<Record<string, any>>>([]);
+
 
   /**
    * Master Data import permission - the EXISTING grants, no new key.
@@ -297,6 +304,22 @@ export const MasterDataView: React.FC<MasterDataViewProps> = ({ onNavigate }) =>
       .catch(() => { /* an unavailable hierarchy only costs the link selector */ });
   }, []);
 
+  /*
+   * All equipment categories, cache-first, once. Reconciliation covers them
+   * together, so it must not depend on which tab happens to be open.
+   */
+  useEffect(() => {
+    Promise.all(
+      RECONCILABLE_EQUIPMENT_CATEGORIES.map((categoryId) =>
+        fetchMasterData<any>(MASTER_DATA_COLLECTIONS[categoryId as MasterDataTab])
+          .then((rows) => rows.map((r) => ({ ...r, __categoryId: categoryId })))
+          .catch(() => [] as Array<Record<string, any>>),
+      ),
+    )
+      .then((groups) => setAllEquipment(groups.flat()))
+      .catch(() => { /* an unavailable collection only shrinks the report */ });
+  }, []);
+
   // Load auxiliary lists (departments & furnaces for dropdowns)
   useEffect(() => {
     fetchMasterData<Department>('departments').then(setDepartments).catch(() => {});
@@ -359,19 +382,20 @@ export const MasterDataView: React.FC<MasterDataViewProps> = ({ onNavigate }) =>
    * imported) are visible as what they are, and so ambiguous codes are shown
    * rather than silently resolved.
    */
-  const reconciliation = useMemo(() => {
-    if (!isEquipmentTab) return null;
-    return reconcileLegacyWithHierarchy(
-      items.map((i) => ({
-        id: String(i.id ?? ''),
-        code: String(i.code ?? ''),
-        name: i.name,
-        categoryId: activeTab,
-        hierarchyNodeId: i.hierarchyNodeId,
-      })),
-      hierarchyNodes.map((h) => ({ id: h.id, code: h.sheet1Code, name: h.name, type: h.type })),
-    );
-  }, [isEquipmentTab, items, activeTab, hierarchyNodes]);
+  const reconciliation = useMemo(
+    () =>
+      reconcileLegacyWithHierarchy(
+        allEquipment.map((i) => ({
+          id: String(i.id ?? ''),
+          code: String(i.code ?? ''),
+          name: i.name,
+          categoryId: String(i.__categoryId ?? ''),
+          hierarchyNodeId: i.hierarchyNodeId,
+        })),
+        hierarchyNodes.map((h) => ({ id: h.id, code: h.sheet1Code, name: h.name, type: h.type })),
+      ),
+    [allEquipment, hierarchyNodes],
+  );
 
   /**
    * The exact set of writes the Apply action would perform.
@@ -385,47 +409,6 @@ export const MasterDataView: React.FC<MasterDataViewProps> = ({ onNavigate }) =>
     () => (reconciliation ? safeLinkPlan(reconciliation) : []),
     [reconciliation],
   );
-
-  /**
-   * Applies only the planned links.
-   *
-   * Each row is written on its own through the shared audited update, so a
-   * failure isolates to that row and the successful ones stay written. The
-   * current links are passed in so an already-correct row is skipped without a
-   * read, which is what makes running this twice a no-op.
-   */
-  const handleApplySafeLinks = async () => {
-    if (plannedLinks.length === 0) return;
-    const confirmed = window.confirm(applyConfirmationMessage(plannedLinks.length, language));
-    if (!confirmed) return;
-
-    setIsApplyingLinks(true);
-    setApplyOutcome(null);
-    try {
-      const currentLinks = new Map<string, string | null | undefined>(
-        items.map((i) => [String(i.id ?? ''), i.hierarchyNodeId]),
-      );
-      const outcome = await applySafeLinks(plannedLinks, { currentLinks });
-      setApplyOutcome(outcome);
-      // updateMasterDataItem already invalidated the collection cache; the live
-      // subscription below repaints the list with the new links.
-    } catch (err: any) {
-      setApplyOutcome({
-        successCount: 0,
-        failedCount: plannedLinks.length,
-        skippedCount: 0,
-        applied: [],
-        failed: plannedLinks.map((l) => ({
-          legacyId: l.legacyId, code: l.code, categoryId: l.categoryId,
-          error: String(err?.message ?? err), at: new Date().toISOString(),
-        })),
-        skipped: [],
-        plannedCount: plannedLinks.length,
-      });
-    } finally {
-      setIsApplyingLinks(false);
-    }
-  };
 
   /** How many equipment records on this tab still carry no link - §24/§26 reporting. */
   const unlinkedEquipmentCount = useMemo(
@@ -1271,6 +1254,32 @@ export const MasterDataView: React.FC<MasterDataViewProps> = ({ onNavigate }) =>
             <span>{language === 'ar' ? 'تقرير جودة البيانات الأساسية' : 'Master Data Quality Report'}</span>
           </button>
 
+          {/*
+            Reconciliation entry point.
+
+            It used to be an inline banner gated on BOTH being on an equipment
+            tab AND having a non-zero match or ambiguity - so with the hierarchy
+            not yet imported, or simply while looking at Products, it did not
+            exist on screen at all. It is a Master Data utility now, always
+            reachable, and the panel itself reports zero states rather than
+            vanishing.
+
+            This is NOT the Cost Center hierarchy browser next to the tabs -
+            that is a different feature with a different label.
+          */}
+          <button
+            id="master-data-reconcile-btn"
+            type="button"
+            onClick={() => setIsReconcileOpen(true)}
+            className="flex items-center gap-1.5 px-3 py-2 text-xs font-bold text-sky-800 bg-sky-50 border border-sky-300 hover:bg-sky-100 rounded-xl transition-colors cursor-pointer"
+            title={language === 'ar'
+              ? 'مطابقة أكواد المعدات القديمة مع عقد التسلسل الهرمي - عرض فقط في هذه المرحلة'
+              : 'Match legacy equipment codes against hierarchy nodes - read-only at this stage'}
+          >
+            <Layers className="w-3.5 h-3.5 text-sky-600" />
+            <span>{language === 'ar' ? 'مطابقة الأكواد مع التسلسل الهرمي' : 'Reconcile Codes with Hierarchy'}</span>
+          </button>
+
           {activeTab === 'products' && (
             <button
               id="master-data-analyze-codes-btn"
@@ -1330,84 +1339,6 @@ export const MasterDataView: React.FC<MasterDataViewProps> = ({ onNavigate }) =>
         match would silently attach production to the wrong branch, so the count
         is surfaced and the assignment stays an explicit human decision.
       */}
-      {/*
-        Legacy code <-> hierarchy reconciliation, as a dry run.
-
-        Matched by code WITHIN the same category: names routinely differ between
-        the legacy record and the imported node, so the name is never the
-        identity. A code that matches more than one candidate on either side is
-        reported for review instead of being linked.
-      */}
-      {isEquipmentTab && reconciliation && (reconciliation.counts.matched > 0 || reconciliation.counts.ambiguous > 0) && (
-        <div id="equipment-reconciliation-status" className="bg-sky-50 border border-sky-200 rounded-2xl px-4 py-3 text-xs font-bold text-sky-900 space-y-1">
-          <p>
-            {language === 'ar'
-              ? `مطابقة الأكواد مع التسلسل الهرمي — ${summariseReconciliation(reconciliation, 'ar')}`
-              : `Code reconciliation with the hierarchy — ${summariseReconciliation(reconciliation, 'en')}`}
-          </p>
-          {reconciliation.counts.ambiguous > 0 && (
-            <p className="text-amber-800 font-semibold">
-              {language === 'ar'
-                ? `أكواد تحتاج مراجعة يدوية (أكثر من مرشح): ${reconciliation.ambiguous.map((a) => a.code).join('، ')}`
-                : `Codes needing manual review (more than one candidate): ${reconciliation.ambiguous.map((a) => a.code).join(', ')}`}
-            </p>
-          )}
-
-          {/*
-            Conflicts: the code points somewhere other than the link already
-            stored. Never applied - somebody set that link deliberately.
-          */}
-          {reconciliation.counts.conflicts > 0 && (
-            <p className="text-rose-800 font-semibold">
-              {language === 'ar'
-                ? `تعارض - مرتبطة سلفًا بعقدة مختلفة ولن تُستبدل تلقائيًا: ${reconciliation.conflicts.map((c) => c.legacyCode).join('، ')}`
-                : `Conflicts - already linked to a different node and never replaced automatically: ${reconciliation.conflicts.map((c) => c.legacyCode).join(', ')}`}
-            </p>
-          )}
-
-          {/* The only write action, and it applies the planned links only. */}
-          <div className="flex items-center gap-2 flex-wrap pt-1">
-            <button
-              id="apply-safe-links-btn"
-              type="button"
-              onClick={handleApplySafeLinks}
-              disabled={!canImportMasterData || plannedLinks.length === 0 || isApplyingLinks}
-              className="px-3 py-1.5 text-[11px] font-black text-slate-950 bg-amber-400 hover:bg-amber-500 disabled:opacity-50 rounded-lg cursor-pointer"
-              title={canImportMasterData
-                ? undefined
-                : (language === 'ar' ? 'تحتاج صلاحية تعديل البيانات الأساسية.' : 'Requires the Master Data edit permission.')}
-            >
-              {isApplyingLinks
-                ? (language === 'ar' ? 'جارٍ الربط...' : 'Linking...')
-                : (language === 'ar' ? `تطبيق المطابقات الآمنة (${plannedLinks.length})` : `Apply Safe Matches (${plannedLinks.length})`)}
-            </button>
-            <span className="text-[10px] font-semibold text-sky-800">
-              {language === 'ar'
-                ? 'يطبّق المطابقات المؤكدة فقط - لا يشمل المتعارضة ولا التي تحتاج مراجعة.'
-                : 'Applies confirmed matches only - never conflicts or rows needing review.'}
-            </span>
-          </div>
-
-          {applyOutcome && (
-            <div id="apply-safe-links-outcome" className="pt-1 space-y-0.5">
-              <p className="font-black text-emerald-900">{describeApplyOutcome(applyOutcome, language)}</p>
-              {applyOutcome.failedCount > 0 && (
-                <div className="max-h-24 overflow-y-auto text-[10px] text-rose-800 font-semibold">
-                  {applyOutcome.failed.map((f) => (
-                    <p key={f.legacyId}>{`${f.code}: ${f.error}`}</p>
-                  ))}
-                </div>
-              )}
-            </div>
-          )}
-          <p className="font-semibold text-sky-800">
-            {language === 'ar'
-              ? 'المطابقة بالكود داخل نفس التصنيف فقط - اختلاف الاسم لا يعني اختلاف السجل. اربط أو عدّل من زر التعديل بجانب كل سجل.'
-              : 'Matched by code within the same category only - a different name does not mean a different record. Link or change it from the Edit action on each row.'}
-          </p>
-        </div>
-      )}
-
       {isEquipmentTab && unlinkedEquipmentCount > 0 && (
         <div id="equipment-hierarchy-status" className="bg-amber-50 border border-amber-200 rounded-2xl px-4 py-3 text-xs font-bold text-amber-900">
           {language === 'ar'
@@ -2743,6 +2674,174 @@ export const MasterDataView: React.FC<MasterDataViewProps> = ({ onNavigate }) =>
           setSelectedCodes([]);
         }}
       />
+
+      {/*
+        Legacy code <-> hierarchy reconciliation - READ ONLY.
+
+        Distinct from the Cost Center Hierarchy browser next to the tabs: this
+        is about production EQUIPMENT master data and the equipment hierarchy,
+        and it changes nothing. Every bucket is shown, including the zeroes,
+        because "nothing matched" and "the panel is missing" looked identical
+        before and that is exactly how this feature went unnoticed.
+
+        Applying the safe links is deliberately NOT wired here. The plan is
+        computed and its size shown, so the count can be checked before anything
+        is written in a later step.
+      */}
+      <Modal
+        id="master-data-reconcile-modal"
+        isOpen={isReconcileOpen}
+        onClose={() => setIsReconcileOpen(false)}
+        title={language === 'ar' ? 'مطابقة الأكواد مع التسلسل الهرمي' : 'Reconcile Codes with Hierarchy'}
+        subtitle={language === 'ar'
+          ? 'مطابقة أكواد المعدات القديمة (المكابس والأفران والطواحين) مع عقد التسلسل الهرمي - عرض فقط، لا يتم تعديل أي بيانات'
+          : 'Matches legacy equipment codes (presses, furnaces, mills) against hierarchy nodes - read-only, nothing is modified'}
+        maxWidth="4xl"
+      >
+        <div className="space-y-4" dir={isRtl ? 'rtl' : 'ltr'}>
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+            {[
+              { id: 'safe', label: language === 'ar' ? 'مطابقات آمنة' : 'Safe matches', value: reconciliation.counts.matched, tone: 'bg-emerald-50 text-emerald-800 border-emerald-200' },
+              { id: 'review', label: language === 'ar' ? 'تحتاج مراجعة' : 'Needs review', value: reconciliation.counts.ambiguous, tone: 'bg-amber-50 text-amber-800 border-amber-200' },
+              { id: 'none', label: language === 'ar' ? 'بدون مقابل' : 'No counterpart', value: reconciliation.counts.unmatchedLegacy, tone: 'bg-slate-100 text-slate-800 border-slate-200' },
+              { id: 'conflict', label: language === 'ar' ? 'تعارضات' : 'Conflicts', value: reconciliation.counts.conflicts, tone: 'bg-rose-50 text-rose-800 border-rose-200' },
+            ].map((c) => (
+              <div key={c.id} id={`reconcile-count-${c.id}`} className={`rounded-xl border px-3 py-2 ${c.tone}`}>
+                <p className="text-[10px] font-bold opacity-80">{c.label}</p>
+                <p className="text-lg font-black leading-tight">{c.value}</p>
+              </div>
+            ))}
+          </div>
+
+          {allEquipment.length === 0 || hierarchyNodes.length === 0 ? (
+            <div className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-6 text-center">
+              <p className="text-xs font-bold text-slate-700">
+                {language === 'ar' ? 'لا توجد بيانات للمطابقة' : 'No data to reconcile'}
+              </p>
+              <p className="text-[11px] text-slate-500 mt-1">
+                {hierarchyNodes.length === 0
+                  ? (language === 'ar'
+                      ? 'لم يتم استيراد التسلسل الهرمي بعد، لذلك لا يوجد ما تُطابَق معه الأكواد.'
+                      : 'The hierarchy has not been imported yet, so there is nothing for the codes to match against.')
+                  : (language === 'ar'
+                      ? 'لا توجد سجلات معدات (مكابس/أفران/طواحين) في البيانات الأساسية.'
+                      : 'There are no equipment records (presses/furnaces/mills) in Master Data.')}
+              </p>
+            </div>
+          ) : (
+            <>
+              <div className="rounded-xl border border-slate-200 overflow-hidden">
+                <div className="overflow-x-auto max-h-72 overflow-y-auto">
+                  <table className="w-full text-[11px] min-w-[640px]">
+                    <thead className="sticky top-0 bg-slate-50 z-10 text-slate-600">
+                      <tr className="border-b border-slate-200">
+                        <th className="text-start py-2 px-2.5 font-bold">{language === 'ar' ? 'الكود' : 'Code'}</th>
+                        <th className="text-start py-2 px-2.5 font-bold">{language === 'ar' ? 'الفئة' : 'Category'}</th>
+                        <th className="text-start py-2 px-2.5 font-bold">{language === 'ar' ? 'الاسم القديم' : 'Legacy name'}</th>
+                        <th className="text-start py-2 px-2.5 font-bold">{language === 'ar' ? 'اسم العقدة' : 'Hierarchy name'}</th>
+                        <th className="text-start py-2 px-2.5 font-bold">{language === 'ar' ? 'الحالة' : 'Status'}</th>
+                        <th className="text-start py-2 px-2.5 font-bold">{language === 'ar' ? 'السبب' : 'Reason'}</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100">
+                      {reconciliation.matched.map((m) => (
+                        <tr key={`m-${m.legacyId}`}>
+                          <td className="py-1.5 px-2.5 font-mono font-bold">{m.legacyCode}</td>
+                          <td className="py-1.5 px-2.5">{m.legacyCategory}</td>
+                          <td className="py-1.5 px-2.5">{m.legacyName || '-'}</td>
+                          <td className="py-1.5 px-2.5">{m.hierarchyName || '-'}</td>
+                          <td className="py-1.5 px-2.5 font-bold text-emerald-700">
+                            {m.alreadyLinked
+                              ? (language === 'ar' ? 'مرتبطة سلفًا' : 'Already linked')
+                              : (language === 'ar' ? 'مطابقة آمنة' : 'Safe match')}
+                          </td>
+                          <td className="py-1.5 px-2.5 text-slate-500">
+                            {language === 'ar' ? 'تطابق الكود + نفس الفئة' : 'exact code + same category'}
+                          </td>
+                        </tr>
+                      ))}
+                      {reconciliation.conflicts.map((c) => (
+                        <tr key={`c-${c.legacyId}`} className="bg-rose-50/40">
+                          <td className="py-1.5 px-2.5 font-mono font-bold">{c.legacyCode}</td>
+                          <td className="py-1.5 px-2.5">{c.legacyCategory}</td>
+                          <td className="py-1.5 px-2.5">{c.legacyName || '-'}</td>
+                          <td className="py-1.5 px-2.5">-</td>
+                          <td className="py-1.5 px-2.5 font-bold text-rose-700">{language === 'ar' ? 'تعارض' : 'Conflict'}</td>
+                          <td className="py-1.5 px-2.5 text-slate-500">
+                            {language === 'ar' ? 'مرتبطة سلفًا بعقدة مختلفة - لن تُستبدل تلقائيًا' : 'already linked to a different node - never replaced automatically'}
+                          </td>
+                        </tr>
+                      ))}
+                      {reconciliation.ambiguous.map((a) => (
+                        <tr key={`a-${a.category}-${a.code}`} className="bg-amber-50/40">
+                          <td className="py-1.5 px-2.5 font-mono font-bold">{a.code}</td>
+                          <td className="py-1.5 px-2.5">{a.category}</td>
+                          <td className="py-1.5 px-2.5">-</td>
+                          <td className="py-1.5 px-2.5">-</td>
+                          <td className="py-1.5 px-2.5 font-bold text-amber-700">{language === 'ar' ? 'تحتاج مراجعة' : 'Needs review'}</td>
+                          <td className="py-1.5 px-2.5 text-slate-500">{a.reason}</td>
+                        </tr>
+                      ))}
+                      {reconciliation.unmatchedLegacy.map((u) => (
+                        <tr key={`u-${u.id}`}>
+                          <td className="py-1.5 px-2.5 font-mono font-bold">{u.code}</td>
+                          <td className="py-1.5 px-2.5">{u.category}</td>
+                          <td className="py-1.5 px-2.5">{u.name || '-'}</td>
+                          <td className="py-1.5 px-2.5">-</td>
+                          <td className="py-1.5 px-2.5 font-bold text-slate-500">{language === 'ar' ? 'بدون مقابل' : 'No counterpart'}</td>
+                          <td className="py-1.5 px-2.5 text-slate-500">
+                            {language === 'ar' ? 'لا توجد عقدة بنفس الكود' : 'no hierarchy node with this code'}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+
+              <p className="text-[11px] font-semibold text-slate-600">
+                {language === 'ar'
+                  ? 'المطابقة بالكود داخل نفس الفئة فقط - اختلاف الاسم لا يعني اختلاف السجل، وتشابه الاسم وحده لا يكفي للربط.'
+                  : 'Matched by code within the same category only - a different name does not mean a different record, and a similar name alone is never enough to link.'}
+              </p>
+            </>
+          )}
+
+          {/* Read-only in this release: the plan size is shown, nothing is written. */}
+          <div className="flex items-center justify-between gap-2 flex-wrap border-t border-slate-200 pt-3">
+            <span className="text-[11px] font-bold text-slate-600">
+              {language === 'ar'
+                ? `جاهز للتطبيق لاحقًا: ${plannedLinks.length} سجل`
+                : `Ready to apply later: ${plannedLinks.length} record(s)`}
+            </span>
+            <div className="flex items-center gap-2">
+              <button
+                id="reconcile-apply-btn"
+                type="button"
+                disabled
+                className="px-4 py-2 text-xs font-extrabold text-slate-500 bg-slate-200 rounded-xl cursor-not-allowed"
+                title={language === 'ar'
+                  ? 'التطبيق يتم في خطوة منفصلة - هذه الشاشة للعرض فقط.'
+                  : 'Applying happens in a separate step - this screen is read-only.'}
+              >
+                {language === 'ar' ? 'تطبيق المطابقات الآمنة' : 'Apply Safe Matches'}
+              </button>
+              <button
+                type="button"
+                onClick={() => setIsReconcileOpen(false)}
+                className="px-4 py-2 text-xs font-bold text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-xl cursor-pointer"
+              >
+                {language === 'ar' ? 'إغلاق' : 'Close'}
+              </button>
+            </div>
+          </div>
+          <p className="text-[10px] text-slate-500">
+            {language === 'ar'
+              ? 'هذه الشاشة لا تُعدّل أي بيانات - لا سجلات أساسية ولا سجلات إنتاج. الربط اليدوي متاح من زر التعديل بجانب كل سجل معدة.'
+              : 'This screen modifies nothing - no master data and no production records. Manual linking remains available from the Edit action on each equipment row.'}
+          </p>
+        </div>
+      </Modal>
 
       <CostCenterHierarchyPanel
         isOpen={isHierarchyPanelOpen}
