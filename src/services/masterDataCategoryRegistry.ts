@@ -110,6 +110,20 @@ export interface MasterDataCategory {
    * the selector has to offer both under one heading.
    */
   legacyCodeSources?: string[];
+  /**
+   * Whether a code for this category may be a HIERARCHY NODE resolved through
+   * an equipment link, rather than a direct master-data id.
+   *
+   * Deliberately NOT the same thing as `hierarchical`. `hierarchical` means the
+   * category's OWN records form a tree through `parentField` - financial
+   * accounts do that. Presses and furnaces do not: they are a flat list that
+   * POINTS AT a separate node tree via `hierarchyNodeId`. Marking them
+   * `hierarchical` would make the engine expand press ids as if they were
+   * nodes, which is wrong.
+   *
+   * Set only where the equipment master records genuinely carry that field.
+   */
+  equipmentHierarchy?: boolean;
 }
 
 export const MASTER_DATA_CATEGORIES: MasterDataCategory[] = [
@@ -137,6 +151,9 @@ export const MASTER_DATA_CATEGORIES: MasterDataCategory[] = [
     // ProductionEntryForm. The codes come from those two collections.
     legacyProductionFields: ['pressId', 'furnaceId'],
     legacyCodeSources: ['presses', 'furnaces'],
+    // Press and Furnace master records carry hierarchyNodeId, so a selected
+    // node resolves through them to the records that name that equipment.
+    equipmentHierarchy: true,
   },
   {
     id: 'products',
@@ -348,6 +365,11 @@ export function legacyProductionCategories(): MasterDataCategory[] {
 
 export function supportsLegacyProductionFilter(id: string): boolean {
   return (getCategory(id)?.legacyProductionFields?.length ?? 0) > 0;
+}
+
+/** True when this category's codes may be hierarchy nodes resolved via equipment links. */
+export function supportsEquipmentHierarchy(id: string): boolean {
+  return getCategory(id)?.equipmentHierarchy === true;
 }
 
 /**

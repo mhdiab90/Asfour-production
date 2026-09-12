@@ -37,9 +37,13 @@ import {
   isNarrowing,
 } from './masterDataCategoryRegistry';
 import {
+  EquipmentByNode,
+  EquipmentLink,
   HierarchyIndex,
   HierarchyNodeInput,
+  buildEquipmentByNode,
   buildHierarchyIndex,
+  resolveEquipmentForHierarchyNodes,
   resolveHierarchyCodes,
 } from './hierarchyResolverPure';
 
@@ -345,7 +349,11 @@ export function legacyUnavailableReason(category: MasterDataCategory): { ar: str
 export function resolveLegacyProductionFilter(
   selection: CodeSelection,
   hierarchy?: HierarchyContext,
+  equipment?: EquipmentContext,
 ): ResolvedLegacyProductionFilter {
+  if (equipment && selection.codes.some(isNodeSelection)) {
+    return resolveLegacyProductionFilterWithEquipment(selection, hierarchy, equipment);
+  }
   const category = selection.categoryId ? getCategory(selection.categoryId) : undefined;
   if (!selection.categoryId || !category) return ALL_LEGACY([]);
 
@@ -426,6 +434,114 @@ export function filterLegacyProductionRecords<T extends Record<string, any>>(
   records: readonly T[],
   selection: CodeSelection,
   hierarchy?: HierarchyContext,
+  equipment?: EquipmentContext,
 ): T[] {
-  return applyLegacyProductionFilter(records, resolveLegacyProductionFilter(selection, hierarchy));
+  return applyLegacyProductionFilter(
+    records,
+    resolveLegacyProductionFilter(selection, hierarchy, equipment),
+  );
+}
+
+// --- Equipment-linked hierarchy ---------------------------------------------
+//
+// THE LINK THAT MAKES THE HIERARCHY REAL.
+//
+// A production record names its equipment (pressId / furnaceId). Equipment
+// master data now names its hierarchy node. So a node selection resolves:
+//
+//     node -> descendant nodes -> linked equipment ids -> matching records
+//
+// and not one historical production document had to change for it to work.
+//
+// A selected value is a NODE when it carries the `node:` prefix, and a direct
+// equipment id otherwise - so every value a previous release stored keeps
+// meaning exactly what it meant. The two kinds can be mixed freely in one
+// selection; the results are unioned and deduplicated.
+
+/** Marks a selected value as a hierarchy node rather than a direct equipment id. */
+export const HIERARCHY_NODE_PREFIX = 'node:';
+
+export function asNodeSelection(nodeId: string): string {
+  return `${HIERARCHY_NODE_PREFIX}${nodeId}`;
+}
+
+export function isNodeSelection(value: string): boolean {
+  return value.startsWith(HIERARCHY_NODE_PREFIX);
+}
+
+export function nodeIdFromSelection(value: string): string {
+  return isNodeSelection(value) ? value.slice(HIERARCHY_NODE_PREFIX.length) : value;
+}
+
+export interface EquipmentContext {
+  /** Equipment master records, each carrying its own id and hierarchyNodeId. */
+  equipment?: readonly EquipmentLink[];
+  /** A prebuilt node -> equipment index, when the caller already has one. */
+  byNode?: EquipmentByNode;
+}
+
+/**
+ * Splits a selection into the equipment ids it actually means.
+ *
+ * Returns null when there is nothing hierarchy-related to do, so the caller
+ * falls through to its existing behaviour unchanged.
+ */
+function resolveSelectedEquipment(
+  selection: CodeSelection,
+  hierarchy?: HierarchyContext,
+  equipment?: EquipmentContext,
+): { ids: string[]; expanded: boolean } | null {
+  const nodeSelections = selection.codes.filter(isNodeSelection);
+  if (nodeSelections.length === 0) return null;
+
+  const index = hierarchy?.index ?? (hierarchy?.nodes ? buildHierarchyIndex(hierarchy.nodes) : null);
+  const byNode = equipment?.byNode ?? (equipment?.equipment ? buildEquipmentByNode(equipment.equipment) : null);
+
+  // A node was selected but the hierarchy or the links are not loaded. Matching
+  // nothing would read as "this branch has no production", so the node
+  // selections are dropped and only the directly-selected equipment applies.
+  const direct = selection.codes.filter((c) => !isNodeSelection(c));
+  if (!index || !byNode) return { ids: direct, expanded: false };
+
+  const linked = resolveEquipmentForHierarchyNodes(
+    index,
+    byNode,
+    nodeSelections.map(nodeIdFromSelection),
+    { includeSelf: true },
+  );
+
+  const ids = [...new Set([...direct, ...linked])];
+  return { ids, expanded: linked.length > 0 };
+}
+
+/**
+ * The equipment-aware resolver.
+ *
+ * Delegates everything that is not about equipment to
+ * `resolveLegacyProductionFilter`, so there is one place that decides whether a
+ * category may filter at all, and one descendant walk in the whole system.
+ */
+export function resolveLegacyProductionFilterWithEquipment(
+  selection: CodeSelection,
+  hierarchy?: HierarchyContext,
+  equipment?: EquipmentContext,
+): ResolvedLegacyProductionFilter {
+  const base = resolveLegacyProductionFilter(selection, hierarchy);
+  if (!base.applicable || base.matchValues == null) return base;
+
+  const resolved = resolveSelectedEquipment(selection, hierarchy, equipment);
+  if (!resolved) return base;
+
+  return {
+    ...base,
+    matchValues: new Set(resolved.ids),
+    expandedFromHierarchy: resolved.expanded,
+    resolvedCodeCount: resolved.ids.length,
+    reasonAr: resolved.expanded
+      ? `تم توسيع الاختيار إلى ${resolved.ids.length} معدة مرتبطة عبر التسلسل الهرمي.`
+      : `${resolved.ids.length} معدة مختارة.`,
+    reasonEn: resolved.expanded
+      ? `Expanded to ${resolved.ids.length} linked equipment record(s) through the hierarchy.`
+      : `${resolved.ids.length} selected equipment record(s).`,
+  };
 }

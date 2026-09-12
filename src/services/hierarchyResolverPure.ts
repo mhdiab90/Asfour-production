@@ -221,6 +221,145 @@ export function resolveHierarchyCodeSet<T extends HierarchyNodeInput>(
   return new Set(resolveHierarchyCodes(index, idsOrCodes, options));
 }
 
+// --- Linked equipment --------------------------------------------------------
+//
+// The step that turns a stored hierarchy into a business dimension.
+//
+// A production record names its equipment (pressId / furnaceId). The equipment
+// names its hierarchy node. So selecting a parent node resolves:
+//
+//     node -> descendant nodes -> equipment linked to any of them -> records
+//
+// without touching a single historical production document. Every function
+// below is a pure lookup over an in-memory index - no query per child, no query
+// per equipment record.
+
+/** The minimum an equipment master record must expose to participate. */
+export interface EquipmentLink {
+  /** The equipment's own stable master-data document id - what pressId/furnaceId hold. */
+  id?: string;
+  /** The hierarchy node it belongs to. Absent/null = not linked. */
+  hierarchyNodeId?: string | null;
+}
+
+/** node id -> the equipment ids linked directly to it. */
+export type EquipmentByNode = Map<string, string[]>;
+
+/**
+ * Groups equipment by the node it is linked to, once, so resolution is a map
+ * lookup per node rather than a scan of the equipment list per node.
+ *
+ * Equipment with no link is simply absent - it stays a valid production centre,
+ * it just is not reachable by selecting a parent.
+ */
+export function buildEquipmentByNode(equipment: readonly EquipmentLink[]): EquipmentByNode {
+  const byNode: EquipmentByNode = new Map();
+  for (const item of equipment) {
+    const equipmentId = item.id == null ? '' : String(item.id);
+    const nodeId = item.hierarchyNodeId == null ? '' : String(item.hierarchyNodeId);
+    if (!equipmentId || !nodeId) continue;
+    const list = byNode.get(nodeId);
+    if (list) list.push(equipmentId);
+    else byNode.set(nodeId, [equipmentId]);
+  }
+  return byNode;
+}
+
+/**
+ * Every equipment id under one hierarchy node - the node itself plus all of its
+ * descendants, at any depth.
+ *
+ * Deduplicated: two nodes in the same branch can legitimately carry the same
+ * equipment id, and a record must never be counted twice because of it.
+ */
+export function resolveEquipmentForHierarchyNode<T extends HierarchyNodeInput>(
+  index: HierarchyIndex<T>,
+  byNode: EquipmentByNode,
+  nodeIdOrCode: string,
+  options?: ResolveOptions,
+): string[] {
+  return resolveEquipmentForHierarchyNodes(index, byNode, [nodeIdOrCode], options);
+}
+
+/**
+ * The deduplicated union across several selected nodes.
+ *
+ * Overlapping branches are the normal case once a user selects both a parent
+ * and one of its children, so the union is built through a Set rather than by
+ * concatenating and hoping.
+ */
+export function resolveEquipmentForHierarchyNodes<T extends HierarchyNodeInput>(
+  index: HierarchyIndex<T>,
+  byNode: EquipmentByNode,
+  nodeIdsOrCodes: readonly string[],
+  options?: ResolveOptions,
+): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const nodeId of resolveMultipleHierarchySelections(index, nodeIdsOrCodes, options)) {
+    for (const equipmentId of byNode.get(nodeId) ?? []) {
+      if (seen.has(equipmentId)) continue;
+      seen.add(equipmentId);
+      out.push(equipmentId);
+    }
+  }
+  return out;
+}
+
+/** Set form, for callers that only test membership. */
+export function resolveEquipmentIdSet<T extends HierarchyNodeInput>(
+  index: HierarchyIndex<T>,
+  byNode: EquipmentByNode,
+  nodeIdsOrCodes: readonly string[],
+  options?: ResolveOptions,
+): Set<string> {
+  return new Set(resolveEquipmentForHierarchyNodes(index, byNode, nodeIdsOrCodes, options));
+}
+
+/** How many equipment records carry no hierarchy link - what the UI reports as unmapped. */
+export function countUnlinkedEquipment(equipment: readonly EquipmentLink[]): number {
+  return equipment.filter((e) => e.hierarchyNodeId == null || String(e.hierarchyNodeId) === '').length;
+}
+
+/**
+ * Rejects an equipment -> node assignment that cannot be honoured.
+ *
+ * Only two things can be wrong, and both are checked against the real node set
+ * rather than assumed: the node must exist, and the hierarchy it belongs to must
+ * not contain a cycle (a cycle would make "all descendants" meaningless). An
+ * empty/null node id is always allowed - that is how a link is cleared.
+ */
+export function validateEquipmentLink<T extends HierarchyNodeInput>(
+  index: HierarchyIndex<T>,
+  nodeIdOrCode: string | null | undefined,
+): HierarchyValidation {
+  const issues: HierarchyIssue[] = [];
+  const raw = nodeIdOrCode == null ? '' : String(nodeIdOrCode).trim();
+
+  if (raw === '') return { valid: true, issues };
+
+  if (resolveNodeId(index, raw) == null) {
+    issues.push({
+      code: 'UNKNOWN_PARENT',
+      messageAr: `عقدة التسلسل الهرمي "${raw}" غير موجودة.`,
+      messageEn: `Hierarchy node "${raw}" does not exist.`,
+    });
+    return { valid: false, issues };
+  }
+
+  const cycles = detectExistingCycles(index);
+  if (cycles.length > 0) {
+    issues.push({
+      code: 'CYCLE',
+      messageAr: `شجرة التسلسل الهرمي تحتوي على حلقة مغلقة (${cycles[0].join(' -> ')})، لا يمكن الربط قبل إصلاحها.`,
+      messageEn: `The hierarchy contains a cycle (${cycles[0].join(' -> ')}); the link cannot be saved until it is fixed.`,
+    });
+    return { valid: false, issues };
+  }
+
+  return { valid: true, issues };
+}
+
 // --- Navigation --------------------------------------------------------------
 
 /** Root-first ancestor chain, excluding the node. Cycle-safe. */

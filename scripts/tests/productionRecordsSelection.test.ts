@@ -481,14 +481,29 @@ test('D15. TEST 7/8/9 + §23 - hierarchy expansion works, but no legacy category
   }
 });
 
-test('D16. §24 - no hierarchy-to-production field was invented anywhere', () => {
+test('D16. §24 - no hierarchy field was invented ON A PRODUCTION RECORD', () => {
+  /*
+   * Narrowed deliberately. When this was written, `hierarchyNodeId` existed
+   * nowhere, so forbidding the identifier outright was the right guard. It is
+   * now a REAL persisted field on equipment master data (Press/Furnace), and
+   * reading it is the whole point of the equipment link - so the guard now
+   * targets what actually matters: the identifier must never appear on the
+   * PRODUCTION RECORD type, and the screen must never write one onto a record.
+   */
+  const types = readSource('src/types/index.ts');
+  const start = types.indexOf('export interface ProductionRecord');
+  const block = types.slice(start, types.indexOf('\n}', start));
+  for (const invented of ['hierarchyNodeId', 'productionCenterId', 'pressHierarchyId', 'costCenterId']) {
+    assert.equal(block.includes(invented), false, `ProductionRecord must not carry ${invented}`);
+  }
+  // And these names must exist nowhere at all - they were never real.
   for (const rel of [
     'src/services/masterDataCategoryRegistry.ts',
     'src/services/productionFilterEnginePure.ts',
     'src/components/production/ProductionRecordsView.tsx',
   ]) {
     const src = readCode(rel);
-    for (const invented of ['productionCenterId', 'hierarchyNodeId', 'pressHierarchyId', 'costCenterId']) {
+    for (const invented of ['productionCenterId', 'pressHierarchyId', 'costCenterId']) {
       assert.equal(src.includes(invented), false, `${rel} must not invent ${invented}`);
     }
   }

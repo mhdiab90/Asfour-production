@@ -41,7 +41,17 @@ import {
   legacyCodeSourceCategories,
   normaliseSelection,
 } from '../../services/masterDataCategoryRegistry';
-import { filterLegacyProductionRecords } from '../../services/productionFilterEnginePure';
+import {
+  asNodeSelection,
+  filterLegacyProductionRecords,
+} from '../../services/productionFilterEnginePure';
+/*
+ * The hierarchy nodes, read through the EXISTING cache-first reader. Selecting
+ * a node resolves through the equipment link, so a production record is reached
+ * as: record -> pressId/furnaceId -> equipment -> hierarchyNodeId -> ancestors.
+ */
+import { listCostCenterHierarchyNodes, CostCenterHierarchyRecord } from '../../services/costCenterHierarchyService';
+import { buildHierarchyIndex, getNodePath } from '../../services/hierarchyResolverPure';
 /*
  * Row selection reuses the SAME primitives the Data Review screen already uses -
  * there is one selection architecture in this codebase, not two. These are pure
@@ -74,6 +84,7 @@ export const ProductionRecordsView: React.FC<ProductionRecordsViewProps> = ({ on
   const [shifts, setShifts] = useState<Shift[]>([]);
   const [presses, setPresses] = useState<Press[]>([]);
   const [furnaces, setFurnaces] = useState<Furnace[]>([]);
+  const [hierarchyNodes, setHierarchyNodes] = useState<CostCenterHierarchyRecord[]>([]);
   const [products, setProducts] = useState<Product[]>([]);
   const [customers, setCustomers] = useState<Customer[]>([]);
 
@@ -127,6 +138,9 @@ export const ProductionRecordsView: React.FC<ProductionRecordsViewProps> = ({ on
     fetchMasterData<Shift>('shifts').then(setShifts).catch(() => {});
     fetchMasterData<Press>('presses').then(setPresses).catch(() => {});
     fetchMasterData<Furnace>('furnaces').then(setFurnaces).catch(() => {});
+    listCostCenterHierarchyNodes()
+      .then(setHierarchyNodes)
+      .catch(() => { /* an unavailable hierarchy only costs the node options */ });
     fetchMasterData<Product>('products').then(setProducts).catch(() => {});
     fetchMasterData<Customer>('customers').then(setCustomers).catch(() => {});
 
@@ -142,6 +156,33 @@ export const ProductionRecordsView: React.FC<ProductionRecordsViewProps> = ({ on
     [presses, furnaces, products, customers, shifts],
   );
 
+  /** The node graph, built once through the shared resolver. */
+  const hierarchyIndex = useMemo(
+    () =>
+      buildHierarchyIndex(
+        hierarchyNodes.map((node) => ({
+          ...node,
+          id: node.id,
+          code: node.sheet1Code,
+          parentId: node.parentSheet1Code,
+        })),
+      ),
+    [hierarchyNodes],
+  );
+
+  /*
+   * The equipment whose links make hierarchy filtering work.
+   *
+   * Presses and furnaces are exactly the master records a legacy production
+   * record points at, so their hierarchyNodeId is the bridge between a record
+   * and the node tree. Nothing here reads Firestore - both lists are already
+   * loaded for the selector.
+   */
+  const equipmentLinks = useMemo(
+    () => [...presses, ...furnaces].map((e) => ({ id: e.id, hierarchyNodeId: e.hierarchyNodeId })),
+    [presses, furnaces],
+  );
+
   /*
    * The codes offered for the selected category.
    *
@@ -155,16 +196,49 @@ export const ProductionRecordsView: React.FC<ProductionRecordsViewProps> = ({ on
   const availableCodes = useMemo(() => {
     const out: Array<{ value: string; label: string; source: string }> = [];
     const seen = new Set<string>();
+
+    /*
+     * Hierarchy nodes come FIRST for equipment categories, because selecting a
+     * node is what gives the aggregate meaning: choosing "Presses" includes
+     * every descendant node's linked equipment, so the user never has to pick
+     * the individual machines. Each option is labelled with its full path and
+     * carries the node's stable id, never its display text.
+     */
+    if (filterCategoryId === 'productionCenters' && hierarchyNodes.length > 0) {
+      for (const node of hierarchyNodes) {
+        const value = asNodeSelection(node.id);
+        if (seen.has(value)) continue;
+        seen.add(value);
+        const path = getNodePath(hierarchyIndex, node.id, (x: any) => x.name || x.sheet1Code, ' ← ');
+        out.push({
+          value,
+          label: `${path || node.name || node.sheet1Code}`,
+          source: 'hierarchy',
+        });
+      }
+    }
+
+    /*
+     * Then the equipment itself. Equipment already reachable through a node is
+     * still listed so it can be picked directly, and equipment with NO link is
+     * listed because a node selection can never reach it - that is the
+     * backward-compatible path for records that predate the hierarchy.
+     */
     for (const source of legacyCodeSourceCategories(filterCategoryId)) {
       for (const item of masterDataByCategory[source.id] ?? []) {
         const value = String(item.id ?? '');
         if (!value || seen.has(value)) continue;
         seen.add(value);
-        out.push({ value, label: item.name || item.code || value, source: source.labelAr });
+        const unlinked = filterCategoryId === 'productionCenters' && !(item as any).hierarchyNodeId;
+        out.push({
+          value,
+          label: unlinked ? `${item.name || item.code || value} — غير مرتبط` : (item.name || item.code || value),
+          source: source.labelAr,
+        });
       }
     }
     return out;
-  }, [filterCategoryId, masterDataByCategory]);
+  }, [filterCategoryId, masterDataByCategory, hierarchyNodes, hierarchyIndex, equipmentLinks]);
 
   /** Empty codes = ALL. One = ONE. Several = MULTIPLE. The shared semantics, unchanged. */
   const codeSelection = useMemo(
@@ -190,7 +264,7 @@ export const ProductionRecordsView: React.FC<ProductionRecordsViewProps> = ({ on
     }
 
     return true;
-  }), codeSelection);
+  }), codeSelection, { index: hierarchyIndex }, { equipment: equipmentLinks });
 
   /*
    * The ids actually on screen right now.

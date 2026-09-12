@@ -75,10 +75,18 @@ import {
   categoryLabel,
   getCategory,
 } from '../../services/masterDataCategoryRegistry';
-import { buildHierarchyIndex, getNodePath } from '../../services/hierarchyResolverPure';
+import { buildHierarchyIndex, getNodePath, validateEquipmentLink } from '../../services/hierarchyResolverPure';
 import { validateAccountForSave } from '../../services/financialAccountService';
 import { FinancialAccountsImportModal } from './FinancialAccountsImportModal';
 import { useAuth } from '../../context/AuthContext';
+/*
+ * Equipment -> hierarchy linking.
+ *
+ * The nodes come from the EXISTING reader (listCostCenterHierarchyNodes), which
+ * itself goes through the shared cache-first master-data read, and the graph
+ * work goes through the EXISTING shared resolver. Nothing here walks a tree.
+ */
+import { listCostCenterHierarchyNodes, CostCenterHierarchyRecord } from '../../services/costCenterHierarchyService';
 import { exportMasterDataToExcel } from '../../services/exportService';
 import { Badge } from '../common/Badge';
 import { Modal } from '../common/Modal';
@@ -201,6 +209,15 @@ export const MasterDataView: React.FC<MasterDataViewProps> = ({ onNavigate }) =>
   const [isAccountsImportOpen, setIsAccountsImportOpen] = useState<boolean>(false);
 
   /**
+   * The hierarchy nodes available to link equipment to.
+   *
+   * Loaded once, cache-first, and only used by the equipment tabs. An empty list
+   * simply means no hierarchy has been imported yet - the selector then offers
+   * only "not linked", rather than pretending there is something to choose.
+   */
+  const [hierarchyNodes, setHierarchyNodes] = useState<CostCenterHierarchyRecord[]>([]);
+
+  /**
    * Master Data import permission - the EXISTING grants, no new key.
    *
    * Exactly the rule DataImportView and ChineseMillsImportPanel already apply
@@ -260,11 +277,72 @@ export const MasterDataView: React.FC<MasterDataViewProps> = ({ onNavigate }) =>
     return () => unsubscribe();
   }, [activeTab]);
 
+  /* The hierarchy node list, read once through the existing cache-first reader. */
+  useEffect(() => {
+    listCostCenterHierarchyNodes()
+      .then(setHierarchyNodes)
+      .catch(() => { /* an unavailable hierarchy only costs the link selector */ });
+  }, []);
+
   // Load auxiliary lists (departments & furnaces for dropdowns)
   useEffect(() => {
     fetchMasterData<Department>('departments').then(setDepartments).catch(() => {});
     fetchMasterData<Furnace>('furnaces').then(setFurnaces).catch(() => {});
   }, []);
+
+  /**
+   * Which tabs can carry a hierarchy link.
+   *
+   * Equipment tabs only - these are the master records a production record
+   * actually points at (pressId / furnaceId), plus mills for future use. A
+   * non-equipment tab never shows the selector.
+   */
+  const EQUIPMENT_TABS = ['presses', 'furnaces', 'mills'];
+  const isEquipmentTab = EQUIPMENT_TABS.includes(activeTab);
+
+  /**
+   * Index of the COST-CENTRE HIERARCHY NODES, used to label and validate an
+   * equipment link. Distinct from `hierarchyIndex` further down, which indexes
+   * whichever hierarchical CATEGORY is currently on screen - here we are on an
+   * equipment tab and need the node tree instead.
+   */
+  const linkHierarchyIndex = useMemo(
+    () => buildHierarchyIndex(
+      hierarchyNodes.map((node) => ({ ...node, id: node.id, code: node.sheet1Code, parentId: node.parentSheet1Code })),
+    ),
+    [hierarchyNodes],
+  );
+
+  /**
+   * Node options, each labelled with its full path so "Bo-kher 900 2" is
+   * distinguishable from a similarly-named node in another branch. The label is
+   * for the human; the stored value is always the stable node id.
+   */
+  const hierarchyOptions = useMemo(
+    () =>
+      hierarchyNodes.map((node) => ({
+        id: node.id,
+        label: getNodePath(linkHierarchyIndex, node.id, (x: any) => x.name || x.sheet1Code, ' ← ')
+          || node.name || node.sheet1Code,
+      })),
+    [hierarchyNodes, linkHierarchyIndex],
+  );
+
+  /** The readable path for one linked node - what the table column shows. */
+  const hierarchyLabelFor = (nodeId: unknown): string | null => {
+    const id = nodeId == null ? '' : String(nodeId);
+    if (!id) return null;
+    const path = getNodePath(linkHierarchyIndex, id, (x: any) => x.name || x.sheet1Code, ' ← ');
+    if (path) return path;
+    const node = hierarchyNodes.find((h) => h.id === id);
+    return node ? node.name || node.sheet1Code : null;
+  };
+
+  /** How many equipment records on this tab still carry no link - §24/§26 reporting. */
+  const unlinkedEquipmentCount = useMemo(
+    () => (isEquipmentTab ? items.filter((i) => !i.hierarchyNodeId).length : 0),
+    [isEquipmentTab, items],
+  );
 
   // Real-time parsed result for Product code in modal
   const liveProductParseResult = useMemo(() => {
@@ -569,6 +647,20 @@ export const MasterDataView: React.FC<MasterDataViewProps> = ({ onNavigate }) =>
       if (!formData.code || !formData.code.trim()) {
         throw new Error(language === 'ar' ? 'حقل الكود إلزامي.' : 'Code is required.');
       }
+      /*
+       * An equipment link must name a node that exists, and the hierarchy it
+       * belongs to must be free of cycles - otherwise "all descendants" has no
+       * defined meaning. Clearing the link (empty value) is always allowed.
+       */
+      if (isEquipmentTab && formData.hierarchyNodeId) {
+        const linkCheck = validateEquipmentLink(linkHierarchyIndex, formData.hierarchyNodeId);
+        if (!linkCheck.valid) {
+          setFormError(language === 'ar' ? linkCheck.issues[0].messageAr : linkCheck.issues[0].messageEn);
+          setIsSaving(false);
+          return;
+        }
+      }
+
       if (!formData.name && activeTab !== 'furnaceCars') {
         throw new Error(language === 'ar' ? 'حقل الاسم إلزامي.' : 'Name is required.');
       }
@@ -1142,6 +1234,21 @@ export const MasterDataView: React.FC<MasterDataViewProps> = ({ onNavigate }) =>
         </div>
       </div>
 
+      {/*
+        How much equipment is still outside hierarchy filtering.
+
+        Reported rather than fixed automatically: assigning these by fuzzy name
+        match would silently attach production to the wrong branch, so the count
+        is surfaced and the assignment stays an explicit human decision.
+      */}
+      {isEquipmentTab && unlinkedEquipmentCount > 0 && (
+        <div id="equipment-hierarchy-status" className="bg-amber-50 border border-amber-200 rounded-2xl px-4 py-3 text-xs font-bold text-amber-900">
+          {language === 'ar'
+            ? `${unlinkedEquipmentCount} من ${items.length} سجل غير مرتبط بعقدة هرمية - لن تظهر هذه السجلات عند اختيار عقدة أب في التصفية.`
+            : `${unlinkedEquipmentCount} of ${items.length} record(s) are not linked to a hierarchy node - they will not appear when an ancestor node is selected in a filter.`}
+        </div>
+      )}
+
       {/* Master Data Table */}
       <div className="bg-white rounded-2xl border border-slate-200 shadow-xs overflow-hidden">
         {/*
@@ -1258,6 +1365,10 @@ export const MasterDataView: React.FC<MasterDataViewProps> = ({ onNavigate }) =>
                       <th className="px-4 py-3.5">{language === 'ar' ? 'الموديل' : 'Model'}</th>
                       <th className="px-4 py-3.5">{language === 'ar' ? 'الحالة التشغيلية' : 'Operating Status'}</th>
                     </>
+                  )}
+                  {/* Whether this equipment participates in hierarchy filtering at all. */}
+                  {isEquipmentTab && (
+                    <th className="px-4 py-3.5">{language === 'ar' ? 'التسلسل الهرمي' : 'Hierarchy'}</th>
                   )}
                   {activeTab === 'mills' && (
                     <>
@@ -1509,6 +1620,24 @@ export const MasterDataView: React.FC<MasterDataViewProps> = ({ onNavigate }) =>
                         )}
                       </button>
                     </td>
+
+                    {/*
+                      Hierarchy link status - lets the user see at a glance which
+                      equipment is not yet reachable by a parent-node filter.
+                    */}
+                    {isEquipmentTab && (
+                      <td className="px-4 py-3">
+                        {hierarchyLabelFor(item.hierarchyNodeId) ? (
+                          <span className="text-[11px] font-semibold text-emerald-800" title={hierarchyLabelFor(item.hierarchyNodeId) || ''}>
+                            {hierarchyLabelFor(item.hierarchyNodeId)}
+                          </span>
+                        ) : (
+                          <span className="text-[11px] font-bold text-slate-400">
+                            {language === 'ar' ? 'غير مرتبط' : 'Not linked'}
+                          </span>
+                        )}
+                      </td>
+                    )}
 
                     {/* Actions */}
                     <td className="px-4 py-3 text-center">
@@ -1934,6 +2063,46 @@ export const MasterDataView: React.FC<MasterDataViewProps> = ({ onNavigate }) =>
                   className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3.5 py-2 text-xs"
                 />
               </div>
+            </div>
+          )}
+
+          {/*
+            Equipment -> hierarchy link.
+
+            This one field is what makes the hierarchy a business dimension: a
+            production record already names this equipment, so linking the
+            equipment to a node lets "all production under Presses" resolve
+            without touching a single historical production document.
+
+            Stores the node's stable id, never its path - re-parenting or
+            renaming a node cannot break the link.
+          */}
+          {isEquipmentTab && (
+            <div>
+              <label className="block text-xs font-bold text-slate-700 mb-1">
+                {language === 'ar' ? 'عقدة التسلسل الهرمي (مركز التكلفة)' : 'Hierarchy node (cost centre)'}
+              </label>
+              <select
+                id="equipment-hierarchy-node"
+                value={formData.hierarchyNodeId || ''}
+                onChange={(e) => setFormData({ ...formData, hierarchyNodeId: e.target.value || null })}
+                disabled={hierarchyOptions.length === 0}
+                className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3.5 py-2 text-xs disabled:opacity-60"
+              >
+                <option value="">{language === 'ar' ? 'غير مرتبط' : 'Not linked'}</option>
+                {hierarchyOptions.map((o) => (
+                  <option key={o.id} value={o.id}>{o.label}</option>
+                ))}
+              </select>
+              <p className="text-[10px] text-slate-500 mt-1">
+                {hierarchyOptions.length === 0
+                  ? (language === 'ar'
+                      ? 'لا توجد عقد هرمية مستوردة بعد - يمكن حفظ المعدة بدون ربط.'
+                      : 'No hierarchy nodes imported yet - the equipment can still be saved unlinked.')
+                  : (language === 'ar'
+                      ? 'اختيار عقدة أب في التصفية سيشمل هذه المعدة تلقائيًا. "غير مرتبط" يبقي المعدة صالحة لكن خارج تصفية التسلسل.'
+                      : 'Selecting an ancestor node in a filter will include this equipment automatically. "Not linked" keeps the equipment valid but outside hierarchy filtering.')}
+              </p>
             </div>
           )}
 

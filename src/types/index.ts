@@ -281,6 +281,24 @@ export interface Press {
   tonnage?: number;
   model?: string;
   status?: 'active' | 'maintenance' | 'inactive';
+  /**
+   * The hierarchy node this equipment belongs to, as a stable node id.
+   *
+   * THIS IS THE LINK that makes the hierarchy a real business dimension.
+   * A production record already names its equipment (pressId / furnaceId), and
+   * the equipment now names its hierarchy node, so
+   *
+   *     production record -> equipment -> hierarchy node -> ancestors
+   *
+   * resolves without a single historical production document being touched.
+   * That is the whole reason the link lives here rather than on the record.
+   *
+   * Stores the node's own id (costCenterHierarchy document id), never its
+   * display path or code, so renaming or re-parenting a node cannot break the
+   * link. Optional and nullable: equipment with no link is still a perfectly
+   * valid production centre, it simply is not reached by selecting a parent.
+   */
+  hierarchyNodeId?: string | null;
   pressCodeNormalized?: string;
   nameNormalized?: string;
   active: boolean;
@@ -295,6 +313,8 @@ export interface Furnace {
   capacity?: number; // in tons
   maxTemperature?: number; // in Celsius
   status?: 'active' | 'maintenance' | 'inactive';
+  /** The hierarchy node this equipment belongs to - see Press.hierarchyNodeId for why the link lives on the equipment rather than on the production record. */
+  hierarchyNodeId?: string | null;
   furnaceCodeNormalized?: string;
   nameNormalized?: string;
   active: boolean;
@@ -309,6 +329,8 @@ export interface Mill {
   name: string;
   model?: string;
   status?: 'active' | 'maintenance' | 'inactive';
+  /** The hierarchy node this equipment belongs to - see Press.hierarchyNodeId. Mills have no production-record reference yet, so this is stored but not yet used as a filter. */
+  hierarchyNodeId?: string | null;
   millCodeNormalized?: string;
   nameNormalized?: string;
   active: boolean;
