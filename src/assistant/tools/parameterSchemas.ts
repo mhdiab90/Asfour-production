@@ -129,6 +129,11 @@ export const GENERATE_REPORT_SCHEMA = {
     startDate: { type: 'string', description: 'ISO date YYYY-MM-DD; defaults to last 30 days if omitted' },
     endDate: { type: 'string', description: 'ISO date YYYY-MM-DD' },
     stageType: { type: 'string', description: 'Optional single production stage id to restrict to' },
+    productionCenters: {
+      type: 'array',
+      items: { type: 'string' },
+      description: 'Optional production-centre names or hierarchy codes exactly as the user said them (e.g. ["المكابس"], ["Presses","Furnaces"]). Each is resolved to a hierarchy node in code; the report then covers that node and every centre beneath it. Pass the user\'s words - never invent an id.',
+    },
   },
   required: ['categoryId'],
 };

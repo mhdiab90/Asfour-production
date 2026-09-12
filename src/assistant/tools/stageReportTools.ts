@@ -22,7 +22,26 @@ import {
   RankingMetric,
   ReportDimension,
 } from '../../services/reportingEngine';
-import { MultiDimensionFilter, ProductionStageType } from '../../types';
+import { MultiDimensionFilter, ProductionStageType, Press, Furnace } from '../../types';
+/*
+ * Hierarchy support for the assistant.
+ *
+ * Every piece below already exists and is already in production - the node
+ * reader, the graph index, the equipment scope resolver and the report filter.
+ * This tool resolves the user's WORDS to node ids and then hands those to the
+ * same pipeline the Reports screen uses. It performs no traversal, no matching
+ * and no aggregation of its own.
+ */
+import { fetchMasterData } from '../../services/masterDataService';
+import { listCostCenterHierarchyNodes } from '../../services/costCenterHierarchyService';
+import { buildHierarchyIndex } from '../../services/hierarchyResolverPure';
+import { resolveHierarchyEquipmentScope } from '../../services/productionFilterEnginePure';
+import {
+  lookupHierarchyNodes,
+  describeLookupProblem,
+  isFullyResolved,
+  MultiLookupResult,
+} from '../../services/hierarchyNodeLookupPure';
 import { ToolDefinition } from '../types';
 import { registerTool } from './registry';
 import { PermissionKey } from '../../types/permissions';
@@ -317,6 +336,54 @@ const comparePeriods: ToolDefinition = {
   },
 };
 
+/**
+ * Turns the production-centre WORDS a user said into a report scope.
+ *
+ * Returns the resolved equipment scope, or the lookup problem that stops the
+ * report from running. Deliberately three outcomes, never two:
+ *
+ *   no terms     -> { scope: null } and the report behaves exactly as before
+ *   all resolved -> { scope: Set } - possibly EMPTY, meaning the centre exists
+ *                   but nothing is linked to it, which is not the same as the
+ *                   centre not existing
+ *   otherwise    -> { problem } and the caller must ask rather than answer
+ *
+ * Reads master data through the existing cache-first paths, once per call, and
+ * never queries per node or per equipment record.
+ */
+async function resolveProductionCentreScope(
+  terms: string[],
+  language: 'ar' | 'en',
+): Promise<{ scope: Set<string> | null; problem?: string; lookup?: MultiLookupResult; labels: string[] }> {
+  const cleaned = terms.map((t) => String(t ?? '').trim()).filter(Boolean);
+  if (cleaned.length === 0) return { scope: null, labels: [] };
+
+  const [nodes, presses, furnaces] = await Promise.all([
+    listCostCenterHierarchyNodes().catch(() => []),
+    fetchMasterData<Press>('presses').catch(() => [] as Press[]),
+    fetchMasterData<Furnace>('furnaces').catch(() => [] as Furnace[]),
+  ]);
+
+  const index = buildHierarchyIndex(
+    nodes.map((node) => ({ ...node, id: node.id, code: node.sheet1Code, parentId: node.parentSheet1Code })),
+  );
+  const lookup = lookupHierarchyNodes(index, nodes as any, cleaned);
+
+  // A term that could not be resolved is never dropped silently - answering for
+  // the rest would quietly change the question the user asked.
+  if (!isFullyResolved(lookup)) {
+    return { scope: null, problem: describeLookupProblem(lookup, language), lookup, labels: [] };
+  }
+
+  const equipment = [...presses, ...furnaces].map((e) => ({ id: e.id, hierarchyNodeId: (e as any).hierarchyNodeId }));
+  const scope = resolveHierarchyEquipmentScope(
+    lookup.nodeIds.map((id) => `node:${id}`),
+    { index },
+    { equipment },
+  );
+  return { scope, lookup, labels: lookup.resolved.map((r) => r.node.path) };
+}
+
 /** §33 - the assistant's "generate a report" capability, reusing the SAME REPORT_CATEGORIES/aggregateByDimension the Reports UI uses - never a parallel reporting engine. */
 const generateReport: ToolDefinition = {
   ...baseTool('generateReport', 'توليد تقرير من كتالوج التقارير الموجود (نفس محرك شاشة التقارير)', 'Generate a report from the existing report catalog (same engine as the Reports screen)'),
@@ -332,8 +399,25 @@ const generateReport: ToolDefinition = {
     const { startDate, endDate, wasDefaulted } = resolveDateRange(input);
     const filters: MultiDimensionFilter = { startDate, endDate };
     if (input?.stageType && ALL_STAGES.includes(input.stageType)) filters.stageType = input.stageType;
+    const language0 = context.currentLanguage;
+    const centre = await resolveProductionCentreScope(
+      Array.isArray(input?.productionCenters) ? input.productionCenters : [],
+      language0,
+    );
+    // Ambiguous or unknown centre: ask, do not answer. Returning a total here
+    // would be answering a different question than the one that was asked.
+    if (centre.problem) {
+      return {
+        success: false,
+        data: { needsClarification: true, candidates: centre.lookup },
+        affectedCount: 0,
+        messageAr: centre.problem,
+        messageEn: centre.problem,
+      };
+    }
+
     const records = await fetchUniversalStageRecords(filters);
-    const filtered = filterUniversalRecords(records, filters);
+    const filtered = filterUniversalRecords(records, filters, centre.scope);
     const rows = aggregateByDimension(filtered, category.dimension, context.currentLanguage).map((r) => ({
       label: r.label, productionTons: Number(r.productionTons.toFixed(2)), goodTons: Number(r.goodTons.toFixed(2)), wasteTons: Number(r.wasteTons.toFixed(2)), wastePercentage: r.wastePercentage, downtimeMinutes: Number(r.downtimeMinutes.toFixed(1)), operationsCount: r.operationsCount,
     }));
@@ -341,12 +425,42 @@ const generateReport: ToolDefinition = {
     const name = language === 'ar' ? category.nameAr : category.nameEn;
     // §12/§13 - always disclose the actual resolved dates, never a vague default label.
     const periodNote = periodDisclosure({ startDate, endDate, wasDefaulted }, language);
+
+    /*
+     * Scope disclosure. Three distinct states, because collapsing them is how a
+     * report starts lying:
+     *   - no centre asked for      -> say nothing extra
+     *   - centre exists, nothing linked -> say so; a bare 0 would read as "no
+     *     production" when the truth is "no equipment is linked yet"
+     *   - centre resolved          -> name it by PATH, never by id
+     */
+    let scopeAr = '';
+    let scopeEn = '';
+    if (centre.scope != null) {
+      const names = centre.labels.join('، ');
+      if (centre.scope.size === 0) {
+        scopeAr = ` لا توجد معدات مرتبطة بـ"${names}" في البيانات الأساسية، لذلك لا توجد سجلات ضمن هذا النطاق.`;
+        scopeEn = ` No equipment is linked to "${centre.labels.join(', ')}" in Master Data, so no records fall in this scope.`;
+      } else {
+        scopeAr = ` النطاق: ${names} — ويشمل جميع المراكز التابعة.`;
+        scopeEn = ` Scope: ${centre.labels.join(', ')} — including all centres beneath it.`;
+      }
+    }
+
     return {
       success: true,
-      data: { category: category.id, period: { startDate, endDate, wasDefaulted }, rows },
+      data: {
+        category: category.id,
+        period: { startDate, endDate, wasDefaulted },
+        rows,
+        // Kept structured so a caller can hand the same selection to the
+        // Reports screen rather than re-deriving it from the sentence.
+        hierarchyNodeIds: centre.lookup ? centre.lookup.nodeIds : [],
+        hierarchyScopeSize: centre.scope ? centre.scope.size : null,
+      },
       affectedCount: rows.length,
-      messageAr: `تم إنشاء تقرير "${name}" (${rows.length} صف)${periodNote}. استخدم أداة exportReportToExcel لتصديره.`,
-      messageEn: `Generated "${name}" report (${rows.length} rows)${periodNote}. Use exportReportToExcel to export it.`,
+      messageAr: `تم إنشاء تقرير "${name}" (${rows.length} صف)${periodNote}.${scopeAr} استخدم أداة exportReportToExcel لتصديره.`,
+      messageEn: `Generated "${name}" report (${rows.length} rows)${periodNote}.${scopeEn} Use exportReportToExcel to export it.`,
     };
   },
 };

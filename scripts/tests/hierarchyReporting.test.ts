@@ -354,16 +354,31 @@ test('G3. §2 - reporting adds no second hierarchy traversal', () => {
   assert.ok(/parentId: node\.parentSheet1Code/.test(rv), 'and that one mention must be exactly that mapping');
 });
 
-test('G4. §39 - AI was not touched by this change', () => {
+test('G4. the LEGACY AI production path is still untouched by hierarchy work', () => {
+  /*
+   * Narrowed, and only because the requirement changed. In 3.11.0 this asserted
+   * that NO assistant file referenced hierarchy work, which was right: that
+   * release was forbidden from touching AI. 3.12.0 deliberately wires the
+   * hierarchy into generateReport (stageReportTools), so naming that file here
+   * would now assert the opposite of the shipped design.
+   *
+   * What still matters, and is still asserted: productionQueryTools reads the
+   * LEGACY production collection on a different aggregation path, so giving it
+   * a hierarchy scope would produce totals that disagree with the Reports
+   * screen - exactly the inconsistency §32 forbids. It stays out.
+   */
   for (const rel of [
     'src/assistant/tools/productionQueryTools.ts',
-    'src/assistant/tools/stageReportTools.ts',
     'src/assistant/tools/registry.ts',
   ]) {
     const src = readCode(rel);
-    assert.equal(/resolveHierarchyEquipmentScope|hierarchyNodeId|asNodeSelection/.test(src), false,
-      `${rel} must be unchanged by this release`);
+    assert.equal(/resolveHierarchyEquipmentScope|asNodeSelection|lookupHierarchyNodes/.test(src), false,
+      `${rel} must not gain a second, inconsistent hierarchy path`);
   }
+  // And the file that DID gain it must route through the shared report filter.
+  const stage = readCode('src/assistant/tools/stageReportTools.ts');
+  assert.ok(/filterUniversalRecords\(records, filters, centre\.scope\)/.test(stage),
+    'the assistant must scope through the SAME filter the Reports screen uses');
 });
 
 test('G5. §35 - exports flow from the same filtered dataset, with no separate implementation', () => {
