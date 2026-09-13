@@ -64,13 +64,20 @@ import {
   CostCenterHierarchyRecord,
 } from '../../services/costCenterHierarchyService';
 import {
-  metricModeFromFlags,
+  DashboardMetricMode,
   metricFlags,
   resolveCostCenterProductionScope,
   resolveCostCenterCodeScope,
 } from '../../services/costCenterDashboardPure';
-import { aggregateFinancialValue, FinancialTransaction } from '../../services/financialTransactionsPure';
-import { listFinancialTransactions } from '../../services/financialTransactionService';
+import { MetricModeToggle, FinancialValueCard, useFinancialValue } from './DashboardMetricControls';
+import {
+  DASHBOARD_FILTER_PANEL,
+  DASHBOARD_FILTER_SELECT,
+  DASHBOARD_PRESET_GROUP,
+  dashboardPresetButton,
+  DASHBOARD_DATE_INPUT,
+  DASHBOARD_PANEL_BUTTON,
+} from './dashboardFilterStyles';
 import {
   ALL_STAGES,
   getStageDisplayName,
@@ -229,29 +236,14 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigate }) => {
   const [costCenterNodeIds, setCostCenterNodeIds] = useState<string[]>([]);
 
   /** Metric type. Two checkboxes; unticking both falls back to quantity. */
-  const [metricMode, setMetricMode] = useState<'QUANTITY' | 'FINANCIAL' | 'BOTH'>('QUANTITY');
+  const [metricMode, setMetricMode] = useState<DashboardMetricMode>('QUANTITY');
   const { quantity: showQuantity, financial: showFinancial } = metricFlags(metricMode);
-
-  const [financialTransactions, setFinancialTransactions] = useState<FinancialTransaction[]>([]);
-  const [financialError, setFinancialError] = useState<string | null>(null);
 
   useEffect(() => {
     listCostCenterHierarchyNodes()
       .then(setHierarchyNodes)
       .catch(() => { /* an unavailable hierarchy only costs the cost-centre selector */ });
   }, []);
-
-  /*
-   * Financial transactions are read only when money is actually being shown -
-   * a quantity-only Dashboard issues no financial read at all.
-   */
-  useEffect(() => {
-    if (!showFinancial) return;
-    setFinancialError(null);
-    listFinancialTransactions()
-      .then(setFinancialTransactions)
-      .catch((err) => setFinancialError(String(err?.message ?? err)));
-  }, [showFinancial]);
 
   /* The canonical hierarchy index - the same builder Master Data uses. */
   const hierarchyIndex = useMemo(() => buildCostCenterHierarchyIndex(hierarchyNodes), [hierarchyNodes]);
@@ -432,14 +424,11 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigate }) => {
    * production figures, and nothing else: product, customer, shift and stage
    * are production dimensions a transaction does not carry.
    */
-  const financialTotal = useMemo(
-    () => aggregateFinancialValue(financialTransactions, {
-      costCenterCodes: costCenterCodeScope,
-      startDate: resolvedDate.startDate,
-      endDate: resolvedDate.endDate,
-    }),
-    [financialTransactions, costCenterCodeScope, resolvedDate],
-  );
+  const financialValue = useFinancialValue(showFinancial, {
+    costCenterCodes: costCenterCodeScope,
+    startDate: resolvedDate.startDate,
+    endDate: resolvedDate.endDate,
+  });
 
   // All KPI ton math is delegated to reportingEngine.ts - this only sums the
   // already-computed per-stage rows it returns (§ "Do NOT put business
@@ -560,7 +549,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigate }) => {
       )}
 
       {/* Filter Bar */}
-      <div className="bg-slate-900 border border-slate-800 p-3 flex flex-col gap-3">
+      <div className={DASHBOARD_FILTER_PANEL}>
         {/* PHASE 5B - the active period is always visible. The Dashboard
             defaults to the last 30 days and that default is stated here on
             screen; it is a disclosed product decision, never a hidden cap. */}
@@ -590,13 +579,13 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigate }) => {
         <div className="flex flex-wrap items-center gap-2">
           {/* Date presets - PHASE 5B added 'last90days' and 'prevMonth', and
               relabelled 'week' to the "Last 7 Days" it has always computed. */}
-          <div className="flex items-center gap-1 bg-slate-800 p-1 rounded text-xs font-bold">
+          <div className={DASHBOARD_PRESET_GROUP}>
             {(['today', 'week', 'last30days', 'last90days', 'month', 'prevMonth', 'all'] as DashboardDatePresetType[]).map((p) => (
               <button
                 key={p}
                 type="button"
                 onClick={() => setDateSelection({ preset: p })}
-                className={`px-2.5 py-1 rounded transition-colors cursor-pointer ${dateSelection.preset === p ? 'bg-indigo-600 text-white' : 'text-slate-400 hover:text-white'}`}
+                className={dashboardPresetButton(dateSelection.preset === p)}
               >
                 {p === 'today' ? (language === 'ar' ? 'اليوم' : 'Today') : null}
                 {p === 'week' ? (language === 'ar' ? 'آخر 7 أيام' : 'Last 7 Days') : null}
@@ -618,7 +607,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigate }) => {
               aria-invalid={customRangeInvalid}
               value={dateSelection.preset === 'custom' ? (dateSelection.startDate || '') : ''}
               onChange={(e) => setDateSelection({ preset: 'custom', startDate: e.target.value, endDate: dateSelection.preset === 'custom' ? dateSelection.endDate : e.target.value })}
-              className={`bg-slate-800 text-slate-200 border rounded px-1.5 py-1 text-[11px] ${customRangeInvalid ? 'border-red-500' : 'border-slate-700'}`}
+              className={`${DASHBOARD_DATE_INPUT} ${customRangeInvalid ? 'border-red-500' : 'border-slate-700'}`}
             />
             <span className="text-slate-500">→</span>
             <input
@@ -626,7 +615,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigate }) => {
               aria-invalid={customRangeInvalid}
               value={dateSelection.preset === 'custom' ? (dateSelection.endDate || '') : ''}
               onChange={(e) => setDateSelection({ preset: 'custom', startDate: dateSelection.preset === 'custom' ? dateSelection.startDate : e.target.value, endDate: e.target.value })}
-              className={`bg-slate-800 text-slate-200 border rounded px-1.5 py-1 text-[11px] ${customRangeInvalid ? 'border-red-500' : 'border-slate-700'}`}
+              className={`${DASHBOARD_DATE_INPUT} ${customRangeInvalid ? 'border-red-500' : 'border-slate-700'}`}
             />
           </div>
 
@@ -664,7 +653,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigate }) => {
           <button
             type="button"
             onClick={() => setRefreshTrigger((t) => t + 1)}
-            className="flex items-center gap-1.5 px-2.5 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-bold rounded border border-slate-700 transition-colors cursor-pointer"
+            className={DASHBOARD_PANEL_BUTTON}
           >
             <RefreshCw className={`w-3.5 h-3.5 ${isLoading ? 'animate-spin' : ''}`} />
             {language === 'ar' ? 'تحديث' : 'Refresh'}
@@ -672,7 +661,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigate }) => {
           <button
             type="button"
             onClick={resetFilters}
-            className="flex items-center gap-1.5 px-2.5 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-bold rounded border border-slate-700 transition-colors cursor-pointer"
+            className={DASHBOARD_PANEL_BUTTON}
           >
             <RotateCcw className="w-3.5 h-3.5" />
             {language === 'ar' ? 'إعادة ضبط' : 'Reset'}
@@ -684,7 +673,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigate }) => {
           <select
             value={stageType}
             onChange={(e) => setStageType(e.target.value as ProductionStageType | 'all')}
-            className="bg-slate-800 text-slate-200 border border-slate-700 rounded px-2 py-1.5 text-xs font-bold"
+            className={DASHBOARD_FILTER_SELECT}
           >
             <option value="all">{language === 'ar' ? 'كل المراحل' : 'All Stages'}</option>
             {ALL_STAGES.map((s) => (
@@ -696,7 +685,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigate }) => {
           <select
             value={shiftId}
             onChange={(e) => setShiftId(e.target.value)}
-            className="bg-slate-800 text-slate-200 border border-slate-700 rounded px-2 py-1.5 text-xs font-bold"
+            className={DASHBOARD_FILTER_SELECT}
           >
             <option value="">{language === 'ar' ? 'كل الورديات' : 'All Shifts'}</option>
             {shifts.map((s) => (
@@ -720,32 +709,13 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigate }) => {
             Metric type. Quantity and money are separate measures and are never
             added together - ticking both shows both, side by side.
           */}
-          <div id="dashboard-metric-mode" className="flex items-center gap-2 bg-slate-800 border border-slate-700 rounded px-2 py-1 text-xs font-bold text-slate-200">
-            <label className="flex items-center gap-1 cursor-pointer">
-              <input
-                type="checkbox"
-                className="w-3.5 h-3.5 accent-amber-400 cursor-pointer"
-                checked={showQuantity}
-                onChange={() => setMetricMode(metricModeFromFlags(!showQuantity, showFinancial))}
-              />
-              {language === 'ar' ? 'الكميات' : 'Quantities'}
-            </label>
-            <label className="flex items-center gap-1 cursor-pointer">
-              <input
-                type="checkbox"
-                className="w-3.5 h-3.5 accent-amber-400 cursor-pointer"
-                checked={showFinancial}
-                onChange={() => setMetricMode(metricModeFromFlags(showQuantity, !showFinancial))}
-              />
-              {language === 'ar' ? 'القيم المالية' : 'Financial values'}
-            </label>
-          </div>
+          <MetricModeToggle mode={metricMode} onChange={setMetricMode} language={language} />
 
           {/* Employee filter */}
           <select
             value={entityFilters.employeeId || ''}
             onChange={(e) => setEntityFilters((prev) => ({ ...prev, employeeId: e.target.value || undefined }))}
-            className="bg-slate-800 text-slate-200 border border-slate-700 rounded px-2 py-1.5 text-xs font-bold"
+            className={DASHBOARD_FILTER_SELECT}
           >
             <option value="">{language === 'ar' ? 'كل الموظفين' : 'All Employees'}</option>
             {employees.map((e) => (
@@ -757,7 +727,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigate }) => {
           <select
             value={entityFilters.customerId || ''}
             onChange={(e) => setEntityFilters((prev) => ({ ...prev, customerId: e.target.value || undefined }))}
-            className="bg-slate-800 text-slate-200 border border-slate-700 rounded px-2 py-1.5 text-xs font-bold"
+            className={DASHBOARD_FILTER_SELECT}
           >
             <option value="">{language === 'ar' ? 'كل العملاء' : 'All Customers'}</option>
             {customers.map((c) => (
@@ -769,7 +739,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigate }) => {
           <select
             value={entityFilters.productId || ''}
             onChange={(e) => setEntityFilters((prev) => ({ ...prev, productId: e.target.value || undefined }))}
-            className="bg-slate-800 text-slate-200 border border-slate-700 rounded px-2 py-1.5 text-xs font-bold"
+            className={DASHBOARD_FILTER_SELECT}
           >
             <option value="">{language === 'ar' ? 'كل المنتجات' : 'All Products'}</option>
             {products.map((p) => (
@@ -786,29 +756,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigate }) => {
         Financial value - a separate measure in its own card. It is never added
         to, averaged with, or normalised against the production tonnage.
       */}
-      {showFinancial && (
-        <div id="dashboard-financial-value" className="bg-white rounded-2xl border border-emerald-200 p-4 shadow-xs">
-          <p className="text-[11px] font-black text-emerald-800">
-            {language === 'ar' ? 'القيم المالية - المصروفات الفعلية' : 'Financial values - actual spending'}
-          </p>
-          {financialError ? (
-            <p className="text-xs font-bold text-rose-700 mt-1">
-              {language === 'ar'
-                ? `تعذر قراءة المعاملات المالية: ${financialError}`
-                : `Could not read financial transactions: ${financialError}`}
-            </p>
-          ) : (
-            <>
-              <p className="text-2xl font-black text-slate-900 mt-1">{formatNumber(financialTotal.total)}</p>
-              <p className="text-[11px] text-slate-500">
-                {language === 'ar'
-                  ? `عدد المعاملات: ${formatNumber(financialTotal.count)} — نطاق التاريخ ومراكز التكاليف نفسها`
-                  : `Transactions: ${formatNumber(financialTotal.count)} — same period and cost-centre scope`}
-              </p>
-            </>
-          )}
-        </div>
-      )}
+      {showFinancial && <FinancialValueCard value={financialValue} language={language} />}
 
       {/* 4-Column Geometric KPI Grid (Primary Factory Unit: TON) */}
       {showQuantity && (

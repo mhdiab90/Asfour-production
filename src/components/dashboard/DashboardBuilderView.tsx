@@ -28,7 +28,8 @@ import { UniversalStageRecord, NavigationPage, Shift, Press, Product, Customer, 
 import { fetchUniversalStageRecords } from '../../services/stageRecordService';
 import { fetchMasterData } from '../../services/masterDataService';
 import { listCostCenterHierarchyNodes, buildCostCenterHierarchyIndex, CostCenterHierarchyRecord } from '../../services/costCenterHierarchyService';
-import { resolveCostCenterProductionScope } from '../../services/costCenterDashboardPure';
+import { resolveCostCenterProductionScope, resolveCostCenterCodeScope, metricFlags } from '../../services/costCenterDashboardPure';
+import { FinancialValueCard, useFinancialValue } from './DashboardMetricControls';
 import { useLanguage } from '../../i18n/LanguageContext';
 import { useAuth } from '../../context/AuthContext';
 import { Modal } from '../common/Modal';
@@ -297,6 +298,26 @@ export const DashboardBuilderView: React.FC<DashboardBuilderViewProps> = ({ onNa
     ),
     [globalFilters.costCenterNodeIds, hierarchyIndex, presses, furnaces],
   );
+
+  /*
+   * Metric type, from the shared filter model. Money uses the same hook, scope
+   * rule and card as the classic Dashboard, over the dashboard's global period
+   * and cost-centre selection; nothing is read unless financial values show.
+   */
+  const { quantity: showQuantity, financial: showFinancial } = metricFlags(globalFilters.metricMode ?? 'QUANTITY');
+  const costCenterCodeScope = useMemo(
+    () => resolveCostCenterCodeScope(globalFilters.costCenterNodeIds ?? [], hierarchyIndex),
+    [globalFilters.costCenterNodeIds, hierarchyIndex],
+  );
+  const globalPeriod = useMemo(
+    () => resolveTimeRangePreset(globalFilters.timeRangePreset, globalFilters.customStart, globalFilters.customEnd, globalFilters.namedMonth),
+    [globalFilters.timeRangePreset, globalFilters.customStart, globalFilters.customEnd, globalFilters.namedMonth],
+  );
+  const financialValue = useFinancialValue(showFinancial, {
+    costCenterCodes: costCenterCodeScope,
+    startDate: globalPeriod.startDate || undefined,
+    endDate: globalPeriod.endDate || undefined,
+  });
 
   const refreshDashboardList = useCallback(() => {
     const list = listDashboards();
@@ -847,35 +868,58 @@ export const DashboardBuilderView: React.FC<DashboardBuilderViewProps> = ({ onNa
   }
 
   return (
-    <div className="space-y-5" dir={isRtl ? 'rtl' : 'ltr'}>
-      {/* Header */}
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <h1 className="text-lg font-bold text-slate-800 flex items-center gap-2"><LayoutDashboard className="w-5 h-5 text-indigo-600" />{t.title}</h1>
-          <p className="text-xs text-slate-500 mt-0.5">{t.subtitle}</p>
+    <div id="custom-dashboard-page" className="space-y-6" dir={isRtl ? 'rtl' : 'ltr'}>
+      {/*
+        Page header - the same geometry as the classic Dashboard: the open
+        dashboard's name is the page title, its own actions sit beside it, and
+        the dashboard-wide actions sit on the other side. This replaces a
+        generic title plus a separate narrow identity strip that repeated the
+        name a third time inside the filter bar.
+      */}
+      <div id="custom-dashboard-header" className="bg-white border border-slate-200 shadow-xs p-4 flex flex-wrap items-center justify-between gap-3">
+        <div className="min-w-0 flex items-center gap-3">
+          <div className="w-10 h-10 rounded-sm bg-indigo-50 text-indigo-600 flex items-center justify-center shrink-0">
+            <LayoutDashboard className="w-5 h-5" />
+          </div>
+          <div className="min-w-0">
+            <div className="flex flex-wrap items-center gap-2">
+              <h1 className="text-lg font-black text-slate-800 truncate">{draft ? draft.name : t.title}</h1>
+              {draft && getDefaultDashboardId() === draft.dashboardId && <span className="px-1.5 py-0.5 bg-indigo-50 text-indigo-600 text-[10px] font-bold rounded shrink-0">{t.default}</span>}
+              {draft && dirty && <span className="text-[11px] text-amber-600 font-bold shrink-0">{t.unsaved}</span>}
+              {draft && (
+                <div className="flex items-center gap-0.5">
+                  <button type="button" onClick={handleRename} className="p-1.5 text-slate-400 hover:text-indigo-600 hover:bg-slate-50 rounded cursor-pointer" title={t.rename}><Pencil className="w-4 h-4" /></button>
+                  <button type="button" onClick={handleDuplicate} className="p-1.5 text-slate-400 hover:text-indigo-600 hover:bg-slate-50 rounded cursor-pointer" title={t.duplicate}><Copy className="w-4 h-4" /></button>
+                  <button type="button" onClick={handleSetDefault} className="p-1.5 text-slate-400 hover:text-amber-500 hover:bg-slate-50 rounded cursor-pointer" title={t.setDefault}><Star className="w-4 h-4" /></button>
+                  <button type="button" onClick={handleDelete} className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-slate-50 rounded cursor-pointer" title={t.delete}><Trash2 className="w-4 h-4" /></button>
+                </div>
+              )}
+            </div>
+            <p className="text-xs text-slate-500 mt-0.5">{draft ? t.title : t.subtitle}</p>
+          </div>
         </div>
         <div className="flex flex-wrap items-center gap-2">
-          <button type="button" onClick={() => setShowDashboardList(true)} className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-white text-xs font-bold rounded cursor-pointer">
+          <button type="button" onClick={() => setShowDashboardList(true)} className="flex items-center gap-1.5 px-3 py-2 bg-slate-800 hover:bg-slate-700 text-white text-xs font-bold rounded cursor-pointer">
             <FolderOpen className="w-3.5 h-3.5" />{t.myDashboards}
           </button>
-          <button type="button" onClick={handleCreateDashboard} className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold rounded border border-slate-200 cursor-pointer">
+          <button type="button" onClick={handleCreateDashboard} className="flex items-center gap-1.5 px-3 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold rounded border border-slate-200 cursor-pointer">
             <Plus className="w-3.5 h-3.5" />{t.newDashboard}
           </button>
-          <button type="button" onClick={() => setShowTemplatePicker(true)} className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold rounded border border-slate-200 cursor-pointer">
+          <button type="button" onClick={() => setShowTemplatePicker(true)} className="flex items-center gap-1.5 px-3 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold rounded border border-slate-200 cursor-pointer">
             <LayoutTemplate className="w-3.5 h-3.5" />{t.newReport}
           </button>
           {draft && (
             <>
-              <button type="button" onClick={() => setShowAiDesigner(true)} className="flex items-center gap-1.5 px-3 py-1.5 bg-violet-600 hover:bg-violet-700 text-white text-xs font-bold rounded cursor-pointer">
+              <button type="button" onClick={() => setShowAiDesigner(true)} className="flex items-center gap-1.5 px-3 py-2 bg-violet-600 hover:bg-violet-700 text-white text-xs font-bold rounded cursor-pointer">
                 <Sparkles className="w-3.5 h-3.5" />{t.aiDesigner}
               </button>
-              <button type="button" onClick={handleExportExcel} className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold rounded border border-slate-200 cursor-pointer">
+              <button type="button" onClick={handleExportExcel} className="flex items-center gap-1.5 px-3 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold rounded border border-slate-200 cursor-pointer">
                 <FileSpreadsheet className="w-3.5 h-3.5" />{t.exportExcel}
               </button>
-              <button type="button" onClick={() => setShowPrintView(true)} className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold rounded border border-slate-200 cursor-pointer">
+              <button type="button" onClick={() => setShowPrintView(true)} className="flex items-center gap-1.5 px-3 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold rounded border border-slate-200 cursor-pointer">
                 <Printer className="w-3.5 h-3.5" />{t.print}
               </button>
-              <button type="button" onClick={handleSave} className={`flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold rounded cursor-pointer ${dirty ? 'bg-indigo-600 hover:bg-indigo-700 text-white' : 'bg-emerald-50 text-emerald-600 border border-emerald-200'}`}>
+              <button type="button" onClick={handleSave} className={`flex items-center gap-1.5 px-3 py-2 text-xs font-bold rounded cursor-pointer ${dirty ? 'bg-indigo-600 hover:bg-indigo-700 text-white' : 'bg-emerald-50 text-emerald-600 border border-emerald-200'}`}>
                 {dirty ? <Save className="w-3.5 h-3.5" /> : <Check className="w-3.5 h-3.5" />}{dirty ? t.save : t.saved}
               </button>
             </>
@@ -885,17 +929,6 @@ export const DashboardBuilderView: React.FC<DashboardBuilderViewProps> = ({ onNa
 
       {draft && (
         <>
-          {/* Dashboard identity row: name + open/rename/duplicate/default/delete */}
-          <div className="bg-white border border-slate-200 shadow-xs p-3 flex flex-wrap items-center gap-2">
-            <span className="text-sm font-bold text-slate-800 truncate">{draft.name}</span>
-            {getDefaultDashboardId() === draft.dashboardId && <span className="px-1.5 py-0.5 bg-indigo-50 text-indigo-600 text-[9px] font-bold rounded shrink-0">{t.default}</span>}
-            {dirty && <span className="text-[10px] text-amber-600 font-bold shrink-0">{t.unsaved}</span>}
-            <button type="button" onClick={handleRename} className="p-1 text-slate-400 hover:text-indigo-600 cursor-pointer" title={t.rename}><Pencil className="w-3.5 h-3.5" /></button>
-            <button type="button" onClick={handleDuplicate} className="p-1 text-slate-400 hover:text-indigo-600 cursor-pointer" title={t.duplicate}><Copy className="w-3.5 h-3.5" /></button>
-            <button type="button" onClick={handleSetDefault} className="p-1 text-slate-400 hover:text-amber-500 cursor-pointer" title={t.setDefault}><Star className="w-3.5 h-3.5" /></button>
-            <button type="button" onClick={handleDelete} className="p-1 text-slate-400 hover:text-rose-600 cursor-pointer" title={t.delete}><Trash2 className="w-3.5 h-3.5" /></button>
-          </div>
-
           {/* Live Control Bar (Part 4) */}
           <LiveControlBar
             dashboardName={draft.name}
@@ -916,24 +949,27 @@ export const DashboardBuilderView: React.FC<DashboardBuilderViewProps> = ({ onNa
             language={language}
           />
 
-          {isLoading ? (
-            <div className="p-16 text-center text-xs text-slate-400">{t.loading}</div>
+          {showFinancial && <FinancialValueCard id="custom-dashboard-financial-value" value={financialValue} language={language} />}
+
+          {!showQuantity ? null : isLoading ? (
+            <div className="p-16 text-center text-xs text-slate-400 bg-white border border-slate-200 shadow-xs">{t.loading}</div>
           ) : (
-            <div className="space-y-5">
+            <div id="custom-dashboard-sections" className="space-y-6">
               {draft.sections.map((section, sIdx) => (
                 <div
                   key={section.sectionId}
                   className="space-y-3"
+                  data-section-id={section.sectionId}
                   onDragOver={(e) => e.preventDefault()}
                   onDrop={(e) => { e.stopPropagation(); handleSectionDrop(section.sectionId); }}
                 >
-                  <div className="flex items-center justify-between gap-2">
+                  <div className="bg-white border border-slate-200 shadow-xs px-4 py-2.5 flex flex-wrap items-center justify-between gap-2">
                     <div
                       className="flex items-center gap-2 min-w-0 cursor-grab"
                       draggable
                       onDragStart={() => handleSectionDragStart(section.sectionId)}
                     >
-                      <GripVertical className="w-3.5 h-3.5 text-slate-300 shrink-0" />
+                      <GripVertical className="w-4 h-4 text-slate-300 shrink-0" />
                       {renamingSectionId === section.sectionId ? (
                         <input
                           autoFocus
@@ -943,31 +979,31 @@ export const DashboardBuilderView: React.FC<DashboardBuilderViewProps> = ({ onNa
                           className="text-sm font-bold text-slate-800 border-b border-indigo-400 outline-none px-1"
                         />
                       ) : (
-                        <h3 className="text-sm font-bold text-slate-800 truncate cursor-pointer" onClick={() => setRenamingSectionId(section.sectionId)}>{section.title}</h3>
+                        <h2 className="font-bold text-slate-700 text-sm truncate cursor-pointer" onClick={() => setRenamingSectionId(section.sectionId)}>{section.title}</h2>
                       )}
-                      <button type="button" onClick={() => setRenamingSectionId(section.sectionId)} className="p-0.5 text-slate-300 hover:text-indigo-600 cursor-pointer"><Pencil className="w-3 h-3" /></button>
+                      <button type="button" onClick={() => setRenamingSectionId(section.sectionId)} className="p-1 text-slate-400 hover:text-indigo-600 cursor-pointer"><Pencil className="w-3.5 h-3.5" /></button>
                     </div>
-                    <div className="flex items-center gap-2">
-                      <select value={section.columns} onChange={(e) => handleSetSectionColumns(section.sectionId, Number(e.target.value) as 1 | 2 | 3 | 4)} className="border border-slate-200 rounded px-1.5 py-0.5 text-[10px] font-bold text-slate-600">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <select value={section.columns} onChange={(e) => handleSetSectionColumns(section.sectionId, Number(e.target.value) as 1 | 2 | 3 | 4)} className="bg-slate-50 border border-slate-200 rounded px-2 py-1 text-xs font-bold text-slate-600">
                         {[1, 2, 3, 4].map((c) => <option key={c} value={c}>{t.columns}: {c}</option>)}
                       </select>
                       <button type="button" onClick={() => handleMoveSection(section.sectionId, -1)} disabled={sIdx === 0} className="p-1 text-slate-400 hover:text-indigo-600 disabled:opacity-30 cursor-pointer"><ChevronUp className="w-3.5 h-3.5" /></button>
                       <button type="button" onClick={() => handleMoveSection(section.sectionId, 1)} disabled={sIdx === draft.sections.length - 1} className="p-1 text-slate-400 hover:text-indigo-600 disabled:opacity-30 cursor-pointer"><ChevronDown className="w-3.5 h-3.5" /></button>
-                      <button type="button" onClick={() => setWidgetFormState({ sectionId: section.sectionId })} className="flex items-center gap-1 px-2 py-1 bg-indigo-50 text-indigo-600 text-[10px] font-bold rounded cursor-pointer"><Plus className="w-3 h-3" />{t.addWidget}</button>
+                      <button type="button" onClick={() => setWidgetFormState({ sectionId: section.sectionId })} className="flex items-center gap-1.5 px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold rounded cursor-pointer"><Plus className="w-3.5 h-3.5" />{t.addWidget}</button>
                       <button type="button" onClick={() => handleDeleteSection(section.sectionId)} className="p-1 text-slate-400 hover:text-rose-600 cursor-pointer"><Trash2 className="w-3.5 h-3.5" /></button>
                     </div>
                   </div>
 
                   {section.widgets.length === 0 ? (
                     <div
-                      className="border-2 border-dashed border-slate-200 rounded p-8 text-center text-[11px] text-slate-400"
+                      className="border-2 border-dashed border-slate-200 bg-white/60 p-10 text-center text-xs text-slate-400"
                       onDragOver={(e) => handleDragOverWidget(e, section.sectionId, 0)}
                       onDrop={() => handleDrop(section.sectionId, 0)}
                     >
                       {t.emptySection}
                     </div>
                   ) : (
-                    <div className={`grid ${columnsClass[section.columns]} gap-3`}>
+                    <div className={`grid ${columnsClass[section.columns]} gap-4`}>
                       {section.widgets.map((widget, wIdx) => (
                         <div
                           key={widget.widgetId}
@@ -978,7 +1014,7 @@ export const DashboardBuilderView: React.FC<DashboardBuilderViewProps> = ({ onNa
                           onClick={() => setSelectedWidgetId((prev) => (prev === widget.widgetId ? null : widget.widgetId))}
                           title={language === 'ar' ? 'انقر لتحديد هذا الرسم (لسياق المساعد الذكي)' : 'Click to select this chart (for the AI assistant context)'}
                           style={{ gridColumn: `span ${widgetSpanForSize(widget.size, section.columns)}` }}
-                          className={`flex flex-col cursor-pointer ${
+                          className={`flex flex-col min-w-0 cursor-pointer ${
                             dragOverTarget?.sectionId === section.sectionId && dragOverTarget.index === wIdx
                               ? 'ring-2 ring-indigo-400 rounded'
                               : selectedWidgetId === widget.widgetId
@@ -987,22 +1023,22 @@ export const DashboardBuilderView: React.FC<DashboardBuilderViewProps> = ({ onNa
                           }`}
                         >
                           {/* Move (4-direction) + size controls - explicit precision alongside drag-and-drop (Part 1 §3/§4) */}
-                          <div className="flex items-center justify-between gap-1 mb-1 px-0.5">
-                            <div className="flex items-center gap-0.5 text-slate-300 cursor-grab" title={language === 'ar' ? 'اسحب لإعادة الترتيب' : 'Drag to reorder'}>
-                              <GripVertical className="w-3 h-3" />
+                          <div className="flex items-center justify-between gap-1 mb-1.5 px-1 py-0.5 bg-slate-100 border border-slate-200">
+                            <div className="flex items-center gap-0.5 text-slate-400 cursor-grab" title={language === 'ar' ? 'اسحب لإعادة الترتيب' : 'Drag to reorder'}>
+                              <GripVertical className="w-4 h-4" />
                             </div>
                             <div className="flex items-center gap-0.5">
-                              <button type="button" onClick={() => handleMoveWidgetGrid(section.sectionId, widget.widgetId, 'left')} className="p-0.5 text-slate-300 hover:text-indigo-600 cursor-pointer" title={language === 'ar' ? 'نقل لليسار' : 'Move left'}><ChevronLeft className="w-3 h-3" /></button>
-                              <button type="button" onClick={() => handleMoveWidgetGrid(section.sectionId, widget.widgetId, 'up')} className="p-0.5 text-slate-300 hover:text-indigo-600 cursor-pointer" title={language === 'ar' ? 'نقل لأعلى' : 'Move up'}><ChevronUp className="w-3 h-3" /></button>
-                              <button type="button" onClick={() => handleMoveWidgetGrid(section.sectionId, widget.widgetId, 'down')} className="p-0.5 text-slate-300 hover:text-indigo-600 cursor-pointer" title={language === 'ar' ? 'نقل لأسفل' : 'Move down'}><ChevronDown className="w-3 h-3" /></button>
-                              <button type="button" onClick={() => handleMoveWidgetGrid(section.sectionId, widget.widgetId, 'right')} className="p-0.5 text-slate-300 hover:text-indigo-600 cursor-pointer" title={language === 'ar' ? 'نقل لليمين' : 'Move right'}><ChevronRight className="w-3 h-3" /></button>
+                              <button type="button" onClick={() => handleMoveWidgetGrid(section.sectionId, widget.widgetId, 'left')} className="p-1 text-slate-500 hover:text-indigo-600 hover:bg-white rounded cursor-pointer" title={language === 'ar' ? 'نقل لليسار' : 'Move left'}><ChevronLeft className="w-3.5 h-3.5" /></button>
+                              <button type="button" onClick={() => handleMoveWidgetGrid(section.sectionId, widget.widgetId, 'up')} className="p-1 text-slate-500 hover:text-indigo-600 hover:bg-white rounded cursor-pointer" title={language === 'ar' ? 'نقل لأعلى' : 'Move up'}><ChevronUp className="w-3.5 h-3.5" /></button>
+                              <button type="button" onClick={() => handleMoveWidgetGrid(section.sectionId, widget.widgetId, 'down')} className="p-1 text-slate-500 hover:text-indigo-600 hover:bg-white rounded cursor-pointer" title={language === 'ar' ? 'نقل لأسفل' : 'Move down'}><ChevronDown className="w-3.5 h-3.5" /></button>
+                              <button type="button" onClick={() => handleMoveWidgetGrid(section.sectionId, widget.widgetId, 'right')} className="p-1 text-slate-500 hover:text-indigo-600 hover:bg-white rounded cursor-pointer" title={language === 'ar' ? 'نقل لليمين' : 'Move right'}><ChevronRight className="w-3.5 h-3.5" /></button>
                               {draft.sections.length > 1 && (
-                                <button type="button" onClick={() => setMoveToSectionState({ sectionId: section.sectionId, widgetId: widget.widgetId })} className="p-0.5 text-slate-300 hover:text-indigo-600 cursor-pointer" title={t.moveToSection}><MoveRight className="w-3 h-3" /></button>
+                                <button type="button" onClick={() => setMoveToSectionState({ sectionId: section.sectionId, widgetId: widget.widgetId })} className="p-1 text-slate-500 hover:text-indigo-600 hover:bg-white rounded cursor-pointer" title={t.moveToSection}><MoveRight className="w-3.5 h-3.5" /></button>
                               )}
                               <select
                                 value={widget.size || 'MEDIUM'}
                                 onChange={(e) => handleSetWidgetSize(section.sectionId, widget.widgetId, e.target.value as WidgetSize)}
-                                className="ms-1 border border-slate-200 rounded px-1 py-0.5 text-[9px] font-bold text-slate-500 cursor-pointer"
+                                className="ms-1 bg-white border border-slate-200 rounded px-1.5 py-0.5 text-[11px] font-bold text-slate-600 cursor-pointer"
                                 title={t.size}
                               >
                                 <option value="SMALL">{t.small}</option>

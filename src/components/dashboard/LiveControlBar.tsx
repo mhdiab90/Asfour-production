@@ -11,6 +11,13 @@
  * the SAME shared shape already used by resolveWidgetFilters()/widget
  * rendering, so this bar doesn't introduce a second filter model (Part 31).
  *
+ * Layout: the SAME dark filter panel as the classic Dashboard, built from the
+ * shared dashboardFilterStyles tokens - period + actions, then presets, then a
+ * responsive filter grid (1 / 2 / 4 columns). It used to squeeze every filter
+ * into one `overflow-x-auto` strip, which both forced horizontal scrolling and
+ * clipped the cost-centre dropdown (an overflow container clips its absolutely
+ * positioned children); nothing here scrolls sideways any more.
+ *
  * Performance: no Firestore calls originate here - `onRefresh` triggers the
  * SAME one-time fetch the Dashboard Builder already does; there is no
  * continuous polling loop unless the user explicitly turns Auto Refresh on,
@@ -22,9 +29,19 @@ import { CostCenterScopeSelector } from './CostCenterScopeSelector';
 import { HierarchyIndex } from '../../services/hierarchyResolverPure';
 import { RotateCcw, RefreshCw, Circle, X } from 'lucide-react';
 import { Shift, Press, Product, Customer, Employee, ProductionStageType } from '../../types';
-import { GlobalDashboardFilters, TimeRangePreset, TIME_RANGE_LABELS, ALL_STAGES, getStageDisplayName, CrossFilterState } from '../../services/dashboardRegistry';
+import { GlobalDashboardFilters, TimeRangePreset, TIME_RANGE_LABELS, ALL_STAGES, getStageDisplayName, CrossFilterState, resolveTimeRangePreset } from '../../services/dashboardRegistry';
+import { MetricModeToggle } from './DashboardMetricControls';
+import {
+  DASHBOARD_FILTER_PANEL,
+  DASHBOARD_FILTER_SELECT,
+  DASHBOARD_PRESET_GROUP,
+  dashboardPresetButton,
+  DASHBOARD_DATE_INPUT,
+  DASHBOARD_PANEL_BUTTON,
+} from './dashboardFilterStyles';
 
 interface LiveControlBarProps {
+  /** Shown in the page header now, not repeated inside the filter panel. */
   dashboardName: string;
   globalFilters: GlobalDashboardFilters;
   onChangeFilters: (patch: Partial<GlobalDashboardFilters>) => void;
@@ -85,7 +102,7 @@ function timeAgo(date: Date, language: 'ar' | 'en'): string {
 }
 
 export const LiveControlBar: React.FC<LiveControlBarProps> = ({
-  dashboardName, globalFilters, onChangeFilters, onReset, onRefresh, lastUpdated, isRefreshing,
+  globalFilters, onChangeFilters, onReset, onRefresh, lastUpdated, isRefreshing,
   crossFilter, onClearCrossFilter, shifts, presses, products, customers, employees, language, hierarchyIndex,
 }) => {
   const [autoRefresh, setAutoRefresh] = useState(false);
@@ -128,7 +145,15 @@ export const LiveControlBar: React.FC<LiveControlBarProps> = ({
     apply: language === 'ar' ? 'تطبيق' : 'Apply',
     rangeInvalid: language === 'ar' ? 'تاريخ النهاية يجب أن يكون بعد تاريخ البداية أو يساويه' : 'End date must be on or after the start date',
     year: language === 'ar' ? 'السنة' : 'Year',
+    period: language === 'ar' ? 'فترة اللوحة:' : 'Dashboard Period:',
   };
+
+  const presetLabel = language === 'ar' ? TIME_RANGE_LABELS[globalFilters.timeRangePreset].ar : TIME_RANGE_LABELS[globalFilters.timeRangePreset].en;
+  const periodBounds = resolveTimeRangePreset(globalFilters.timeRangePreset, globalFilters.customStart, globalFilters.customEnd, globalFilters.namedMonth);
+  const periodLabel = periodBounds.startDate && periodBounds.endDate
+    ? `${presetLabel} (${periodBounds.startDate} → ${periodBounds.endDate})`
+    : presetLabel;
+  const fullWidthSelect = `${DASHBOARD_FILTER_SELECT} w-full min-w-0`;
 
   const stageLabel = globalFilters.stageType === 'all' ? t.all : getStageDisplayName(globalFilters.stageType, language);
   const shiftLabel = globalFilters.shiftId ? shifts.find((s) => s.id === globalFilters.shiftId)?.name : undefined;
@@ -146,18 +171,39 @@ export const LiveControlBar: React.FC<LiveControlBarProps> = ({
   if (crossFilter) chips.push({ key: 'cross', label: crossFilter.label, onRemove: onClearCrossFilter });
 
   return (
-    <div className="bg-white border border-slate-200 shadow-xs">
-      <div className="p-3 flex flex-wrap items-center gap-3">
-        <span className="text-sm font-bold text-slate-800 truncate shrink-0">{dashboardName}</span>
+    <div id="custom-dashboard-filter-panel" className={DASHBOARD_FILTER_PANEL}>
+      {/* Row 1 - the active period, live status and the panel actions. */}
+      <div className="flex flex-wrap items-center gap-2 text-xs">
+        <span className="text-slate-400 font-bold">{t.period}</span>
+        <span className="px-2 py-1 rounded bg-slate-800 text-slate-200 border border-slate-700 font-bold">{periodLabel}</span>
+        <div className="flex-grow" />
+        <span className="flex items-center gap-1 text-[11px] font-bold text-slate-400">
+          <Circle className={`w-2 h-2 ${isRefreshing ? 'fill-amber-400 text-amber-400 animate-pulse' : 'fill-emerald-400 text-emerald-400'}`} />
+          {isRefreshing ? t.refreshingLabel : lastUpdated ? t.updated(timeAgo(lastUpdated, language)) : t.live}
+        </span>
+        <label className="flex items-center gap-1 text-[11px] font-bold text-slate-400 cursor-pointer">
+          <input type="checkbox" checked={autoRefresh} onChange={(e) => setAutoRefresh(e.target.checked)} className="w-3.5 h-3.5 accent-amber-400 cursor-pointer" />
+          {t.autoRefresh}
+        </label>
+        <button type="button" onClick={onRefresh} disabled={isRefreshing} className={`${DASHBOARD_PANEL_BUTTON} disabled:opacity-40`} title={t.refresh}>
+          <RefreshCw className={`w-3.5 h-3.5 ${isRefreshing ? 'animate-spin' : ''}`} />
+          {t.refresh}
+        </button>
+        <button type="button" onClick={onReset} className={DASHBOARD_PANEL_BUTTON}>
+          <RotateCcw className="w-3.5 h-3.5" />
+          {t.reset}
+        </button>
+      </div>
 
-        {/* Date range quick-select - horizontally scrollable on mobile (Part 12) */}
-        <div className="flex items-center gap-1 overflow-x-auto max-w-full bg-slate-100 p-1 rounded text-[11px] font-bold shrink-0">
+      {/* Row 2 - period presets; the group wraps instead of scrolling. */}
+      <div className="flex flex-wrap items-center gap-2">
+        <div className={`${DASHBOARD_PRESET_GROUP} flex-wrap`}>
           {QUICK_PRESETS.map((p) => (
             <button
               key={p}
               type="button"
               onClick={() => onChangeFilters({ timeRangePreset: p })}
-              className={`px-2 py-1 rounded whitespace-nowrap cursor-pointer ${globalFilters.timeRangePreset === p ? 'bg-white text-indigo-600 shadow-xs' : 'text-slate-500'}`}
+              className={`${dashboardPresetButton(globalFilters.timeRangePreset === p)} whitespace-nowrap`}
             >
               {language === 'ar' ? TIME_RANGE_LABELS[p].ar : TIME_RANGE_LABELS[p].en}
             </button>
@@ -166,32 +212,32 @@ export const LiveControlBar: React.FC<LiveControlBarProps> = ({
 
         {/* Custom Range date inputs - only shown once CUSTOM is the active preset; endDate >= startDate is enforced before Apply is enabled. */}
         {globalFilters.timeRangePreset === 'CUSTOM' && (
-          <div className="flex items-center gap-1.5 flex-wrap bg-slate-50 border border-slate-200 rounded px-2 py-1 shrink-0">
-            <span className="text-[10px] font-bold text-slate-500">{t.from}</span>
-            <input type="date" value={customStartDraft} max={customEndDraft || undefined} onChange={(e) => setCustomStartDraft(e.target.value)} className="border border-slate-200 rounded px-1.5 py-0.5 text-[11px]" />
-            <span className="text-[10px] font-bold text-slate-500">{t.to}</span>
-            <input type="date" value={customEndDraft} min={customStartDraft || undefined} onChange={(e) => setCustomEndDraft(e.target.value)} className="border border-slate-200 rounded px-1.5 py-0.5 text-[11px]" />
+          <div className="flex items-center gap-1.5 flex-wrap text-xs">
+            <span className="text-[11px] font-bold text-slate-400">{t.from}</span>
+            <input type="date" value={customStartDraft} max={customEndDraft || undefined} onChange={(e) => setCustomStartDraft(e.target.value)} className={`${DASHBOARD_DATE_INPUT} border-slate-700`} />
+            <span className="text-[11px] font-bold text-slate-400">{t.to}</span>
+            <input type="date" value={customEndDraft} min={customStartDraft || undefined} onChange={(e) => setCustomEndDraft(e.target.value)} className={`${DASHBOARD_DATE_INPUT} ${customStartDraft && customEndDraft && customEndDraft < customStartDraft ? 'border-red-500' : 'border-slate-700'}`} />
             <button
               type="button"
               disabled={!customStartDraft || !customEndDraft || customEndDraft < customStartDraft}
               onClick={() => onChangeFilters({ timeRangePreset: 'CUSTOM', customStart: customStartDraft, customEnd: customEndDraft })}
-              className="px-2 py-0.5 rounded bg-indigo-600 text-white text-[11px] font-bold disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
+              className="px-2.5 py-1 rounded bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
             >
               {t.apply}
             </button>
             {customStartDraft && customEndDraft && customEndDraft < customStartDraft && (
-              <span className="text-[10px] font-bold text-rose-600">{t.rangeInvalid}</span>
+              <span className="px-2 py-1 rounded bg-red-500/15 text-red-300 border border-red-500/40 text-[11px] font-bold">{t.rangeInvalid}</span>
             )}
           </div>
         )}
 
         {/* Named Month picker - only shown once NAMED_MONTH is the active preset. */}
         {globalFilters.timeRangePreset === 'NAMED_MONTH' && (
-          <div className="flex items-center gap-1.5 bg-slate-50 border border-slate-200 rounded px-2 py-1 shrink-0">
+          <div className="flex items-center gap-1.5 text-xs">
             <select
               value={namedMonthDraft.month}
               onChange={(e) => setNamedMonthDraft((d) => ({ ...d, month: Number(e.target.value) }))}
-              className="border border-slate-200 rounded px-1.5 py-0.5 text-[11px]"
+              className={`${DASHBOARD_DATE_INPUT} border-slate-700`}
             >
               {MONTH_NAMES.map((m, idx) => <option key={idx + 1} value={idx + 1}>{language === 'ar' ? m.ar : m.en}</option>)}
             </select>
@@ -199,81 +245,74 @@ export const LiveControlBar: React.FC<LiveControlBarProps> = ({
               type="number"
               value={namedMonthDraft.year}
               onChange={(e) => setNamedMonthDraft((d) => ({ ...d, year: Number(e.target.value) }))}
-              className="border border-slate-200 rounded px-1.5 py-0.5 text-[11px] w-16"
+              className={`${DASHBOARD_DATE_INPUT} border-slate-700 w-20`}
               title={t.year}
             />
             <button
               type="button"
               onClick={() => onChangeFilters({ timeRangePreset: 'NAMED_MONTH', namedMonth: { year: namedMonthDraft.year, month: namedMonthDraft.month } })}
-              className="px-2 py-0.5 rounded bg-indigo-600 text-white text-[11px] font-bold cursor-pointer"
+              className="px-2.5 py-1 rounded bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold cursor-pointer"
             >
               {t.apply}
             </button>
           </div>
         )}
+      </div>
 
-        <div className="flex items-center gap-2 overflow-x-auto">
-          <select value={globalFilters.stageType} onChange={(e) => onChangeFilters({ stageType: e.target.value as ProductionStageType | 'all' })} className="border border-slate-200 rounded px-2 py-1 text-xs font-semibold text-slate-700 shrink-0" title={t.stage}>
-            <option value="all">{t.stage}: {t.all}</option>
-            {ALL_STAGES.map((s) => <option key={s} value={s}>{getStageDisplayName(s, language)}</option>)}
-          </select>
-          <select value={globalFilters.shiftId || ''} onChange={(e) => onChangeFilters({ shiftId: e.target.value || undefined })} className="border border-slate-200 rounded px-2 py-1 text-xs font-semibold text-slate-700 shrink-0" title={t.shift}>
-            <option value="">{t.shift}: {t.all}</option>
-            {shifts.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
-          </select>
-          <select value={globalFilters.employeeId || ''} onChange={(e) => onChangeFilters({ employeeId: e.target.value || undefined })} className="border border-slate-200 rounded px-2 py-1 text-xs font-semibold text-slate-700 shrink-0" title={t.employee}>
-            <option value="">{t.employee}: {t.all}</option>
-            {employees.slice(0, 200).map((e) => <option key={e.id} value={e.id}>{e.name}</option>)}
-          </select>
-          {/*
-            Cost centres from the hierarchy - the same selector the classic
-            Dashboard uses. It replaces the flat legacy press list, which no
-            longer matches how the organisation is structured.
-          */}
-          <div className="shrink-0">
-            <CostCenterScopeSelector
-              index={hierarchyIndex}
-              selectedNodeIds={globalFilters.costCenterNodeIds ?? []}
-              onChange={(ids) => onChangeFilters({ costCenterNodeIds: ids.length > 0 ? ids : undefined })}
-              language={language}
-              tone="light"
-            />
-          </div>
-          <select value={globalFilters.productId || ''} onChange={(e) => onChangeFilters({ productId: e.target.value || undefined })} className="border border-slate-200 rounded px-2 py-1 text-xs font-semibold text-slate-700 shrink-0" title={t.product}>
-            <option value="">{t.product}: {t.all}</option>
-            {products.slice(0, 200).map((p) => <option key={p.id} value={p.id}>{p.name || p.productName}</option>)}
-          </select>
-          <select value={globalFilters.customerId || ''} onChange={(e) => onChangeFilters({ customerId: e.target.value || undefined })} className="border border-slate-200 rounded px-2 py-1 text-xs font-semibold text-slate-700 shrink-0" title={t.customer}>
-            <option value="">{t.customer}: {t.all}</option>
-            {customers.slice(0, 200).map((c) => <option key={c.id} value={c.id}>{c.name || c.company}</option>)}
-          </select>
-        </div>
-
-        <div className="flex items-center gap-2 ms-auto shrink-0">
-          <span className="flex items-center gap-1 text-[10px] font-bold text-slate-400">
-            <Circle className={`w-2 h-2 ${isRefreshing ? 'fill-amber-400 text-amber-400 animate-pulse' : 'fill-emerald-400 text-emerald-400'}`} />
-            {isRefreshing ? t.refreshingLabel : lastUpdated ? t.updated(timeAgo(lastUpdated, language)) : t.live}
-          </span>
-          <label className="flex items-center gap-1 text-[10px] font-bold text-slate-400 cursor-pointer">
-            <input type="checkbox" checked={autoRefresh} onChange={(e) => setAutoRefresh(e.target.checked)} className="cursor-pointer" />
-            {t.autoRefresh}
-          </label>
-          <button type="button" onClick={onRefresh} disabled={isRefreshing} className="p-1.5 text-slate-400 hover:text-indigo-600 disabled:opacity-40 cursor-pointer" title={t.refresh}>
-            <RefreshCw className={`w-3.5 h-3.5 ${isRefreshing ? 'animate-spin' : ''}`} />
-          </button>
-          <button type="button" onClick={onReset} className="flex items-center gap-1 px-2 py-1 text-[11px] font-bold text-slate-400 hover:text-rose-600 cursor-pointer">
-            <RotateCcw className="w-3 h-3" />{t.reset}
-          </button>
-        </div>
+      {/*
+        Row 3 - the filters, in a responsive grid: one column on phones, two on
+        tablets, four on desktop. Every control fills its cell, so nothing is
+        cramped and nothing scrolls sideways.
+      */}
+      <div id="custom-dashboard-filter-grid" className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2">
+        <select value={globalFilters.stageType} onChange={(e) => onChangeFilters({ stageType: e.target.value as ProductionStageType | 'all' })} className={fullWidthSelect} title={t.stage}>
+          <option value="all">{t.stage}: {t.all}</option>
+          {ALL_STAGES.map((s) => <option key={s} value={s}>{getStageDisplayName(s, language)}</option>)}
+        </select>
+        <select value={globalFilters.shiftId || ''} onChange={(e) => onChangeFilters({ shiftId: e.target.value || undefined })} className={fullWidthSelect} title={t.shift}>
+          <option value="">{t.shift}: {t.all}</option>
+          {shifts.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
+        </select>
+        {/*
+          Cost centres from the hierarchy - the same selector the classic
+          Dashboard uses (search, 5/6/7/8/9 groups, recursive checkboxes).
+          It replaces the flat legacy press list.
+        */}
+        <CostCenterScopeSelector
+          index={hierarchyIndex}
+          selectedNodeIds={globalFilters.costCenterNodeIds ?? []}
+          onChange={(ids) => onChangeFilters({ costCenterNodeIds: ids.length > 0 ? ids : undefined })}
+          language={language}
+          tone="dark"
+          block
+        />
+        <select value={globalFilters.productId || ''} onChange={(e) => onChangeFilters({ productId: e.target.value || undefined })} className={fullWidthSelect} title={t.product}>
+          <option value="">{t.product}: {t.all}</option>
+          {products.slice(0, 200).map((p) => <option key={p.id} value={p.id}>{p.name || p.productName}</option>)}
+        </select>
+        <select value={globalFilters.customerId || ''} onChange={(e) => onChangeFilters({ customerId: e.target.value || undefined })} className={fullWidthSelect} title={t.customer}>
+          <option value="">{t.customer}: {t.all}</option>
+          {customers.slice(0, 200).map((c) => <option key={c.id} value={c.id}>{c.name || c.company}</option>)}
+        </select>
+        <select value={globalFilters.employeeId || ''} onChange={(e) => onChangeFilters({ employeeId: e.target.value || undefined })} className={fullWidthSelect} title={t.employee}>
+          <option value="">{t.employee}: {t.all}</option>
+          {employees.slice(0, 200).map((e) => <option key={e.id} value={e.id}>{e.name}</option>)}
+        </select>
+        <MetricModeToggle
+          id="custom-dashboard-metric-mode"
+          mode={globalFilters.metricMode ?? 'QUANTITY'}
+          onChange={(metricMode) => onChangeFilters({ metricMode })}
+          language={language}
+        />
       </div>
 
       {chips.length > 0 && (
-        <div className="px-3 pb-2.5 flex flex-wrap items-center gap-1.5 border-t border-slate-100 pt-2">
-          <span className="text-[10px] font-bold text-slate-400">{t.activeFilters}</span>
+        <div className="flex flex-wrap items-center gap-1.5 border-t border-slate-800 pt-2">
+          <span className="text-[11px] font-bold text-slate-400">{t.activeFilters}</span>
           {chips.map((c) => (
-            <span key={c.key} className="flex items-center gap-1 bg-indigo-50 text-indigo-700 text-[11px] font-bold px-2 py-0.5 rounded-full">
+            <span key={c.key} className="flex items-center gap-1 bg-indigo-500/20 text-indigo-200 border border-indigo-500/40 text-[11px] font-bold px-2 py-0.5 rounded-full">
               {c.label}
-              <button type="button" onClick={c.onRemove} className="cursor-pointer hover:text-indigo-900"><X className="w-3 h-3" /></button>
+              <button type="button" onClick={c.onRemove} className="cursor-pointer hover:text-white"><X className="w-3 h-3" /></button>
             </span>
           ))}
         </div>

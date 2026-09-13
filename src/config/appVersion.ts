@@ -37,7 +37,7 @@ const DEPLOYMENT_ID_INJECTED = typeof __BUILD_DEPLOYMENT_ID__ === 'string' ? __B
 
 export const CURRENT_APP_VERSION: AppVersionInfo = {
   /** Set by the automatic release planner from the classified change set - see releasePlannerPure.ts. */
-  version: '3.19.0',
+  version: '3.19.1',
   buildId: BUILD_ID_INJECTED,
   buildTimestamp: BUILD_TIMESTAMP_INJECTED,
   gitCommit: COMMIT_SHA_INJECTED,
@@ -46,6 +46,16 @@ export const CURRENT_APP_VERSION: AppVersionInfo = {
   environment: 'production',
   releaseDate: '2026-08-22',
   changelog: [
+    {
+      version: '3.19.1',
+      date: '2026-09-13',
+      highlights: [
+        'اللوحات المخصصة بنفس تصميم لوحة التحكم الأساسية: لوحة فلاتر داكنة وشبكة فلاتر متجاوبة',
+        'إزالة شريط التمرير الأفقي الذي كان يضغط الفلاتر ويقص قائمة مراكز التكاليف',
+        'اسم اللوحة المفتوحة أصبح عنوان الصفحة مع كل إجراءاتها',
+        'نوع المقياس (الكميات / القيم المالية) متاح في اللوحات المخصصة بنفس المكونات'
+      ]
+    },
     {
       version: '3.19.0',
       date: '2026-09-13',

@@ -25,6 +25,7 @@ import {
   getStageDisplayName,
 } from './reportingEngine';
 import { resolveNamedMonthRange } from '../assistant/tools/dateRangeResolver';
+import type { DashboardMetricMode } from './costCenterDashboardPure';
 
 // ============================================================================
 // Widget vocabulary
@@ -586,6 +587,12 @@ export interface GlobalDashboardFilters {
    * resolved by the shared resolver, never stored here.
    */
   costCenterNodeIds?: string[];
+  /**
+   * Metric type - the same QUANTITY / FINANCIAL / BOTH the classic Dashboard
+   * offers. Absent = QUANTITY, so every saved dashboard keeps showing exactly
+   * what it showed before.
+   */
+  metricMode?: DashboardMetricMode;
 }
 
 /**

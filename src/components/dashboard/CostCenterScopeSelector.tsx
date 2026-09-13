@@ -33,13 +33,15 @@ interface CostCenterScopeSelectorProps {
   language: 'ar' | 'en';
   /** Visual variant - the classic Dashboard sits on a dark bar, the Builder on light. */
   tone?: 'dark' | 'light';
+  /** Fill the width of its container - used when the selector sits in a filter grid cell. */
+  block?: boolean;
 }
 
 const labelOf = (node: any): string => String(node?.name || node?.sheet1Code || node?.code || node?.id || '');
 const codeOf = (node: any): string => String(node?.sheet1Code ?? node?.code ?? node?.id ?? '');
 
 export const CostCenterScopeSelector: React.FC<CostCenterScopeSelectorProps> = ({
-  index, selectedNodeIds, onChange, language, tone = 'light',
+  index, selectedNodeIds, onChange, language, tone = 'light', block = false,
 }) => {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState('');
@@ -100,23 +102,27 @@ export const CostCenterScopeSelector: React.FC<CostCenterScopeSelectorProps> = (
     : 'bg-white text-slate-700 border border-slate-200';
 
   return (
-    <div className="relative" id="cost-center-scope-selector">
+    <div className={`relative ${block ? 'w-full' : ''}`} id="cost-center-scope-selector">
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}
-        className={`flex items-center gap-1.5 rounded px-2 py-1.5 text-xs font-bold cursor-pointer ${buttonClass}`}
+        aria-expanded={open}
+        className={`flex items-center gap-1.5 rounded px-2 py-1.5 text-xs font-bold cursor-pointer ${block ? 'w-full' : ''} ${buttonClass}`}
       >
-        <Layers className="w-3.5 h-3.5" />
-        <span>
+        <Layers className="w-3.5 h-3.5 shrink-0" />
+        <span className={`truncate ${block ? 'flex-1 text-start' : ''}`}>
           {selectedNodeIds.length === 0
             ? (isAr ? 'كل مراكز التكاليف' : 'All cost centres')
             : (isAr ? `مراكز التكاليف (${selectedNodeIds.length})` : `Cost centres (${selectedNodeIds.length})`)}
         </span>
-        {open ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
+        {open ? <ChevronUp className="w-3 h-3 shrink-0" /> : <ChevronDown className="w-3 h-3 shrink-0" />}
       </button>
 
       {open && (
-        <div className="absolute z-30 mt-1 w-72 max-w-[85vw] max-h-80 overflow-y-auto rounded-xl border border-slate-200 bg-white shadow-lg p-2 space-y-2">
+        <div
+          id="cost-center-scope-panel"
+          className="absolute z-40 mt-1 start-0 w-[24rem] min-w-full max-w-[90vw] max-h-[26rem] overflow-y-auto rounded-xl border border-slate-200 bg-white shadow-lg p-2.5 space-y-2"
+        >
           <div className="flex items-center justify-between gap-2">
             <span className="text-[10px] font-black text-slate-500">
               {isAr ? 'اختر مركزًا أو أكثر - الأصل يشمل كل الفروع' : 'Pick one or more - a parent includes every branch'}

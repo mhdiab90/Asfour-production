@@ -1,9 +1,9 @@
 {
   "_doc": "Release Manifest precursor. Describes WHAT is being released so the gate checks a committed declaration rather than whatever flags an operator typed. commitSha/buildId/deploymentId are left null until a release is cut - the gate fills the comparison from the build itself, and only enforces a field that is set here. This is NOT the Change Registry: no change IDs, no Firestore, no UI.",
-  "version": "3.19.0",
-  "releaseId": "REL-2026-0019",
+  "version": "3.19.1",
+  "releaseId": "REL-2026-0020",
   "changeIds": [
-    "MOD-0024"
+    "UI-0025"
   ],
   "commitSha": null,
   "buildId": null,
@@ -34,7 +34,8 @@
     "dashboard-metric-mode",
     "dashboard-financial-value",
     "financial-transactions-import-modal",
-    "cost-center-scope-search"
+    "cost-center-scope-search",
+    "custom-dashboard-filter-grid"
   ],
   "_markerNotes": {
     "ai-provider-management": "AI Provider Management route - absent means the AI Assistant closure was dropped",
@@ -62,7 +63,8 @@
     "dashboard-metric-mode": "The Dashboard Metric Type selector - absent means quantities and financial values can no longer be chosen",
     "dashboard-financial-value": "The Dashboard financial value card - absent means financial reporting was dropped",
     "financial-transactions-import-modal": "The dedicated Financial Transactions importer - absent means transactions cannot be imported from Master Data",
-    "cost-center-scope-search": "The cost-centre selector search box - absent means search by code or name was dropped"
+    "cost-center-scope-search": "The cost-centre selector search box - absent means search by code or name was dropped",
+    "custom-dashboard-filter-grid": "The Custom Dashboard responsive filter grid - absent means it reverted to the cramped horizontally scrolling strip"
   },
   "tests": [
     "buildIdentity",
@@ -87,6 +89,7 @@
   "deployCommand": "firebase deploy --only hosting --project asfourproduction-70e6e",
   "treeClean": true,
   "_changeNotes": {
+    "UI-0025": "Custom Dashboard visual parity with the classic Dashboard. Both already render in the same page container; the compression came from inside the Builder. Its Live Control Bar squeezed every filter into one overflow-x-auto strip of non-shrinking controls, which forced horizontal scrolling and clipped the cost-centre dropdown (an overflow container clips its absolutely positioned children), in a smaller light style unlike the classic dark filter panel; the dashboard name also appeared three times (a generic header, a narrow identity strip, and the filter bar). The filter panel now uses the classic Dashboard's own classes, extracted into shared dashboardFilterStyles tokens that the classic Dashboard uses too (identical class strings): period and actions, wrapping period presets, then a responsive 1/2/4-column filter grid with no scroll strip. The shared hierarchical cost-centre selector fills its cell and opens a 24rem panel capped at 90vw. The open dashboard is the page title with rename/duplicate/default/delete beside it and every dashboard action on the other side; section headers, widget toolbars and widget cards use the classic card treatment with readable controls; widget sizes and section columns are unchanged. The metric type toggle, financial card and gated financial read were moved out of DashboardView into shared DashboardMetricControls and reused by the Custom Dashboard, whose metric type is an optional field on the existing GlobalDashboardFilters (absent = QUANTITY, so saved dashboards are unchanged). No Firestore rule, schema, permission, query or data changed",
     "MOD-0024": "Cost-centre selector search and recursive selection. The shared selector used by the classic Dashboard and the Custom Dashboard Builder gains a search box matching code, Arabic name and English name where present - case-insensitive, whitespace-tolerant, and folding Arabic spelling variants through the existing normaliseLookupText rather than a new normaliser. Results keep hierarchy context: a matched child is shown under its ancestors and a matched parent with its branch, never as a flat list, and search changes only the rows shown, never the selection. Checkboxes are now recursive: checking a node selects it and its entire branch resolved from the FULL hierarchy (so a search cannot narrow what a tick selects), unchecking removes that branch and un-ticks its ancestors without touching any other branch, a partly selected branch shows its parents as indeterminate, and a parent becomes checked once all its children are. Select All adds every classified root, or every match while searching. All descendants, ancestors and children come from the shared hierarchy resolver over the already-loaded hierarchy; selection is local state with ids as identity, typing and ticking issue no Firestore read or write. The production and financial scopes read a materialised branch exactly as they read the parent alone, so Dashboard, Builder and Reports totals are unchanged for the same selection. No Firestore rule, schema, Report, AI, Production Records or production data changed",
     "DB-0023": "Dashboard cost-centre unification and financial values. The classic Dashboard and the Custom Dashboard Builder each offered a flat legacy press/furnace list as the organisational filter; both now use ONE shared hierarchical cost-centre selector grouped under the existing 5/6/7/8/9 classifications, with multi-select checkboxes where a parent includes every descendant and a leaf is itself the target. What a selection covers is decided only by the shared resolver: for quantity it resolves node -> descendants -> linked equipment and is passed into the same filterUniversalRecords Reports uses, so Dashboard, Builder widgets, the Builder print view and its Excel export keep exactly the records Reports keeps for the same scope. An audit found no financial transaction storage anywhere, so the minimum model was added: a financialTransactions collection (date, accountCode, costCenterCode, amount, optional description/reference, importBatchId) with a dedicated Master Data importer beside Financial Accounts that never routes through Historical Import, validates the account and cost centre by exact code, and imports valid rows while keeping invalid rows on screen with their reason; writes go through the audited createMasterDataItem. The Dashboard gains a Metric Type selector (Quantities / Financial values): money is summed only from actual transactions, shown in its own card, never added to tonnage, and filtered only by date and cost centre - product, customer, shift and stage do not apply to it; transactions are read only when financial values are shown. Firestore rules gain a purely additive financialTransactions block (read signed-in, write admin, the financialAccounts pattern); it must be deployed separately before transactions can be read or imported. The reconciliation utility is kept because unresolved conflicts remain. No production record, legacy data, permission or Master Data category changed",
     "UI-0022": "Master Data unification. The screen carried THREE category controls at once - a dropdown, a multi-select panel and a category row - and the dropdown opened the hierarchy maintenance modal when cost centres were chosen, so browsing cost-centre master data was not reachable at all. Two of the three are removed; one row is the whole navigation. Presses, furnaces, mills and the legacy departments list are no longer primary categories: they are the same business entities the imported hierarchy already represents, and listing them again showed one machine as two master records. Their collections are untouched and still reached through the equipment -> hierarchyNodeId link that Production Records, Reports and the assistant use. Cost Centers now serve the imported hierarchy itself, registered as a normal tab so the SAME cache-first read and live subscription serve it, with the 5/6/7/8/9 classifications inline on the same screen and never in a modal. The generic column-mapped importer is excluded from the hierarchy at the type level, since it has its own Sheet1 importer. No data deleted, no production record touched, no Firestore rule, schema or permission changed",
@@ -104,8 +107,8 @@
     "UI-0010": "Financial Accounts import opens a dedicated Master Data importer instead of the Historical Excel Import screen: the action no longer navigates to the bulk-entry route (which App.tsx renders as DataImportView); a new in-place modal reuses the existing financialAccounts schema, XLSX reader, row validation, duplicate detection and chunked commit, adds sheet selection and parent/cycle relationship checks, and keeps partial import so invalid rows never block valid ones",
     "DB-0009": "Category-first Master Data over an extensible registry; Financial Accounts master data with Excel import and hierarchical editing (new financialAccounts collection and its Firestore rule); one shared generic hierarchy resolver reused by Master Data, Production Review and production aggregation; hierarchical cost-centre editing with cycle, self-parent and unknown-parent protection"
   },
-  "previousVersion": "3.18.0",
-  "versionBump": "MINOR",
+  "previousVersion": "3.19.0",
+  "versionBump": "PATCH",
   "classificationConfidence": "HIGH",
-  "previousReleaseId": "REL-2026-0018"
+  "previousReleaseId": "REL-2026-0019"
 }

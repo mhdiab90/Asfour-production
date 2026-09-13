@@ -145,7 +145,7 @@ export const WidgetRenderer: React.FC<WidgetRendererProps> = ({
   };
 
   return (
-    <div className={`bg-white border shadow-xs p-4 flex flex-col h-full min-h-[220px] ${isThisWidgetTheFilterSource ? 'border-indigo-400 ring-1 ring-indigo-300' : 'border-slate-200'}`} dir={language === 'ar' ? 'rtl' : 'ltr'}>
+    <div className={`bg-white border shadow-xs p-4 flex flex-col h-full min-h-[240px] min-w-0 ${isThisWidgetTheFilterSource ? 'border-indigo-400 ring-1 ring-indigo-300' : 'border-slate-200'}`} dir={language === 'ar' ? 'rtl' : 'ltr'}>
       <div className="flex items-start justify-between gap-2 border-b border-slate-100 pb-2 mb-3">
         <div className="flex items-start gap-1.5 min-w-0">
           {editable && dragHandleProps && (
@@ -154,7 +154,7 @@ export const WidgetRenderer: React.FC<WidgetRendererProps> = ({
             </div>
           )}
           <div className="min-w-0">
-            <h4 className="text-xs font-bold text-slate-800 truncate">{title}</h4>
+            <h4 className="font-bold text-slate-700 text-sm truncate">{title}</h4>
             <p className="text-[10px] text-slate-400 flex items-center gap-1 flex-wrap">
               {language === 'ar' ? TIME_RANGE_LABELS[config.timeRangePreset === 'inherit' ? globalFilters.timeRangePreset : config.timeRangePreset].ar : TIME_RANGE_LABELS[config.timeRangePreset === 'inherit' ? globalFilters.timeRangePreset : config.timeRangePreset].en}
               {resolved.isOverridden && (

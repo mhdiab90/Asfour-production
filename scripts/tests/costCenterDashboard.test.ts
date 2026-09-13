@@ -8,6 +8,7 @@
  *    exactly the same production records
  * S  selector search by code/name with path context, and recursive tri-state
  *    checkbox selection resolved against the full hierarchy
+ * P  Custom Dashboard visual parity with the classic Dashboard
  * W  wiring, asserted by source inspection with comments stripped (the screens
  *    import Firebase, so they cannot run here)
  *
@@ -248,11 +249,18 @@ test('F6. aggregation: cost-centre scope with descendants, inclusive dates, each
 test('F7. money is never added to quantity - the aggregate reads amounts only', () => {
   const src = readCode('src/services/financialTransactionsPure.ts');
   assert.equal(/quantity|tonnage|weight/i.test(src), false, 'no production field is read');
-  const view = readCode('src/components/dashboard/DashboardView.tsx');
-  assert.equal(/financialTotal\.total\s*[+*/-]|[+*/-]\s*financialTotal\.total/.test(view), false, 'the financial total is never combined arithmetically');
-  const call = /aggregateFinancialValue\(financialTransactions, \{([\s\S]*?)\}\)/.exec(view);
-  assert.ok(call, 'the Dashboard aggregates from actual transactions');
+  // The aggregation moved into the shared metric controls both dashboards use.
+  const shared = readCode('src/components/dashboard/DashboardMetricControls.tsx');
+  const call = /aggregateFinancialValue\(transactions, \{([\s\S]*?)\}\)/.exec(shared);
+  assert.ok(call, 'the dashboards aggregate from actual transactions');
   assert.equal(/productId|customerId|shiftId|stageType|employeeId/.test(call![1]), false, 'no production-only filter reaches money');
+  for (const rel of ['src/components/dashboard/DashboardView.tsx', 'src/components/dashboard/DashboardBuilderView.tsx']) {
+    const view = readCode(rel);
+    assert.equal(/financialValue\.total\s*[+*/-]|[+*/-]\s*financialValue\.total/.test(view), false, `${rel}: the financial total is never combined arithmetically`);
+    const hook = /useFinancialValue\(show\w*, \{([\s\S]*?)\}\)/.exec(view);
+    assert.ok(hook, `${rel} uses the shared financial hook`);
+    assert.equal(/productId|customerId|shiftId|stageType|employeeId/.test(hook![1]), false, `${rel}: only date and cost-centre scope reach money`);
+  }
 });
 
 // ==================================================
@@ -336,11 +344,13 @@ test('W4. the Builder resolves the scope once and hands it to every widget, the 
 
 test('W5. the Dashboard metric type and financial card exist, and money is read only when shown', () => {
   const src = readCode(DV);
-  assert.ok(/id="dashboard-metric-mode"/.test(src));
-  assert.ok(/id="dashboard-financial-value"/.test(src));
-  assert.ok(/if \(!showFinancial\) return;\s*setFinancialError\(null\);\s*listFinancialTransactions\(\)/.test(src));
+  const shared = readCode('src/components/dashboard/DashboardMetricControls.tsx');
+  assert.ok(/id = 'dashboard-metric-mode'/.test(shared) && /<MetricModeToggle mode=\{metricMode\}/.test(src));
+  assert.ok(/id = 'dashboard-financial-value'/.test(shared));
+  assert.ok(/if \(!enabled\) return;\s*setError\(null\);\s*listFinancialTransactions\(\)/.test(shared), 'money is read only while shown');
+  assert.ok(/useFinancialValue\(showFinancial,/.test(src));
   assert.ok((src.match(/\{showQuantity && \(/g) || []).length >= 2, 'quantity sections hide in financial-only mode');
-  assert.ok(/\{showFinancial && \(\s*<div id="dashboard-financial-value"/.test(src), 'the financial card is its own section');
+  assert.ok(/\{showFinancial && <FinancialValueCard value=\{financialValue\}/.test(src), 'the financial card is its own section');
 });
 
 test('W6. the financial import is dedicated and never routes through Historical Import', () => {
@@ -598,6 +608,133 @@ test('S20. Reports, AI and Production Records selectors were not touched', () =>
   for (const rel of ['src/components/reports/ReportsView.tsx', 'src/assistant/tools/stageReportTools.ts', 'src/components/production/ProductionRecordsView.tsx']) {
     assert.equal(/toggleCostCenterNode|searchCostCenterNodes|CostCenterScopeSelector/.test(readCode(rel)), false, rel);
   }
+});
+
+// ==================================================
+// P. CUSTOM DASHBOARD VISUAL PARITY
+// ==================================================
+
+const LCBP = 'src/components/dashboard/LiveControlBar.tsx';
+const BVP = 'src/components/dashboard/DashboardBuilderView.tsx';
+const STYLES = 'src/components/dashboard/dashboardFilterStyles.ts';
+
+test('P1. both dashboards render inside the same page container (no nested width cap)', () => {
+  const dv = readCode(DV);
+  assert.ok(/viewMode === 'custom' \? \(\s*<DashboardBuilderView/.test(dv), 'the Custom Dashboard is rendered in the classic Dashboard page itself');
+  for (const rel of [BVP, LCBP]) {
+    assert.equal(/max-w-(?:sm|md|lg|xl|2xl|3xl|4xl|5xl|6xl|\[\d)/.test(readCode(rel).replace(/maxWidth="[^"]*"/g, '')), false, `${rel} caps its own width`);
+  }
+  assert.ok(/id="custom-dashboard-page" className="space-y-6"/.test(readCode(BVP)), 'same vertical rhythm as the classic Dashboard');
+});
+
+test('P2. no horizontal scroll strip in the filter panel', () => {
+  const src = readCode(LCBP);
+  assert.equal(/overflow-x-auto/.test(src), false, 'the overflow strip that clipped the dropdown is gone');
+  assert.equal(/shrink-0" title=\{t\./.test(src), false, 'no non-shrinking filter controls');
+});
+
+test('P3. the filter panel is a responsive grid using the classic Dashboard panel style', () => {
+  const src = readCode(LCBP);
+  assert.ok(/id="custom-dashboard-filter-grid" className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2"/.test(src));
+  assert.ok(/className=\{DASHBOARD_FILTER_PANEL\}/.test(src));
+  const dv = readCode(DV);
+  for (const token of ['DASHBOARD_FILTER_PANEL', 'DASHBOARD_FILTER_SELECT', 'DASHBOARD_PRESET_GROUP', 'dashboardPresetButton', 'DASHBOARD_PANEL_BUTTON']) {
+    assert.ok(new RegExp(token).test(dv) && new RegExp(token).test(src), `${token} shared by both dashboards`);
+  }
+  const styles = readCode(STYLES);
+  assert.ok(/'bg-slate-900 border border-slate-800 p-3 flex flex-col gap-3'/.test(styles), 'the classic panel classes, unchanged');
+  assert.ok(/'bg-slate-800 text-slate-200 border border-slate-700 rounded px-2 py-1\.5 text-xs font-bold'/.test(styles));
+});
+
+test('P4. the cost-centre selector opens wide enough and is not clipped', () => {
+  const sel = readCode(SEL);
+  assert.ok(/w-\[24rem\] min-w-full max-w-\[90vw\]/.test(sel), 'wide panel, never wider than the screen');
+  assert.ok(/start-0/.test(sel), 'anchored to the start edge in both RTL and LTR');
+  const lcb = readCode(LCBP);
+  assert.ok(/<CostCenterScopeSelector[\s\S]{0,300}tone="dark"\s*block/.test(lcb), 'fills its grid cell in the dark panel style');
+});
+
+test('P5. the Custom Dashboard uses the SAME selector and scope as the classic Dashboard', () => {
+  const lcb = readCode(LCBP);
+  assert.ok(/import \{ CostCenterScopeSelector \} from '\.\/CostCenterScopeSelector'/.test(lcb));
+  assert.equal(/presses\.map\(\(p\) => <option/.test(lcb), false, 'no legacy press dropdown');
+  const bv = readCode(BVP);
+  assert.ok(/resolveCostCenterProductionScope\(\s*globalFilters\.costCenterNodeIds \?\? \[\]/.test(bv));
+  assert.ok(/resolveCostCenterCodeScope\(globalFilters\.costCenterNodeIds \?\? \[\], hierarchyIndex\)/.test(bv));
+});
+
+test('P6. quantity, financial and both remain separate in the Custom Dashboard', () => {
+  const lcb = readCode(LCBP);
+  assert.ok(/<MetricModeToggle[\s\S]{0,120}mode=\{globalFilters\.metricMode \?\? 'QUANTITY'\}[\s\S]{0,120}onChangeFilters\(\{ metricMode \}\)/.test(lcb));
+  const bv = readCode(BVP);
+  assert.ok(/metricFlags\(globalFilters\.metricMode \?\? 'QUANTITY'\)/.test(bv));
+  assert.ok(/\{showFinancial && <FinancialValueCard id="custom-dashboard-financial-value"/.test(bv), 'money in its own card');
+  assert.ok(/\{!showQuantity \? null : isLoading/.test(bv), 'quantity widgets hide only when quantities are unticked');
+  assert.ok(/metricMode\?: DashboardMetricMode;/.test(readCode('src/services/dashboardRegistry.ts')), 'one shared filter model, optional field');
+});
+
+test('P7. every Custom Dashboard capability is still wired', () => {
+  const bv = readCode(BVP);
+  const wired: Array<[string, RegExp]> = [
+    ['add widget', /setWidgetFormState\(\{ sectionId: section\.sectionId \}\)/],
+    ['edit widget', /onEdit=\{\(\) => setWidgetFormState\(\{ sectionId: section\.sectionId, widget \}\)\}/],
+    ['delete widget', /onRemove=\{\(\) => handleRemoveWidget\(/],
+    ['duplicate widget', /onDuplicate=\{\(\) => handleDuplicateWidget\(/],
+    ['drag reorder', /onDragStart=\{\(\) => handleDragStart\(/],
+    ['grid move', /handleMoveWidgetGrid\(section\.sectionId, widget\.widgetId, 'left'\)/],
+    ['move to section', /setMoveToSectionState\(\{ sectionId: section\.sectionId, widgetId: widget\.widgetId \}\)/],
+    ['resize', /handleSetWidgetSize\(section\.sectionId, widget\.widgetId/],
+    ['section columns', /handleSetSectionColumns\(/],
+    ['add section', /onClick=\{handleAddSection\}/],
+    ['save', /onClick=\{handleSave\}/],
+    ['my dashboards / load', /setShowDashboardList\(true\)/],
+    ['new dashboard', /onClick=\{handleCreateDashboard\}/],
+    ['templates', /setShowTemplatePicker\(true\)/],
+    ['AI designer', /setShowAiDesigner\(true\)/],
+    ['export', /onClick=\{handleExportExcel\}/],
+    ['print', /setShowPrintView\(true\)/],
+    ['rename', /onClick=\{handleRename\}/],
+    ['duplicate dashboard', /onClick=\{handleDuplicate\}/],
+    ['set default', /onClick=\{handleSetDefault\}/],
+    ['delete dashboard', /onClick=\{handleDelete\}/],
+    ['favorite', /onToggleFavorite=/],
+    ['permission gate', /const canManage = isSuperAdmin \|\| hasPermission\('dashboard\.manageCustomDashboards'\)/],
+    ['no-access screen', /if \(!canManage\) \{/],
+  ];
+  for (const [name, re] of wired) assert.ok(re.test(bv), `${name} still wired`);
+});
+
+test('P8. the open dashboard is the page title, not a narrow strip repeated in the filter bar', () => {
+  const bv = readCode(BVP);
+  assert.ok(/id="custom-dashboard-header"/.test(bv));
+  assert.ok(/<h1 className="text-lg font-black text-slate-800 truncate">\{draft \? draft\.name : t\.title\}<\/h1>/.test(bv));
+  assert.equal(/<span className="text-sm font-bold text-slate-800 truncate">\{draft\.name\}<\/span>/.test(bv), false, 'the separate identity strip is gone');
+  assert.equal(/\{dashboardName\}/.test(readCode(LCBP)), false, 'the filter panel no longer repeats the name');
+});
+
+test('P9. widgets use the configured size in a responsive grid, with no fixed widths', () => {
+  const bv = readCode(BVP);
+  assert.ok(/gridColumn: `span \$\{widgetSpanForSize\(widget\.size, section\.columns\)\}`/.test(bv), 'configured size respected');
+  assert.ok(/grid \$\{columnsClass\[section\.columns\]\} gap-4/.test(bv));
+  assert.ok(/4: 'grid-cols-1 sm:grid-cols-2 lg:grid-cols-4'/.test(bv), 'columns adapt to the screen');
+  for (const rel of [BVP, LCBP, 'src/components/dashboard/WidgetRenderer.tsx']) {
+    assert.equal(/\bw-\[\d+px\]|min-w-\[\d{3,}px\]/.test(readCode(rel)), false, `${rel} has no fixed pixel width`);
+  }
+});
+
+test('P10. RTL and LTR both follow the language', () => {
+  const bv = readCode(BVP);
+  assert.ok(/id="custom-dashboard-page" className="space-y-6" dir=\{isRtl \? 'rtl' : 'ltr'\}/.test(bv));
+  const lcb = readCode(LCBP);
+  assert.equal(/\b(?:ml|mr|pl|pr|left|right)-\d/.test(lcb), false, 'logical spacing only (ms/me/ps/pe/start/end)');
+});
+
+test('P11. no new reads or subscriptions were introduced for the layout', () => {
+  for (const rel of [LCBP, STYLES, SEL]) {
+    assert.equal(/fetchMasterData|getDocs|onSnapshot|subscribe/.test(readCode(rel)), false, rel);
+  }
+  const shared = readCode('src/components/dashboard/DashboardMetricControls.tsx');
+  assert.equal((shared.match(/listFinancialTransactions\(\)/g) || []).length, 1, 'one gated financial read, shared');
 });
 
 (async () => {
