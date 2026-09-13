@@ -52,23 +52,30 @@ interface WidgetRendererProps {
   onClearCrossFilter?: () => void;
   /** Drill-through (Part 3 §10) - jump from this widget to the matching full Report. */
   onDrillThrough?: (config: WidgetConfig) => void;
+  /**
+   * Equipment ids the selected cost centres resolve to, computed ONCE by the
+   * Builder through the shared resolver. null = no cost-centre narrowing.
+   */
+  hierarchyScope?: Set<string> | null;
 }
 
 export const WidgetRenderer: React.FC<WidgetRendererProps> = ({
   config, allRecords, globalFilters, language, onDrillDown, onEdit, onDuplicate, onRemove, editable, dragHandleProps,
-  crossFilter, onCrossFilterRequest, onClearCrossFilter, onDrillThrough,
+  crossFilter, onCrossFilterRequest, onClearCrossFilter, onDrillThrough, hierarchyScope = null,
 }) => {
   const resolved = useMemo(() => resolveWidgetFilters(config, globalFilters), [config, globalFilters]);
   const metricDef = METRIC_REGISTRY[config.metric];
 
   const filteredRecords = useMemo(() => {
+    // The third argument is the same hierarchy scope Reports and the classic
+    // Dashboard pass, so a widget total agrees with them for the same selection.
     return filterUniversalRecords(allRecords, {
       startDate: resolved.startDate,
       endDate: resolved.endDate,
       stageType: resolved.stageType,
       ...resolved.filters,
-    });
-  }, [allRecords, resolved]);
+    }, hierarchyScope);
+  }, [allRecords, resolved, hierarchyScope]);
 
   const stageSupported = isMetricSupportedForStage(config.metric, resolved.stageType);
 

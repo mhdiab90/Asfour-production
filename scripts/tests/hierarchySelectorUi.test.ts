@@ -348,11 +348,14 @@ test('F3. presses can never be offered for a non-pressing stage', () => {
   }
 });
 
-test('F4. the Dashboard clears a selection the new stage cannot use', () => {
+// The stage-dependent equipment dropdown this test used to pin was replaced
+// (by request) with the shared cost-centre hierarchy selector; the organisational
+// filter is now the hierarchy, and the fixed press list must stay gone.
+test('F4. the Dashboard uses the shared cost-centre selector, not a press list', () => {
   const src = readCode('src/components/dashboard/DashboardView.tsx');
-  assert.ok(/const valid = new Set\(equipmentOptions\.flatMap/.test(src));
-  assert.ok(/pressId: pressOk \? prev\.pressId : undefined/.test(src));
-  assert.ok(/id="dashboard-equipment-filter"/.test(src));
+  assert.ok(/<CostCenterScopeSelector/.test(src), 'the shared selector is rendered');
+  assert.ok(/filterUniversalRecords\(allRecords, filters, productionScope\)/.test(src), 'its scope reaches the shared filter');
+  assert.equal(/id="dashboard-equipment-filter"/.test(src), false, 'the legacy equipment dropdown is gone');
   assert.equal(/<option value="">\{language === 'ar' \? 'كل المكابس'/.test(src), false,
     'the fixed "All Presses" option must be gone');
 });

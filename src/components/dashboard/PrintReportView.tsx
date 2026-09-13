@@ -29,10 +29,12 @@ interface PrintReportViewProps {
   language: 'ar' | 'en';
   generatedByName: string;
   onClose: () => void;
+  /** The cost-centre scope the Builder resolved, so the printout matches the screen. */
+  hierarchyScope?: Set<string> | null;
 }
 
 export const PrintReportView: React.FC<PrintReportViewProps> = ({
-  dashboard, allRecords, globalFilters, language, generatedByName, onClose,
+  dashboard, allRecords, globalFilters, language, generatedByName, onClose, hierarchyScope = null,
 }) => {
   const { companyLogoSrc } = useBranding();
   const [orientation, setOrientation] = useState<'portrait' | 'landscape'>(dashboard.printOrientation || 'portrait');
@@ -117,6 +119,7 @@ export const PrintReportView: React.FC<PrintReportViewProps> = ({
                       config={widget}
                       allRecords={allRecords}
                       globalFilters={globalFilters}
+                      hierarchyScope={hierarchyScope}
                       language={language}
                       editable={false}
                     />

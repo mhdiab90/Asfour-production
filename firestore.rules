@@ -211,6 +211,30 @@ service cloud.firestore {
       allow write: if isAdmin();
     }
 
+    // Financial Transactions - actual spending, for the Dashboard's financial
+    // values.
+    //
+    // A new collection is unavoidable: no financial transaction was stored
+    // anywhere before (the audit found only the accounts and the cost-centre
+    // hierarchy, neither of which holds amounts), and this ruleset denies
+    // every collection it does not match.
+    //
+    // Schema (one document per transaction, auto id):
+    //   date            string  YYYY-MM-DD
+    //   accountCode     string  exact code of a financialAccounts document
+    //   costCenterCode  string  exact sheet1Code of a costCenterHierarchy node
+    //   amount          number
+    //   description     string  optional
+    //   reference       string  optional
+    //   importBatchId   string  the import run that wrote it
+    //
+    // Purely ADDITIVE and grants no new privilege: read for any signed-in
+    // user, write for admins - the same pattern as financialAccounts above.
+    match /financialTransactions/{txId} {
+      allow read: if isSignedIn();
+      allow write: if isAdmin();
+    }
+
     // Production records (Production users & admins can read and log production)
     match /production/{productionId} {
       allow read: if isSignedIn();

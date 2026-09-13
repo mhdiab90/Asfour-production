@@ -78,6 +78,7 @@ import {
 import { buildHierarchyIndex, getNodePath, validateEquipmentLink } from '../../services/hierarchyResolverPure';
 import { validateAccountForSave } from '../../services/financialAccountService';
 import { FinancialAccountsImportModal } from './FinancialAccountsImportModal';
+import { FinancialTransactionsImportModal } from './FinancialTransactionsImportModal';
 import { useAuth } from '../../context/AuthContext';
 /*
  * The three-panel organisation. Selection state only - every label, collection
@@ -234,6 +235,8 @@ export const MasterDataView: React.FC<MasterDataViewProps> = ({ onNavigate }) =>
    */
   const [selectedCodes, setSelectedCodes] = useState<string[]>([]);
   const [isAccountsImportOpen, setIsAccountsImportOpen] = useState<boolean>(false);
+  /** The dedicated financial-transactions importer - also in place, never Historical Import. */
+  const [isTransactionsImportOpen, setIsTransactionsImportOpen] = useState<boolean>(false);
 
   /**
    * The hierarchy nodes available to link equipment to.
@@ -1222,6 +1225,19 @@ export const MasterDataView: React.FC<MasterDataViewProps> = ({ onNavigate }) =>
             >
               <UploadCloud className="w-3.5 h-3.5" />
               {language === 'ar' ? 'استيراد الحسابات المالية' : 'Import Financial Accounts'}
+            </button>
+          )}
+          {activeTab === 'financialAccounts' && (
+            <button
+              id="master-data-import-financial-transactions-btn"
+              type="button"
+              /* Actual spending by account and cost centre, for the Dashboard's financial values. */
+              onClick={() => setIsTransactionsImportOpen(true)}
+              className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl font-bold text-emerald-900 bg-emerald-50 border border-emerald-200 hover:bg-emerald-100 transition-colors cursor-pointer"
+              title={language === 'ar' ? 'استيراد المصروفات الفعلية حسب الحساب ومركز التكلفة' : 'Import actual spending by account and cost centre'}
+            >
+              <UploadCloud className="w-3.5 h-3.5" />
+              {language === 'ar' ? 'استيراد المعاملات المالية' : 'Import Financial Transactions'}
             </button>
           )}
           <button
@@ -2852,6 +2868,12 @@ export const MasterDataView: React.FC<MasterDataViewProps> = ({ onNavigate }) =>
           // clearing - it was made against the pre-import list.
           setSelectedCodes([]);
         }}
+      />
+
+      <FinancialTransactionsImportModal
+        isOpen={isTransactionsImportOpen}
+        onClose={() => setIsTransactionsImportOpen(false)}
+        canImport={canImportMasterData}
       />
 
       {/*

@@ -52,7 +52,25 @@ import { fetchMasterData } from '../../services/masterDataService';
  * registry, read off the entry forms rather than assumed. This is what stops
  * the equipment selector offering presses while a furnace stage is selected.
  */
-import { equipmentCategoriesForStage, stageRecordsEquipment } from '../../services/masterDataCategoryRegistry';
+/*
+ * The organisational dimension is the canonical cost-centre HIERARCHY, not the
+ * legacy press list. Scope resolution is the shared one Production Records and
+ * Reports use, so a Dashboard total means the same thing on every screen.
+ */
+import { CostCenterScopeSelector } from './CostCenterScopeSelector';
+import {
+  listCostCenterHierarchyNodes,
+  buildCostCenterHierarchyIndex,
+  CostCenterHierarchyRecord,
+} from '../../services/costCenterHierarchyService';
+import {
+  metricModeFromFlags,
+  metricFlags,
+  resolveCostCenterProductionScope,
+  resolveCostCenterCodeScope,
+} from '../../services/costCenterDashboardPure';
+import { aggregateFinancialValue, FinancialTransaction } from '../../services/financialTransactionsPure';
+import { listFinancialTransactions } from '../../services/financialTransactionService';
 import {
   ALL_STAGES,
   getStageDisplayName,
@@ -198,51 +216,63 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigate }) => {
   const [sortField, setSortField] = useState<RankingMetric>(DASHBOARD_DEFAULT_SORT_FIELD);
   const [sortDirection, setSortDirection] = useState<'best' | 'worst'>(DASHBOARD_DEFAULT_SORT_DIRECTION);
 
-  /**
-   * The equipment the CURRENT stage can actually be filtered by.
+  /*
+   * Organisational scope: the cost-centre hierarchy.
    *
-   * Driven entirely by the registry declaration and the already-loaded master
-   * data - no equipment name appears in this component, so a stage that starts
-   * recording equipment needs no change here. Each option carries the field it
-   * filters on, because a press and a furnace are different fields on the
-   * record.
+   * The equipment dropdown that used to live here listed legacy presses and
+   * furnaces - a flat list that no longer matches how the organisation is
+   * structured. The hierarchy replaces it as the organisational filter. The
+   * legacy equipment data is untouched; it is how a selected node reaches the
+   * production records beneath it.
    */
-  const equipmentOptions = useMemo(() => {
-    const byCategory: Record<string, Array<{ id?: string; code?: string; name?: string }>> = {
-      presses,
-      furnaces,
-    };
-    const groups: Array<{ categoryId: string; labelAr: string; labelEn: string; field: 'pressId' | 'furnaceId'; items: Array<{ id: string; label: string }> }> = [];
-    for (const category of equipmentCategoriesForStage(stageType)) {
-      const field = category.id === 'furnaces' ? 'furnaceId' : 'pressId';
-      const items = (byCategory[category.id] ?? [])
-        .map((e) => ({ id: String(e.id ?? ''), label: e.code || e.name || String(e.id ?? '') }))
-        .filter((e) => e.id);
-      if (items.length > 0) groups.push({ categoryId: category.id, labelAr: category.labelAr, labelEn: category.labelEn, field, items });
-    }
-    return groups;
-  }, [stageType, presses, furnaces]);
+  const [hierarchyNodes, setHierarchyNodes] = useState<CostCenterHierarchyRecord[]>([]);
+  const [costCenterNodeIds, setCostCenterNodeIds] = useState<string[]>([]);
 
-  const equipmentAvailable = stageRecordsEquipment(stageType);
+  /** Metric type. Two checkboxes; unticking both falls back to quantity. */
+  const [metricMode, setMetricMode] = useState<'QUANTITY' | 'FINANCIAL' | 'BOTH'>('QUANTITY');
+  const { quantity: showQuantity, financial: showFinancial } = metricFlags(metricMode);
 
-  /**
-   * A stage change must not leave the previous stage's equipment selected.
-   *
-   * Switching from pressing to a stage that records no equipment would
-   * otherwise keep filtering on a press id that stage's records never carry -
-   * silently returning nothing. Clearing back to "all equipment" is the
-   * deterministic, visible behaviour.
+  const [financialTransactions, setFinancialTransactions] = useState<FinancialTransaction[]>([]);
+  const [financialError, setFinancialError] = useState<string | null>(null);
+
+  useEffect(() => {
+    listCostCenterHierarchyNodes()
+      .then(setHierarchyNodes)
+      .catch(() => { /* an unavailable hierarchy only costs the cost-centre selector */ });
+  }, []);
+
+  /*
+   * Financial transactions are read only when money is actually being shown -
+   * a quantity-only Dashboard issues no financial read at all.
    */
   useEffect(() => {
-    const valid = new Set(equipmentOptions.flatMap((g) => g.items.map((i) => i.id)));
-    setEntityFilters((prev) => {
-      const pressOk = !prev.pressId || valid.has(prev.pressId);
-      const furnaceOk = !prev.furnaceId || valid.has(prev.furnaceId);
-      if (pressOk && furnaceOk) return prev;
-      return { ...prev, pressId: pressOk ? prev.pressId : undefined, furnaceId: furnaceOk ? prev.furnaceId : undefined };
-    });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [equipmentOptions]);
+    if (!showFinancial) return;
+    setFinancialError(null);
+    listFinancialTransactions()
+      .then(setFinancialTransactions)
+      .catch((err) => setFinancialError(String(err?.message ?? err)));
+  }, [showFinancial]);
+
+  /* The canonical hierarchy index - the same builder Master Data uses. */
+  const hierarchyIndex = useMemo(() => buildCostCenterHierarchyIndex(hierarchyNodes), [hierarchyNodes]);
+
+  /** Presses and furnaces carry the hierarchyNodeId that links a record to a node. */
+  const equipmentLinks = useMemo(
+    () => [...presses, ...furnaces].map((e) => ({ id: e.id, hierarchyNodeId: (e as any).hierarchyNodeId })),
+    [presses, furnaces],
+  );
+
+  /** For QUANTITY: the equipment beneath the selected nodes. null = no narrowing. */
+  const productionScope = useMemo(
+    () => resolveCostCenterProductionScope(costCenterNodeIds, hierarchyIndex, equipmentLinks),
+    [costCenterNodeIds, hierarchyIndex, equipmentLinks],
+  );
+
+  /** For FINANCIAL: the cost-centre codes beneath the selected nodes. */
+  const costCenterCodeScope = useMemo(
+    () => resolveCostCenterCodeScope(costCenterNodeIds, hierarchyIndex),
+    [costCenterNodeIds, hierarchyIndex],
+  );
 
   const setAssistantSelection = useSetAssistantSelection();
 
@@ -391,7 +421,25 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigate }) => {
     productId: entityFilters.productId,
   }), [resolvedDate, stageType, shiftId, entityFilters]);
 
-  const filteredRecords = useMemo(() => filterUniversalRecords(allRecords, filters), [allRecords, filters]);
+  const filteredRecords = useMemo(
+    () => filterUniversalRecords(allRecords, filters, productionScope),
+    [allRecords, filters, productionScope],
+  );
+
+  /*
+   * Financial value, from actual transactions only - never derived from
+   * quantities. It shares the date range and the cost-centre scope with the
+   * production figures, and nothing else: product, customer, shift and stage
+   * are production dimensions a transaction does not carry.
+   */
+  const financialTotal = useMemo(
+    () => aggregateFinancialValue(financialTransactions, {
+      costCenterCodes: costCenterCodeScope,
+      startDate: resolvedDate.startDate,
+      endDate: resolvedDate.endDate,
+    }),
+    [financialTransactions, costCenterCodeScope, resolvedDate],
+  );
 
   // All KPI ton math is delegated to reportingEngine.ts - this only sums the
   // already-computed per-stage rows it returns (§ "Do NOT put business
@@ -657,53 +705,41 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigate }) => {
           </select>
 
           {/*
-            Equipment filter - follows the selected stage.
-
-            It used to be a fixed press list, which meant choosing a furnace or
-            mill stage still offered presses: a filter that could only ever
-            return nothing. The options now come from what the stage actually
-            records, and a stage that records no equipment says so instead of
-            offering a list that cannot match.
-
-            The value encodes its own field ("pressId:abc"), because a press and
-            a furnace are different fields on the record.
+            Cost centres - the organisational filter, from the hierarchy.
+            Replaces the legacy press/furnace dropdown.
           */}
-          <select
-            id="dashboard-equipment-filter"
-            value={entityFilters.furnaceId ? `furnaceId:${entityFilters.furnaceId}` : entityFilters.pressId ? `pressId:${entityFilters.pressId}` : ''}
-            disabled={!equipmentAvailable || equipmentOptions.length === 0}
-            onChange={(e) => {
-              const raw = e.target.value;
-              if (!raw) { setEntityFilters((prev) => ({ ...prev, pressId: undefined, furnaceId: undefined })); return; }
-              const [field, id] = raw.split(':');
-              setEntityFilters((prev) => ({
-                ...prev,
-                pressId: field === 'pressId' ? id : undefined,
-                furnaceId: field === 'furnaceId' ? id : undefined,
-              }));
-            }}
-            className="bg-slate-800 text-slate-200 border border-slate-700 rounded px-2 py-1.5 text-xs font-bold disabled:opacity-50"
-            title={
-              equipmentAvailable
-                ? undefined
-                : (language === 'ar'
-                    ? 'سجلات هذه المرحلة لا تتضمن معدة، لذلك لا يمكن التصفية بالمعدات هنا.'
-                    : 'Records for this stage carry no equipment reference, so they cannot be filtered by equipment.')
-            }
-          >
-            <option value="">
-              {equipmentAvailable
-                ? (language === 'ar' ? 'كل المعدات' : 'All equipment')
-                : (language === 'ar' ? 'لا توجد معدات لهذه المرحلة' : 'No equipment for this stage')}
-            </option>
-            {equipmentOptions.map((group) => (
-              <optgroup key={group.categoryId} label={language === 'ar' ? group.labelAr : group.labelEn}>
-                {group.items.map((item) => (
-                  <option key={`${group.field}:${item.id}`} value={`${group.field}:${item.id}`}>{item.label}</option>
-                ))}
-              </optgroup>
-            ))}
-          </select>
+          <CostCenterScopeSelector
+            index={hierarchyIndex}
+            selectedNodeIds={costCenterNodeIds}
+            onChange={setCostCenterNodeIds}
+            language={language}
+            tone="dark"
+          />
+
+          {/*
+            Metric type. Quantity and money are separate measures and are never
+            added together - ticking both shows both, side by side.
+          */}
+          <div id="dashboard-metric-mode" className="flex items-center gap-2 bg-slate-800 border border-slate-700 rounded px-2 py-1 text-xs font-bold text-slate-200">
+            <label className="flex items-center gap-1 cursor-pointer">
+              <input
+                type="checkbox"
+                className="w-3.5 h-3.5 accent-amber-400 cursor-pointer"
+                checked={showQuantity}
+                onChange={() => setMetricMode(metricModeFromFlags(!showQuantity, showFinancial))}
+              />
+              {language === 'ar' ? 'الكميات' : 'Quantities'}
+            </label>
+            <label className="flex items-center gap-1 cursor-pointer">
+              <input
+                type="checkbox"
+                className="w-3.5 h-3.5 accent-amber-400 cursor-pointer"
+                checked={showFinancial}
+                onChange={() => setMetricMode(metricModeFromFlags(showQuantity, !showFinancial))}
+              />
+              {language === 'ar' ? 'القيم المالية' : 'Financial values'}
+            </label>
+          </div>
 
           {/* Employee filter */}
           <select
@@ -746,7 +782,36 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigate }) => {
         <p className="text-[11px] text-slate-500 font-mono">{filterSummary}</p>
       </div>
 
+      {/*
+        Financial value - a separate measure in its own card. It is never added
+        to, averaged with, or normalised against the production tonnage.
+      */}
+      {showFinancial && (
+        <div id="dashboard-financial-value" className="bg-white rounded-2xl border border-emerald-200 p-4 shadow-xs">
+          <p className="text-[11px] font-black text-emerald-800">
+            {language === 'ar' ? 'القيم المالية - المصروفات الفعلية' : 'Financial values - actual spending'}
+          </p>
+          {financialError ? (
+            <p className="text-xs font-bold text-rose-700 mt-1">
+              {language === 'ar'
+                ? `تعذر قراءة المعاملات المالية: ${financialError}`
+                : `Could not read financial transactions: ${financialError}`}
+            </p>
+          ) : (
+            <>
+              <p className="text-2xl font-black text-slate-900 mt-1">{formatNumber(financialTotal.total)}</p>
+              <p className="text-[11px] text-slate-500">
+                {language === 'ar'
+                  ? `عدد المعاملات: ${formatNumber(financialTotal.count)} — نطاق التاريخ ومراكز التكاليف نفسها`
+                  : `Transactions: ${formatNumber(financialTotal.count)} — same period and cost-centre scope`}
+              </p>
+            </>
+          )}
+        </div>
+      )}
+
       {/* 4-Column Geometric KPI Grid (Primary Factory Unit: TON) */}
+      {showQuantity && (
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
         {/* Total Production in Tons */}
         <StatCard
@@ -795,6 +860,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigate }) => {
           trend={totals.productionTons > 0 ? { value: language === 'ar' ? `${(totals.productionTons / Math.max(1, (totals.operationsCount * 8))).toFixed(2)} طن/ساعة عمل تقريبية` : `~${(totals.productionTons / Math.max(1, (totals.operationsCount * 8))).toFixed(2)} t/labor-hour`, isPositive: true } : undefined}
         />
       </div>
+      )}
 
       {/* Operational Shortcuts Bar */}
       <div className="bg-slate-900 p-4 border border-slate-800 shadow-md text-white flex flex-wrap items-center justify-between gap-3">
@@ -837,6 +903,8 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigate }) => {
         </div>
       </div>
 
+      {/* Quantity sections - hidden when only financial values are chosen. */}
+      {showQuantity && (<>
       {/* Main 3-Column Layout: Records Table (2 cols) + Right Side Gauges (1 col) */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         {/* Left 2 Columns: Recent Production Records Table */}
@@ -1034,6 +1102,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigate }) => {
           )}
         </div>
       </div>
+      </>)}
       </>
       )}
     </div>

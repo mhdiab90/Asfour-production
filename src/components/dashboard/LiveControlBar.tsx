@@ -18,6 +18,8 @@
  * intervals... do not create excessive Firestore reads").
  */
 import React, { useEffect, useState } from 'react';
+import { CostCenterScopeSelector } from './CostCenterScopeSelector';
+import { HierarchyIndex } from '../../services/hierarchyResolverPure';
 import { RotateCcw, RefreshCw, Circle, X } from 'lucide-react';
 import { Shift, Press, Product, Customer, Employee, ProductionStageType } from '../../types';
 import { GlobalDashboardFilters, TimeRangePreset, TIME_RANGE_LABELS, ALL_STAGES, getStageDisplayName, CrossFilterState } from '../../services/dashboardRegistry';
@@ -33,7 +35,10 @@ interface LiveControlBarProps {
   crossFilter: CrossFilterState | null;
   onClearCrossFilter: () => void;
   shifts: Shift[];
+  /** Kept for the chip label of a pressId set elsewhere (e.g. by the assistant); no longer a dropdown. */
   presses: Press[];
+  /** The cost-centre hierarchy, for the organisational selector. */
+  hierarchyIndex: HierarchyIndex<any>;
   products: Product[];
   customers: Customer[];
   employees: Employee[];
@@ -81,7 +86,7 @@ function timeAgo(date: Date, language: 'ar' | 'en'): string {
 
 export const LiveControlBar: React.FC<LiveControlBarProps> = ({
   dashboardName, globalFilters, onChangeFilters, onReset, onRefresh, lastUpdated, isRefreshing,
-  crossFilter, onClearCrossFilter, shifts, presses, products, customers, employees, language,
+  crossFilter, onClearCrossFilter, shifts, presses, products, customers, employees, language, hierarchyIndex,
 }) => {
   const [autoRefresh, setAutoRefresh] = useState(false);
   const [, forceTick] = useState(0);
@@ -220,10 +225,20 @@ export const LiveControlBar: React.FC<LiveControlBarProps> = ({
             <option value="">{t.employee}: {t.all}</option>
             {employees.slice(0, 200).map((e) => <option key={e.id} value={e.id}>{e.name}</option>)}
           </select>
-          <select value={globalFilters.pressId || ''} onChange={(e) => onChangeFilters({ pressId: e.target.value || undefined })} className="border border-slate-200 rounded px-2 py-1 text-xs font-semibold text-slate-700 shrink-0" title={t.press}>
-            <option value="">{t.press}: {t.all}</option>
-            {presses.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
-          </select>
+          {/*
+            Cost centres from the hierarchy - the same selector the classic
+            Dashboard uses. It replaces the flat legacy press list, which no
+            longer matches how the organisation is structured.
+          */}
+          <div className="shrink-0">
+            <CostCenterScopeSelector
+              index={hierarchyIndex}
+              selectedNodeIds={globalFilters.costCenterNodeIds ?? []}
+              onChange={(ids) => onChangeFilters({ costCenterNodeIds: ids.length > 0 ? ids : undefined })}
+              language={language}
+              tone="light"
+            />
+          </div>
           <select value={globalFilters.productId || ''} onChange={(e) => onChangeFilters({ productId: e.target.value || undefined })} className="border border-slate-200 rounded px-2 py-1 text-xs font-semibold text-slate-700 shrink-0" title={t.product}>
             <option value="">{t.product}: {t.all}</option>
             {products.slice(0, 200).map((p) => <option key={p.id} value={p.id}>{p.name || p.productName}</option>)}

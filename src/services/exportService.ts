@@ -157,7 +157,9 @@ export function exportDashboardToExcel(
   allRecords: UniversalStageRecord[],
   globalFilters: GlobalDashboardFilters,
   language: 'ar' | 'en',
-  fileName: string
+  fileName: string,
+  /** The cost-centre scope the Builder resolved, so the file matches the screen. null = no narrowing. */
+  hierarchyScope: Set<string> | null = null
 ) {
   const workbook = XLSX.utils.book_new();
   const summaryRows: Record<string, string | number>[] = [];
@@ -172,7 +174,7 @@ export function exportDashboardToExcel(
       const resolved = resolveWidgetFilters(w, globalFilters);
       const filtered = filterUniversalRecords(allRecords, {
         startDate: resolved.startDate, endDate: resolved.endDate, stageType: resolved.stageType, ...resolved.filters,
-      });
+      }, hierarchyScope);
       const metricDef = METRIC_REGISTRY[w.metric];
       summaryRows.push({
         [headers.section]: section.title,

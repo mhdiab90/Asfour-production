@@ -577,6 +577,15 @@ export interface GlobalDashboardFilters {
   pressId?: string;
   productId?: string;
   customerId?: string;
+  /**
+   * Selected cost-centre hierarchy nodes - the organisational dimension.
+   *
+   * Replaces the flat legacy press list as the Builder's organisational filter,
+   * and is the same field the classic Dashboard uses, so a saved dashboard and
+   * the classic screen mean the same thing by it. What a node covers is
+   * resolved by the shared resolver, never stored here.
+   */
+  costCenterNodeIds?: string[];
 }
 
 /**

@@ -37,7 +37,7 @@ const DEPLOYMENT_ID_INJECTED = typeof __BUILD_DEPLOYMENT_ID__ === 'string' ? __B
 
 export const CURRENT_APP_VERSION: AppVersionInfo = {
   /** Set by the automatic release planner from the classified change set - see releasePlannerPure.ts. */
-  version: '3.17.1',
+  version: '3.18.0',
   buildId: BUILD_ID_INJECTED,
   buildTimestamp: BUILD_TIMESTAMP_INJECTED,
   gitCommit: COMMIT_SHA_INJECTED,
@@ -46,6 +46,16 @@ export const CURRENT_APP_VERSION: AppVersionInfo = {
   environment: 'production',
   releaseDate: '2026-08-22',
   changelog: [
+    {
+      version: '3.18.0',
+      date: '2026-09-13',
+      highlights: [
+        'محدد مراكز التكاليف الهرمي موحد في لوحة التحكم ولوحة التحكم المخصصة بدل قائمة المكابس القديمة',
+        'نوع المقياس: الكميات والقيم المالية - تُعرض منفصلة ولا تُجمع معًا',
+        'استيراد مخصص للمعاملات المالية من البيانات الأساسية مع التحقق من كود الحساب ومركز التكلفة',
+        'أرقام لوحة التحكم تطابق التقارير لنفس نطاق مراكز التكاليف'
+      ]
+    },
     {
       version: '3.17.1',
       date: '2026-09-13',

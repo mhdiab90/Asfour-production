@@ -27,6 +27,8 @@ import {
 import { UniversalStageRecord, NavigationPage, Shift, Press, Product, Customer, Employee } from '../../types';
 import { fetchUniversalStageRecords } from '../../services/stageRecordService';
 import { fetchMasterData } from '../../services/masterDataService';
+import { listCostCenterHierarchyNodes, buildCostCenterHierarchyIndex, CostCenterHierarchyRecord } from '../../services/costCenterHierarchyService';
+import { resolveCostCenterProductionScope } from '../../services/costCenterDashboardPure';
 import { useLanguage } from '../../i18n/LanguageContext';
 import { useAuth } from '../../context/AuthContext';
 import { Modal } from '../common/Modal';
@@ -208,6 +210,13 @@ export const DashboardBuilderView: React.FC<DashboardBuilderViewProps> = ({ onNa
   // does; never re-fetched on every filter click.
   const [shifts, setShifts] = useState<Shift[]>([]);
   const [presses, setPresses] = useState<Press[]>([]);
+  /*
+   * The cost-centre hierarchy and the furnaces are what let a selected node
+   * reach the production records beneath it: records name a press or furnace,
+   * and those carry the hierarchyNodeId.
+   */
+  const [furnaces, setFurnaces] = useState<Array<{ id?: string; hierarchyNodeId?: string | null }>>([]);
+  const [hierarchyNodes, setHierarchyNodes] = useState<CostCenterHierarchyRecord[]>([]);
   const [products, setProducts] = useState<Product[]>([]);
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [employees, setEmployees] = useState<Employee[]>([]);
@@ -261,13 +270,33 @@ export const DashboardBuilderView: React.FC<DashboardBuilderViewProps> = ({ onNa
       fetchMasterData<Product>('products'),
       fetchMasterData<Customer>('customers'),
       fetchMasterData<Employee>('employees'),
-    ]).then(([s, p, pr, c, e]) => {
+      fetchMasterData<any>('furnaces').catch(() => []),
+      listCostCenterHierarchyNodes().catch(() => [] as CostCenterHierarchyRecord[]),
+    ]).then(([s, p, pr, c, e, f, h]) => {
       if (cancelled) return;
       setShifts(s); setPresses(p); setProducts(pr); setCustomers(c); setEmployees(e);
+      setFurnaces(f); setHierarchyNodes(h);
     }).catch((err) => console.error('Error fetching Live Control Bar lookups:', err));
     return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  /* The canonical hierarchy index - the same builder Master Data uses. */
+  const hierarchyIndex = useMemo(() => buildCostCenterHierarchyIndex(hierarchyNodes), [hierarchyNodes]);
+
+  /**
+   * The selected cost centres resolved to equipment, ONCE for the whole
+   * dashboard - not once per widget - through the same resolver the classic
+   * Dashboard and Reports use.
+   */
+  const hierarchyScope = useMemo(
+    () => resolveCostCenterProductionScope(
+      globalFilters.costCenterNodeIds ?? [],
+      hierarchyIndex,
+      [...presses, ...furnaces].map((e: any) => ({ id: e.id, hierarchyNodeId: e.hierarchyNodeId })),
+    ),
+    [globalFilters.costCenterNodeIds, hierarchyIndex, presses, furnaces],
+  );
 
   const refreshDashboardList = useCallback(() => {
     const list = listDashboards();
@@ -778,7 +807,7 @@ export const DashboardBuilderView: React.FC<DashboardBuilderViewProps> = ({ onNa
 
   const handleExportExcel = () => {
     if (!draft) return;
-    exportDashboardToExcel(draft, allRecords, globalFilters, language, `${draft.name.replace(/\s+/g, '_')}.xlsx`);
+    exportDashboardToExcel(draft, allRecords, globalFilters, language, `${draft.name.replace(/\s+/g, '_')}.xlsx`, hierarchyScope);
   };
 
   const handleCreateFromTemplate = (templateId: string) => {
@@ -809,6 +838,7 @@ export const DashboardBuilderView: React.FC<DashboardBuilderViewProps> = ({ onNa
         dashboard={draft}
         allRecords={allRecords}
         globalFilters={globalFilters}
+        hierarchyScope={hierarchyScope}
         language={language}
         generatedByName={adminUser?.fullName || adminUser?.username || ''}
         onClose={() => setShowPrintView(false)}
@@ -879,6 +909,7 @@ export const DashboardBuilderView: React.FC<DashboardBuilderViewProps> = ({ onNa
             onClearCrossFilter={handleClearCrossFilter}
             shifts={shifts}
             presses={presses}
+            hierarchyIndex={hierarchyIndex}
             products={products}
             customers={customers}
             employees={employees}
@@ -984,6 +1015,7 @@ export const DashboardBuilderView: React.FC<DashboardBuilderViewProps> = ({ onNa
                             config={widget}
                             allRecords={allRecords}
                             globalFilters={globalFilters}
+                            hierarchyScope={hierarchyScope}
                             language={language}
                             editable
                             crossFilter={crossFilter}
