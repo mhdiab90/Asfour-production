@@ -6,6 +6,8 @@
  *    aggregation - and that money is never mixed with quantity
  * C  consistency: a Dashboard selection and the same Reports selection keep
  *    exactly the same production records
+ * S  selector search by code/name with path context, and recursive tri-state
+ *    checkbox selection resolved against the full hierarchy
  * W  wiring, asserted by source inspection with comments stripped (the screens
  *    import Firebase, so they cannot run here)
  *
@@ -371,6 +373,231 @@ test('W8. the reconciliation utility is kept (unresolved conflicts remain)', () 
 test('W9. Master Data still has exactly the 7 categories', () => {
   assert.equal(panels.PANEL_CATEGORY_IDS.length, 7);
   assert.equal(panels.PANEL_CATEGORY_IDS.includes('financialTransactions'), false, 'transactions are not an eighth category');
+});
+
+// ==================================================
+// S. SELECTOR SEARCH + RECURSIVE CHECKBOX SELECTION
+// ==================================================
+
+/*
+ *   5  الأقسام الإنتاجية
+ *   └─ 513  المكابس  (Presses)
+ *      ├─ 5131  مكابس بوخر  (Bokher presses)
+ *      │   ├─ 51311  بوخر 1
+ *      │   ├─ 51312  بوخر 2
+ *      │   └─ 51313  بوخر 3
+ *      └─ 5132  مكابس لايس
+ *          ├─ 51321  لايس 1600
+ *          └─ 51322  لايس 2000
+ *   └─ 514  الأفران  └─ 5141  فرن 1
+ *   6  الأقسام الخدمية
+ *   └─ 61  الورشة
+ */
+const S_NODES = [
+  { sheet1Code: '5', parentSheet1Code: null, name: 'الأقسام الإنتاجية' },
+  { sheet1Code: '513', parentSheet1Code: '5', name: 'المكابس', nameEn: 'Presses' },
+  { sheet1Code: '5131', parentSheet1Code: '513', name: 'مكابس بوخر', nameEn: 'Bokher Presses' },
+  { sheet1Code: '51311', parentSheet1Code: '5131', name: 'بوخر 1' },
+  { sheet1Code: '51312', parentSheet1Code: '5131', name: 'بوخر 2' },
+  { sheet1Code: '51313', parentSheet1Code: '5131', name: 'بوخر 3' },
+  { sheet1Code: '5132', parentSheet1Code: '513', name: 'مكابس لايس' },
+  { sheet1Code: '51321', parentSheet1Code: '5132', name: 'لايس 1600' },
+  { sheet1Code: '51322', parentSheet1Code: '5132', name: 'لايس 2000' },
+  { sheet1Code: '514', parentSheet1Code: '5', name: 'الأفران' },
+  { sheet1Code: '5141', parentSheet1Code: '514', name: 'فرن 1' },
+  { sheet1Code: '6', parentSheet1Code: null, name: 'الأقسام الخدمية' },
+  { sheet1Code: '61', parentSheet1Code: '6', name: 'الورشة' },
+];
+const S_EQUIPMENT = [
+  { id: 'B1', hierarchyNodeId: '51311' },
+  { id: 'B2', hierarchyNodeId: '51312' },
+  { id: 'B3', hierarchyNodeId: '51313' },
+  { id: 'L1600', hierarchyNodeId: '51321' },
+  { id: 'L2000', hierarchyNodeId: '51322' },
+  { id: 'W1', hierarchyNodeId: '61' },
+];
+function sIndex() {
+  return hier.buildHierarchyIndex(
+    S_NODES.map((n) => ({ ...n, id: n.sheet1Code, code: n.sheet1Code, parentId: n.parentSheet1Code ?? null })),
+  );
+}
+const sorted = (xs: Iterable<string>) => [...xs].sort();
+const BOKHER_BRANCH = ['5131', '51311', '51312', '51313'];
+const PRESSES_BRANCH = ['513', '5131', '51311', '51312', '51313', '5132', '51321', '51322'];
+
+test('S1. search by exact code finds the node', () => {
+  const r = dash.searchCostCenterNodes(sIndex(), '5131');
+  assert.ok(r.matchedIds.has('5131'));
+  assert.equal(r.matchedIds.has('5132'), false);
+});
+
+test('S2. search by partial code finds every node containing it', () => {
+  assert.deepEqual(sorted(dash.searchCostCenterNodes(sIndex(), '513').matchedIds), PRESSES_BRANCH.slice().sort());
+  assert.deepEqual(sorted(dash.searchCostCenterNodes(sIndex(), '5132').matchedIds), ['5132', '51321', '51322']);
+});
+
+test('S3. search by Arabic name - including spelling variants and extra spaces', () => {
+  assert.deepEqual(sorted(dash.searchCostCenterNodes(sIndex(), 'مكابس').matchedIds), ['513', '5131', '5132']);
+  assert.deepEqual(sorted(dash.searchCostCenterNodes(sIndex(), 'بوخر').matchedIds), ['5131', '51311', '51312', '51313']);
+  assert.deepEqual(sorted(dash.searchCostCenterNodes(sIndex(), '  بوخر   1 ').matchedIds), ['51311']);
+  assert.deepEqual(sorted(dash.searchCostCenterNodes(sIndex(), 'بوخر1').matchedIds), ['51311'], 'missing space tolerated');
+  assert.deepEqual(sorted(dash.searchCostCenterNodes(sIndex(), 'الاقسام الانتاجيه').matchedIds), ['5'], 'alef / ta marbuta variants');
+});
+
+test('S4. search by English name, case-insensitive', () => {
+  assert.deepEqual(sorted(dash.searchCostCenterNodes(sIndex(), 'PRESSES').matchedIds), ['513', '5131']);
+  assert.deepEqual(sorted(dash.searchCostCenterNodes(sIndex(), 'bokher').matchedIds), ['5131']);
+});
+
+test('S5. a child match shows its full path; a parent match shows its branch', () => {
+  const child = dash.searchCostCenterNodes(sIndex(), 'بوخر 1');
+  assert.deepEqual(sorted(child.visibleIds), ['5', '513', '5131', '51311'], 'path context, nothing unrelated');
+  const parent = dash.searchCostCenterNodes(sIndex(), 'المكابس');
+  assert.deepEqual(sorted(parent.visibleIds), ['5', ...PRESSES_BRANCH].sort(), 'the matched parent shows its scope');
+  assert.equal(dash.searchCostCenterNodes(sIndex(), '   ').visibleIds, null, 'blank search shows everything');
+  assert.equal(dash.searchCostCenterNodes(sIndex(), 'zzz').matchedIds.size, 0);
+});
+
+test('S6. checking a parent selects it and ALL descendants', () => {
+  assert.deepEqual(sorted(dash.toggleCostCenterNode(sIndex(), [], '513')), PRESSES_BRANCH.slice().sort());
+  const scope = dash.resolveCostCenterProductionScope(dash.toggleCostCenterNode(sIndex(), [], '513'), sIndex(), S_EQUIPMENT);
+  assert.deepEqual(sorted(scope), ['B1', 'B2', 'B3', 'L1600', 'L2000']);
+});
+
+test('S7. checking a middle node selects it and its descendants only', () => {
+  const sel = dash.toggleCostCenterNode(sIndex(), [], '5131');
+  assert.deepEqual(sorted(sel), BOKHER_BRANCH);
+  assert.deepEqual(sorted(dash.resolveCostCenterProductionScope(sel, sIndex(), S_EQUIPMENT)), ['B1', 'B2', 'B3']);
+});
+
+test('S8. checking a leaf selects the leaf itself, and it IS the equipment scope', () => {
+  const sel = dash.toggleCostCenterNode(sIndex(), [], '51311');
+  assert.deepEqual(sel, ['51311']);
+  assert.deepEqual(sorted(dash.resolveCostCenterProductionScope(sel, sIndex(), S_EQUIPMENT)), ['B1']);
+  assert.equal(dash.costCenterCheckState(sIndex(), new Set(sel), '51311'), 'checked');
+});
+
+test('S9. unchecking a parent removes its branch and nothing from other branches', () => {
+  let sel = dash.toggleCostCenterNode(sIndex(), [], '513');
+  sel = dash.toggleCostCenterNode(sIndex(), sel, '61');
+  sel = dash.toggleCostCenterNode(sIndex(), sel, '513');
+  assert.deepEqual(sorted(sel), ['6', '61'].filter((id) => sel.includes(id)).sort());
+  assert.ok(sel.includes('61'), 'the other branch survives');
+  assert.equal(PRESSES_BRANCH.some((id) => sel.includes(id)), false);
+  // Unchecking one child of a checked parent un-ticks only that child and its ancestors.
+  let partial = dash.toggleCostCenterNode(sIndex(), [], '5131');
+  partial = dash.toggleCostCenterNode(sIndex(), partial, '51313');
+  assert.deepEqual(sorted(partial), ['51311', '51312']);
+});
+
+test('S10. a partly selected branch shows its parents as indeterminate', () => {
+  const eff = dash.effectiveCostCenterSelection(sIndex(), ['51311', '51312']);
+  assert.equal(dash.costCenterCheckState(sIndex(), eff, '5131'), 'indeterminate');
+  assert.equal(dash.costCenterCheckState(sIndex(), eff, '513'), 'indeterminate');
+  assert.equal(dash.costCenterCheckState(sIndex(), eff, '5'), 'indeterminate');
+  assert.equal(dash.costCenterCheckState(sIndex(), eff, '5132'), 'unchecked');
+  assert.equal(dash.costCenterCheckState(sIndex(), eff, '51313'), 'unchecked');
+});
+
+test('S11. selecting every child individually checks the parent (and upward while complete)', () => {
+  let sel: string[] = [];
+  for (const leaf of ['51311', '51312', '51313']) sel = dash.toggleCostCenterNode(sIndex(), sel, leaf);
+  assert.ok(sel.includes('5131'), 'parent auto-selected');
+  assert.equal(sel.includes('513'), false, '513 is not complete - لايس is unticked');
+  assert.equal(dash.costCenterCheckState(sIndex(), new Set(sel), '5131'), 'checked');
+  sel = dash.toggleCostCenterNode(sIndex(), sel, '5132');
+  assert.ok(sel.includes('513'), 'completing the last press branch completes المكابس');
+  assert.equal(sel.includes('5'), false, 'but not 5 - الأفران is still unticked');
+  sel = dash.toggleCostCenterNode(sIndex(), sel, '5141');
+  assert.ok(sel.includes('514') && sel.includes('5'), 'completion propagates upward only while every child is complete');
+});
+
+test('S12. searching after selecting does not change the selection', () => {
+  const sel = dash.toggleCostCenterNode(sIndex(), [], '513');
+  const before = sorted(sel);
+  dash.searchCostCenterNodes(sIndex(), 'بوخر 1');
+  assert.deepEqual(sorted(sel), before, 'search is a pure function of index + query');
+  const src = readCode(SEL);
+  assert.equal(/setQuery\([^)]*\)[\s\S]{0,40}onChange\(/.test(src), false);
+  assert.equal(/onChange\(\[\]\)[\s\S]{0,80}setQuery/.test(src), false, 'Clear (selection) and Clear search are separate');
+});
+
+test('S13. clearing the search restores the full tree and keeps the selection', () => {
+  assert.equal(dash.searchCostCenterNodes(sIndex(), '').visibleIds, null);
+  const src = readCode(SEL);
+  assert.ok(/id="cost-center-scope-search-clear"[\s\S]{0,80}onClick=\{\(\) => setQuery\(''\)\}/.test(src), 'clear search only resets the query');
+});
+
+test('S14. checking a parent while searching selects the FULL branch, not the visible subset', () => {
+  const idx = sIndex();
+  const search = dash.searchCostCenterNodes(idx, 'بوخر 1');
+  assert.ok(search.visibleIds.has('513') && !search.visibleIds.has('5132'), 'only the path is visible');
+  const sel = dash.toggleCostCenterNode(idx, [], '513');
+  assert.deepEqual(sorted(sel), PRESSES_BRANCH.slice().sort(), 'hidden لايس nodes are still selected');
+  const src = readCode(SEL);
+  assert.ok(/toggleCostCenterNode\(index, selectedNodeIds, id\)/.test(src), 'the component toggles against the full index');
+});
+
+test('S15. parent + child selected together: no duplicate ids or equipment', () => {
+  let sel = dash.toggleCostCenterNode(sIndex(), [], '51311');
+  sel = dash.toggleCostCenterNode(sIndex(), sel, '513');
+  assert.equal(new Set(sel).size, sel.length);
+  const all = dash.selectAllCostCenterNodes(sIndex(), sel, ['5', '6', '513']);
+  assert.equal(new Set(all).size, all.length);
+  const scope = dash.resolveCostCenterProductionScope(all, sIndex(), S_EQUIPMENT);
+  assert.deepEqual(sorted(scope), ['B1', 'B2', 'B3', 'L1600', 'L2000', 'W1']);
+});
+
+test('S16. Select All adds every target branch without dropping existing selections', () => {
+  const idx = sIndex();
+  const withRoots = dash.selectAllCostCenterNodes(idx, [], idx.rootIds);
+  assert.equal(withRoots.length, S_NODES.length);
+  const matched = [...dash.searchCostCenterNodes(idx, 'لايس').matchedIds];
+  const sel = dash.selectAllCostCenterNodes(idx, ['61'], matched);
+  assert.deepEqual(sorted(sel), ['5132', '51321', '51322', '61']);
+});
+
+test('S17. the production filter reads a materialised selection exactly like a parent-only one', () => {
+  const idx = sIndex();
+  for (const parent of ['5', '513', '5131', '51311']) {
+    const materialised = dash.toggleCostCenterNode(idx, [], parent);
+    assert.deepEqual(
+      sorted(dash.resolveCostCenterProductionScope(materialised, idx, S_EQUIPMENT)),
+      sorted(dash.resolveCostCenterProductionScope([parent], idx, S_EQUIPMENT)),
+    );
+    assert.deepEqual(sorted(dash.resolveCostCenterCodeScope(materialised, idx)), sorted(dash.resolveCostCenterCodeScope([parent], idx)));
+  }
+  // A selection stored as just a parent still shows every descendant ticked.
+  const eff = dash.effectiveCostCenterSelection(idx, ['513']);
+  assert.equal(dash.costCenterCheckState(idx, eff, '51322'), 'checked');
+});
+
+test('S18. the selector renders search, tri-state checkboxes and Select All', () => {
+  const src = readCode(SEL);
+  assert.ok(/id="cost-center-scope-search"/.test(src));
+  assert.ok(/id="cost-center-scope-select-all"/.test(src));
+  assert.ok(/el\.indeterminate = state === 'indeterminate'/.test(src));
+  assert.ok(/checked=\{state === 'checked'\}/.test(src));
+  assert.ok(/getChildIds\(index, id\)\.filter\(isVisible\)/.test(src), 'children come from the resolver, filtered for display only');
+  assert.equal(/key=\{i\}|key=\{index\}|\.indexOf\(/.test(src), false, 'no position-based identity');
+});
+
+test('S19. performance: no reads, writes or tree walks of its own while typing or ticking', () => {
+  const src = readCode(SEL);
+  assert.equal(/fetchMasterData|getDocs|onSnapshot|firebase|listCostCenter|await /.test(src), false, 'the selector issues no reads');
+  assert.equal(/setDoc|addDoc|updateDoc|writeBatch|createMasterDataItem|updateMasterDataItem/.test(src), false, 'and no writes');
+  const pure = readCode('src/services/costCenterDashboardPure.ts');
+  assert.equal(/firebase|getDocs|fetchMasterData/.test(pure), false);
+  assert.equal(/childrenByParent|while\s*\(queue|frontier/.test(pure), false, 'descendants only through the shared resolver');
+  assert.ok(/resolveHierarchySelection\(index, nodeId, \{ includeSelf: true \}\)/.test(pure));
+  assert.ok(/getAncestorIds\(index, id\)/.test(pure));
+  assert.ok(/normaliseLookupText/.test(pure), 'the existing Arabic normaliser, not a new one');
+});
+
+test('S20. Reports, AI and Production Records selectors were not touched', () => {
+  for (const rel of ['src/components/reports/ReportsView.tsx', 'src/assistant/tools/stageReportTools.ts', 'src/components/production/ProductionRecordsView.tsx']) {
+    assert.equal(/toggleCostCenterNode|searchCostCenterNodes|CostCenterScopeSelector/.test(readCode(rel)), false, rel);
+  }
 });
 
 (async () => {

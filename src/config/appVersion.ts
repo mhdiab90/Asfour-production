@@ -37,7 +37,7 @@ const DEPLOYMENT_ID_INJECTED = typeof __BUILD_DEPLOYMENT_ID__ === 'string' ? __B
 
 export const CURRENT_APP_VERSION: AppVersionInfo = {
   /** Set by the automatic release planner from the classified change set - see releasePlannerPure.ts. */
-  version: '3.18.0',
+  version: '3.19.0',
   buildId: BUILD_ID_INJECTED,
   buildTimestamp: BUILD_TIMESTAMP_INJECTED,
   gitCommit: COMMIT_SHA_INJECTED,
@@ -46,6 +46,16 @@ export const CURRENT_APP_VERSION: AppVersionInfo = {
   environment: 'production',
   releaseDate: '2026-08-22',
   changelog: [
+    {
+      version: '3.19.0',
+      date: '2026-09-13',
+      highlights: [
+        'بحث داخل محدد مراكز التكاليف بالكود أو الاسم مع إظهار المسار الهرمي',
+        'تحديد مركز رئيسي أو فرعي يحدد كل ما يقع تحته، وإلغاؤه يلغي فرعه فقط',
+        'حالة التحديد الجزئي للمراكز الرئيسية عند تحديد بعض الفروع',
+        'البحث لا يغير التحديد، والتحديد أثناء البحث يشمل الفرع كاملًا'
+      ]
+    },
     {
       version: '3.18.0',
       date: '2026-09-13',
