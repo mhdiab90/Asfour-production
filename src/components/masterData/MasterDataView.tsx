@@ -85,20 +85,14 @@ import { useAuth } from '../../context/AuthContext';
  * cost-centre rule is the existing one from the Sheet1 import, not a new one.
  */
 import {
-  EMPTY_PANEL_SELECTION,
   panelCategories,
-  toggleCategory,
-  selectAllCategories,
-  clearCategories,
-  setActiveCategory,
-  isCategorySelected,
-  isEmptyState,
   costCenterSubCategories,
   filterByCostCenterSubCategories,
   costCenterSubCategoryCounts,
   selectAllSubCategories,
   toggleSubCategory,
   COST_CENTER_CATEGORY_ID,
+  COST_CENTER_CODE_FIELD,
 } from '../../services/masterDataPanelsPure';
 /*
  * Equipment -> hierarchy linking.
@@ -250,10 +244,15 @@ export const MasterDataView: React.FC<MasterDataViewProps> = ({ onNavigate }) =>
    */
   const [hierarchyNodes, setHierarchyNodes] = useState<CostCenterHierarchyRecord[]>([]);
   const [isReconcileOpen, setIsReconcileOpen] = useState<boolean>(false);
-  /** Area 1 / Area 2: which categories are in play, and which one Area 3 shows. */
-  const [panelSelection, setPanelSelection] = useState(EMPTY_PANEL_SELECTION);
-  const [isCategoryMenuOpen, setIsCategoryMenuOpen] = useState<boolean>(false);
-  /** Cost-centre sub-categories. Empty = no narrowing, as everywhere else. */
+  /**
+   * The category being browsed.
+   *
+   * One selection, not two. The multi-select panel that used to sit above the
+   * category row repeated the very navigation underneath it, so choosing a
+   * category took two controls instead of one.
+   */
+  const [activeCategoryId, setActiveCategoryId] = useState<string>('products');
+  /** Cost-centre classifications. Empty = no narrowing, as everywhere else. */
   const [costCenterDigits, setCostCenterDigits] = useState<string[]>([]);
   const [isApplyingLinks, setIsApplyingLinks] = useState<boolean>(false);
   const [applyOutcome, setApplyOutcome] = useState<ApplyLinksOutcome | null>(null);
@@ -322,20 +321,25 @@ export const MasterDataView: React.FC<MasterDataViewProps> = ({ onNavigate }) =>
   };
 
   /*
-   * Area 3 follows the active category. `activeTab` stays the engine every
+   * The table follows the active category. `activeTab` stays the engine every
    * existing behaviour already depends on - the table, the Add/Edit modal, the
    * importers, export and the per-row actions - so none of them had to change.
    */
   useEffect(() => {
-    const category = areaCategories.find((c) => c.id === panelSelection.activeCategoryId);
+    const category = areaCategories.find((c) => c.id === activeCategoryId);
     if (category?.tab) setActiveTab(category.tab as MasterDataTab);
-  }, [panelSelection.activeCategoryId, areaCategories]);
+  }, [activeCategoryId, areaCategories]);
 
-  const isCostCenterActive = panelSelection.activeCategoryId === COST_CENTER_CATEGORY_ID;
+  const isCostCenterActive = activeCategoryId === COST_CENTER_CATEGORY_ID;
 
-  /** Counts per 5/6/7/8/9, computed from the rows already loaded - no extra read. */
+  /**
+   * Counts per 5/6/7/8/9, from the rows already loaded - no extra read.
+   *
+   * Keyed on the hierarchy's own code field, so the classification is read off
+   * the codes the Sheet1 import actually assigned.
+   */
   const costCenterCounts = useMemo(
-    () => (isCostCenterActive ? costCenterSubCategoryCounts(items, 'code') : null),
+    () => (isCostCenterActive ? costCenterSubCategoryCounts(items, COST_CENTER_CODE_FIELD) : null),
     [isCostCenterActive, items],
   );
 
@@ -685,7 +689,7 @@ export const MasterDataView: React.FC<MasterDataViewProps> = ({ onNavigate }) =>
    * the identity, so every other category behaves exactly as before.
    */
   const visibleItems = useMemo(
-    () => (isCostCenterActive ? filterByCostCenterSubCategories(filteredItems, costCenterDigits, 'code') : filteredItems),
+    () => (isCostCenterActive ? filterByCostCenterSubCategories(filteredItems, costCenterDigits, COST_CENTER_CODE_FIELD) : filteredItems),
     [isCostCenterActive, filteredItems, costCenterDigits],
   );
 
@@ -1168,43 +1172,24 @@ export const MasterDataView: React.FC<MasterDataViewProps> = ({ onNavigate }) =>
   return (
     <div className="space-y-6" dir={isRtl ? 'rtl' : 'ltr'}>
       {/*
-        CATEGORY FIRST.
-        The code TYPE is chosen before any code is shown, so unrelated groups
-        are never mixed in one list. The options come from the shared category
-        registry, which is also what drives the Production Review selector -
-        adding a future category is one registry entry, not a screen change.
+        What is being browsed, plus the actions for it.
+
+        This used to hold a THIRD category dropdown, on top of the row below and
+        the panel above it - and choosing cost centres from it opened the
+        hierarchy maintenance modal instead of showing the records, which is why
+        browsing cost centres never felt like browsing master data. Navigation
+        is the single row below; this is a heading.
       */}
       <div className="bg-white rounded-2xl p-4 border border-slate-200 shadow-xs flex flex-col lg:flex-row lg:items-end gap-3">
-        <div className="flex-1 min-w-[240px] max-w-md">
-          <label htmlFor="master-data-category-select" className="block text-[11px] font-black text-slate-500 mb-1">
-            {language === 'ar' ? 'نوع الأكواد (Code Type)' : 'Code Type / نوع الأكواد'}
-          </label>
-          <select
-            id="master-data-category-select"
-            value={currentCategory?.id || ''}
-            onChange={(e) => {
-              const category = getCategory(e.target.value);
-              if (!category) return;
-              setSelectedCodes([]);
-              setSearchQuery('');
-              setStatusFilter('all');
-              setPrefixFilter('all');
-              // The imported Sheet1 tree is served by its own reader, not by a
-              // MasterDataTab collection, so it opens its dedicated panel.
-              if (category.reader === 'costCenterHierarchy') {
-                setIsHierarchyPanelOpen(true);
-                return;
-              }
-              if (category.tab) setActiveTab(category.tab as MasterDataTab);
-            }}
-            className="w-full bg-slate-50 border border-slate-300 rounded-xl px-3.5 py-2.5 text-xs font-black text-slate-800 focus:outline-none focus:border-amber-500 focus:bg-white transition-colors cursor-pointer"
-          >
-            {MASTER_DATA_CATEGORIES.filter((c) => c.tab || c.reader).map((c) => (
-              <option key={c.id} value={c.id}>
-                {categoryLabel(c, 'ar')} / {categoryLabel(c, 'en')}
-              </option>
-            ))}
-          </select>
+        <div className="flex-1 min-w-[240px]">
+          <p className="block text-[11px] font-black text-slate-500 mb-1">
+            {language === 'ar' ? 'البيانات المعروضة' : 'Showing'}
+          </p>
+          <p id="master-data-active-category" className="text-sm font-black text-slate-900">
+            {currentCategory
+              ? (language === 'ar' ? currentCategory.labelAr : currentCategory.labelEn)
+              : (language === 'ar' ? 'غير محدد' : 'Unspecified')}
+          </p>
         </div>
 
         <div className="flex items-center gap-2 flex-wrap text-[11px] font-bold text-slate-600">
@@ -1253,121 +1238,38 @@ export const MasterDataView: React.FC<MasterDataViewProps> = ({ onNavigate }) =>
       </div>
 
       {/*
-        AREA 1 - Code Type.
+        The primary Master Data navigation - one control, not two.
 
-        A multi-select with checkboxes, replacing the single-choice chip strip.
-        The list is the registry's, so a category is added by editing the
-        registry rather than this component.
+        A multi-select panel used to sit above this row offering the very same
+        categories, so picking one took two steps and the screen showed the
+        choice twice. This row is the whole navigation now.
+
+        The list comes from the shared registry. Presses, furnaces, mills and
+        the legacy departments list are deliberately absent: those are the same
+        business entities the cost-centre hierarchy already represents, and
+        listing them again presented one machine as two master records. Their
+        data is untouched and still reached through the equipment link.
       */}
-      <div className="bg-white rounded-2xl p-3 border border-slate-200 shadow-xs">
-        <div className="flex items-center justify-between gap-3 flex-wrap">
-          <span className="text-xs font-black text-slate-700">{language === 'ar' ? 'نوع الأكواد' : 'Code Type'}</span>
-          <div className="flex items-center gap-2">
+      <div id="master-data-primary-categories" className="bg-white rounded-2xl p-2 border border-slate-200 shadow-xs flex items-center gap-1.5 overflow-x-auto">
+        {areaCategories.map((category) => {
+          const Icon = iconForCategory(category.id);
+          const isActive = activeCategoryId === category.id;
+          return (
             <button
+              key={category.id}
+              id={`master-data-category-${category.id}`}
               type="button"
-              onClick={() => setPanelSelection(selectAllCategories(panelSelection))}
-              className="px-2.5 py-1 text-[11px] font-bold text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-lg cursor-pointer"
+              onClick={() => { setActiveCategoryId(category.id); setCostCenterDigits([]); }}
+              className={`flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-bold transition-all shrink-0 cursor-pointer ${
+                isActive ? 'bg-amber-400 text-slate-950 shadow-xs' : 'text-slate-600 hover:text-slate-900 hover:bg-slate-50'
+              }`}
             >
-              {language === 'ar' ? 'تحديد الكل' : 'Select all'}
+              <Icon className={`w-4 h-4 ${isActive ? 'text-slate-950' : 'text-slate-500'}`} />
+              <span>{language === 'ar' ? category.labelAr : category.labelEn}</span>
             </button>
-            <button
-              type="button"
-              onClick={() => { setPanelSelection(clearCategories()); setCostCenterDigits([]); }}
-              disabled={panelSelection.selectedCategoryIds.length === 0}
-              className="px-2.5 py-1 text-[11px] font-bold text-slate-700 bg-slate-100 hover:bg-slate-200 disabled:opacity-50 rounded-lg cursor-pointer"
-            >
-              {language === 'ar' ? 'مسح' : 'Clear'}
-            </button>
-            <button
-              id="master-data-code-type-toggle"
-              type="button"
-              onClick={() => setIsCategoryMenuOpen((v) => !v)}
-              className="px-3 py-1.5 text-[11px] font-black text-slate-950 bg-amber-400 hover:bg-amber-500 rounded-lg cursor-pointer"
-            >
-              {isCategoryMenuOpen
-                ? (language === 'ar' ? 'إخفاء القائمة' : 'Hide list')
-                : (language === 'ar' ? `اختيار الفئات (${panelSelection.selectedCategoryIds.length})` : `Choose categories (${panelSelection.selectedCategoryIds.length})`)}
-            </button>
-          </div>
-        </div>
-
-        {/*
-          Kept open until dismissed, so several categories can be ticked in one
-          visit rather than reopening the menu for each.
-        */}
-        {isCategoryMenuOpen && (
-          <div id="master-data-code-type-menu" className="mt-2 pt-2 border-t border-slate-100 grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-x-4 gap-y-1.5">
-            {areaCategories.map((category) => (
-              <label key={category.id} className="flex items-center gap-2 text-xs font-semibold text-slate-700 cursor-pointer">
-                <input
-                  type="checkbox"
-                  className="w-4 h-4 accent-amber-500 cursor-pointer shrink-0"
-                  checked={isCategorySelected(panelSelection, category.id)}
-                  onChange={() => {
-                    setPanelSelection((prev) => toggleCategory(prev, category.id));
-                    if (category.id === COST_CENTER_CATEGORY_ID) setCostCenterDigits([]);
-                  }}
-                />
-                <span className="truncate">{language === 'ar' ? category.labelAr : category.labelEn}</span>
-              </label>
-            ))}
-          </div>
-        )}
+          );
+        })}
       </div>
-
-      {/*
-        AREA 2 - the selected categories, and only those.
-
-        Unticking one removes its button here; if it was the active one, focus
-        moves to another selected category so Area 3 never shows something that
-        is no longer on this row.
-      */}
-      <div id="master-data-selected-categories" className="bg-white rounded-2xl p-2 border border-slate-200 shadow-xs">
-        {panelSelection.selectedCategoryIds.length === 0 ? (
-          <p className="px-2 py-1.5 text-[11px] font-bold text-slate-400">
-            {language === 'ar' ? 'لم يتم اختيار أي فئة بعد.' : 'No category selected yet.'}
-          </p>
-        ) : (
-          <div className="flex items-center gap-1.5 overflow-x-auto">
-            {panelSelection.selectedCategoryIds.map((categoryId) => {
-              const Icon = iconForCategory(categoryId);
-              const isActive = panelSelection.activeCategoryId === categoryId;
-              return (
-                <button
-                  key={categoryId}
-                  type="button"
-                  onClick={() => setPanelSelection((prev) => setActiveCategory(prev, categoryId))}
-                  className={`flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-bold transition-all shrink-0 cursor-pointer ${
-                    isActive ? 'bg-amber-400 text-slate-950 shadow-xs' : 'text-slate-600 hover:text-slate-900 hover:bg-slate-50'
-                  }`}
-                >
-                  <Icon className={`w-4 h-4 ${isActive ? 'text-slate-950' : 'text-slate-500'}`} />
-                  <span>{labelForCategory(categoryId)}</span>
-                </button>
-              );
-            })}
-          </div>
-        )}
-      </div>
-
-      {/*
-        AREA 3 - the active category's data.
-
-        An explicit empty state rather than a stale table: with nothing selected
-        the rows below would otherwise still be whatever was last loaded.
-      */}
-      {isEmptyState(panelSelection) && (
-        <div id="master-data-empty-state" className="bg-white rounded-2xl p-10 border border-slate-200 shadow-xs text-center">
-          <p className="text-sm font-bold text-slate-700">
-            {language === 'ar' ? 'اختر نوع أكواد لعرض البيانات' : 'Choose a code type to see its data'}
-          </p>
-          <p className="text-xs text-slate-400 mt-1">
-            {language === 'ar'
-              ? 'يمكن اختيار أكثر من فئة، ثم التنقل بينها من شريط الفئات المختارة.'
-              : 'More than one category can be selected, then switched between from the selected-categories row.'}
-          </p>
-        </div>
-      )}
 
       {/*
         Cost-centre sub-categories.
@@ -1436,8 +1338,6 @@ export const MasterDataView: React.FC<MasterDataViewProps> = ({ onNavigate }) =>
         chosen - leaving them visible would show the previously loaded rows
         under a heading that no longer applies.
       */}
-      {!isEmptyState(panelSelection) && (
-      <>
       {/* Control Bar: Search, Filters, Add Button, Bulk Import Link, Excel Export */}
       <div className="bg-white rounded-2xl p-4 border border-slate-200 shadow-xs flex flex-col md:flex-row items-stretch md:items-center justify-between gap-3">
         {/* Search & Status Filter */}
@@ -2044,8 +1944,6 @@ export const MasterDataView: React.FC<MasterDataViewProps> = ({ onNavigate }) =>
           </div>
         )}
       </div>
-      </>
-      )}
 
       {/* Add / Edit Modal */}
       <Modal

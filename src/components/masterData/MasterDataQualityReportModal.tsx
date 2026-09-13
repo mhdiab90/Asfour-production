@@ -31,6 +31,7 @@ interface MasterDataQualityReportModalProps {
 
 const ENTITY_LABELS: Record<MasterDataTab, { ar: string; en: string }> = {
   products: { ar: 'الأصناف', en: 'Products' },
+  costCenterHierarchy: { ar: 'مراكز التكاليف', en: 'Cost Centers' },
   productTypes: { ar: 'تصنيفات المنتجات', en: 'Product Types' },
   employees: { ar: 'العمال والموظفون', en: 'Employees' },
   departments: { ar: 'الأقسام', en: 'Departments' },

@@ -53,6 +53,9 @@ export const MASTER_DATA_COLLECTIONS: Record<MasterDataTab, string> = {
   customers: 'customers',
   shifts: 'shifts',
   materials: 'materials',
+  // The imported hierarchy - registered so the SAME cache-first read and live
+  // subscription serve it, rather than it needing a bespoke reader in the UI.
+  costCenterHierarchy: 'costCenterHierarchy',
   machines: 'machines',
   stages: 'stages',
   // Its own collection - see financialAccountsPure.ts for why nothing existed

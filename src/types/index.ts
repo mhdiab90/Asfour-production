@@ -589,7 +589,14 @@ export type MasterDataTab =
   | 'materials'
   | 'machines'
   | 'stages'
-  | 'financialAccounts';
+  | 'financialAccounts'
+  /**
+   * The imported cost-centre hierarchy, now the user-facing Cost Centers
+   * source. It was previously readable only through its own panel, which is
+   * what let a legacy `departments` list and this tree compete as two separate
+   * "cost centres" in the same screen.
+   */
+  | 'costCenterHierarchy';
 
 export type NavigationPage = 
   | 'dashboard' 

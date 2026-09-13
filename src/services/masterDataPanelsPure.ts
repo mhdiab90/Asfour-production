@@ -1,10 +1,12 @@
 /**
- * Master Data three-panel organisation - the SELECTION STATE.
+ * Master Data navigation and the cost-centre sub-classification.
  *
- * Area 1 picks which top-level categories are in play, Area 2 shows exactly
- * those, and Area 3 shows the data of whichever one is active. This module owns
- * that state and the cost-centre sub-classification; it renders nothing and
- * fetches nothing.
+ * One navigation row, one active category, and - for cost centres - the
+ * 5/6/7/8/9 classification applied inline. The multi-select panel this file
+ * once backed was removed: it offered the same categories as the row beneath
+ * it, so a category had to be chosen twice.
+ *
+ * This module renders nothing and fetches nothing.
  *
  * THE COST-CENTRE RULE IS NOT INVENTED HERE.
  * The 5/6/7/8/9 classification already exists: `ROOT_CATEGORY_CODES` and
@@ -27,97 +29,57 @@ import { MasterDataCategory, getCategory } from './masterDataCategoryRegistry';
 export { ROOT_CATEGORY_CODES, ROOT_CATEGORY_LABELS };
 
 /**
- * The top-level categories Area 1 offers.
+ * The primary Master Data categories - the whole navigation, in order.
  *
- * Ids only - every label, collection, code field and tab comes from the shared
+ * Ids only; every label, collection, code field and tab comes from the shared
  * registry, so adding a category is a registry edit and not a change here.
+ *
+ * WHAT IS DELIBERATELY ABSENT, and why:
+ *
+ *   presses / furnaces / mills   These are production EQUIPMENT. Their current
+ *                                organisational representation lives inside the
+ *                                cost-centre hierarchy, and they remain fully
+ *                                available through the equipment -> hierarchyNodeId
+ *                                relationship that Production Records, Reports
+ *                                and the assistant already use. Listing them
+ *                                again here presented the same machines as a
+ *                                second, competing master source.
+ *
+ *   costCenters (departments)    The legacy flat list. The imported hierarchy
+ *                                below supersedes it as the user-facing source;
+ *                                the collection itself is untouched and still
+ *                                backs the employee department picker and every
+ *                                historical reference.
+ *
+ * Nothing is deleted by their absence - this is which source the screen shows,
+ * not which data exists.
  */
 export const PANEL_CATEGORY_IDS = [
   'products',
   'customers',
   'materials',
   'employees',
-  'financialAccounts',
   'shifts',
-  'costCenters',
+  'financialAccounts',
+  // The imported hierarchy IS the cost-centre master data now.
+  'hierarchicalCostCenters',
 ] as const;
 
 export type PanelCategoryId = (typeof PANEL_CATEGORY_IDS)[number];
 
-/** The category id whose records carry the 5/6/7/8/9 cost-centre classification. */
-export const COST_CENTER_CATEGORY_ID = 'costCenters';
+/**
+ * The category whose records carry the 5/6/7/8/9 classification.
+ *
+ * The hierarchy, not the legacy `departments` list: its codes are the ones the
+ * Sheet1 import classified, so the root rule applies to them directly.
+ */
+export const COST_CENTER_CATEGORY_ID = 'hierarchicalCostCenters';
+
+/** The field holding a cost-centre code on those records. */
+export const COST_CENTER_CODE_FIELD = 'sheet1Code';
 
 export function panelCategories(): MasterDataCategory[] {
   return PANEL_CATEGORY_IDS.map((id) => getCategory(id)).filter((c): c is MasterDataCategory => Boolean(c));
-}
-
-// --- Area 1 / Area 2 selection ----------------------------------------------
-
-export interface PanelSelection {
-  /** Ticked in Area 1, and therefore shown in Area 2. */
-  selectedCategoryIds: string[];
-  /** Whose data Area 3 shows. Null when nothing is selected. */
-  activeCategoryId: string | null;
-}
-
-export const EMPTY_PANEL_SELECTION: PanelSelection = { selectedCategoryIds: [], activeCategoryId: null };
-
-/**
- * Ticks or unticks one category.
- *
- * Two rules that keep the three areas consistent:
- *   - ticking the first category makes it active, so Area 3 is never blank while
- *     something is selected;
- *   - unticking the ACTIVE one moves focus to another selected category rather
- *     than leaving Area 3 showing a category that is no longer in Area 2.
- */
-export function toggleCategory(selection: PanelSelection, categoryId: string): PanelSelection {
-  const selected = new Set(selection.selectedCategoryIds);
-
-  if (selected.has(categoryId)) {
-    selected.delete(categoryId);
-    const remaining = PANEL_CATEGORY_IDS.filter((id) => selected.has(id));
-    const active =
-      selection.activeCategoryId === categoryId
-        ? remaining[0] ?? null // focus moves; never left pointing at a removed category
-        : selection.activeCategoryId;
-    return { selectedCategoryIds: remaining, activeCategoryId: active };
-  }
-
-  selected.add(categoryId);
-  const remaining = PANEL_CATEGORY_IDS.filter((id) => selected.has(id));
-  return {
-    selectedCategoryIds: remaining,
-    activeCategoryId: selection.activeCategoryId ?? categoryId,
-  };
-}
-
-/** Ticks every category. The first becomes active if none was. */
-export function selectAllCategories(selection: PanelSelection): PanelSelection {
-  return {
-    selectedCategoryIds: [...PANEL_CATEGORY_IDS],
-    activeCategoryId: selection.activeCategoryId ?? PANEL_CATEGORY_IDS[0],
-  };
-}
-
-/** Back to nothing selected - Area 2 empty, Area 3 showing its empty state. */
-export function clearCategories(): PanelSelection {
-  return EMPTY_PANEL_SELECTION;
-}
-
-/** Makes a category active. Refuses one that is not selected, so Area 3 can never diverge from Area 2. */
-export function setActiveCategory(selection: PanelSelection, categoryId: string): PanelSelection {
-  if (!selection.selectedCategoryIds.includes(categoryId)) return selection;
-  return { ...selection, activeCategoryId: categoryId };
-}
-
-export function isCategorySelected(selection: PanelSelection, categoryId: string): boolean {
-  return selection.selectedCategoryIds.includes(categoryId);
-}
-
-/** True when Area 3 should show its "choose a code type" state. */
-export function isEmptyState(selection: PanelSelection): boolean {
-  return selection.selectedCategoryIds.length === 0 || selection.activeCategoryId == null;
 }
 
 // --- Cost-centre sub-categories ----------------------------------------------

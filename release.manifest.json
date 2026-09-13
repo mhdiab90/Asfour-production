@@ -1,9 +1,9 @@
 {
   "_doc": "Release Manifest precursor. Describes WHAT is being released so the gate checks a committed declaration rather than whatever flags an operator typed. commitSha/buildId/deploymentId are left null until a release is cut - the gate fills the comparison from the build itself, and only enforces a field that is set here. This is NOT the Change Registry: no change IDs, no Firestore, no UI.",
-  "version": "3.17.0",
-  "releaseId": "REL-2026-0016",
+  "version": "3.17.1",
+  "releaseId": "REL-2026-0017",
   "changeIds": [
-    "UI-0021"
+    "UI-0022"
   ],
   "commitSha": null,
   "buildId": null,
@@ -29,7 +29,7 @@
     "production-records-hierarchy-path",
     "master-data-reconcile-btn",
     "reconcile-apply-btn",
-    "master-data-selected-categories",
+    "master-data-primary-categories",
     "cost-center-subcategories"
   ],
   "_markerNotes": {
@@ -53,7 +53,7 @@
     "production-records-hierarchy-path": "The Production Records drill-down breadcrumb - absent means the multi-level selector was dropped",
     "master-data-reconcile-btn": "The Reconcile Codes with Hierarchy entry point - absent means the reconciliation panel is unreachable again",
     "reconcile-apply-btn": "The Apply Safe Matches action - absent means the safe links can no longer be written",
-    "master-data-selected-categories": "Area 2 of the Master Data three-panel layout - absent means the category organisation was dropped",
+    "master-data-primary-categories": "The single Master Data category navigation - absent means the unified navigation was dropped",
     "cost-center-subcategories": "The cost-centre 5/6/7/8/9 sub-category controls - absent means the classification filter was dropped"
   },
   "tests": [
@@ -78,6 +78,7 @@
   "deployCommand": "firebase deploy --only hosting --project asfourproduction-70e6e",
   "treeClean": true,
   "_changeNotes": {
+    "UI-0022": "Master Data unification. The screen carried THREE category controls at once - a dropdown, a multi-select panel and a category row - and the dropdown opened the hierarchy maintenance modal when cost centres were chosen, so browsing cost-centre master data was not reachable at all. Two of the three are removed; one row is the whole navigation. Presses, furnaces, mills and the legacy departments list are no longer primary categories: they are the same business entities the imported hierarchy already represents, and listing them again showed one machine as two master records. Their collections are untouched and still reached through the equipment -> hierarchyNodeId link that Production Records, Reports and the assistant use. Cost Centers now serve the imported hierarchy itself, registered as a normal tab so the SAME cache-first read and live subscription serve it, with the 5/6/7/8/9 classifications inline on the same screen and never in a modal. The generic column-mapped importer is excluded from the hierarchy at the type level, since it has its own Sheet1 importer. No data deleted, no production record touched, no Firestore rule, schema or permission changed",
     "UI-0021": "Master Data three-panel organisation. Area 1 is a multi-select code-type picker with checkboxes over the seven registry categories; Area 2 shows exactly the selected ones and switches which is active; Area 3 shows only the active category's data, with an explicit empty state instead of a stale table. Unticking the active category moves focus rather than leaving Area 3 pointing at something no longer listed, and a category that is not selected can never become active. Cost Centres gain 5/6/7/8/9 sub-category filtering that REUSES the existing Sheet1 root-category rule (ROOT_CATEGORY_CODES/ROOT_CATEGORY_LABELS, root = the code's first character) rather than restating it - a code like 0501 is therefore reported as unclassified rather than forced into 5, since the leading zero is significant. The sub-filter is one more AND over the existing search, status and prefix filters. activeTab remains the engine, so the table, Add/Edit modal, importers, export, per-row actions, permissions and audit are untouched; the Cost Center Hierarchy browser and the reconciliation utility stay separate utilities, not categories",
     "MOD-0020": "Enable Apply Safe Matches. The panel action, disabled in 3.15.1 while the UI was being verified, now writes the validated plan through the applier service that has been in place and tested since 3.15.0. The button applies exactly `plannedLinks` - the plan the panel is displaying - so the confirmed count is the written count, and nothing is re-matched at write time: conflicts and no-counterpart rows never enter the plan, so they cannot be written. One field, hierarchyNodeId, on one legacy equipment record, through the audited updateMasterDataItem. Failures isolate with no rollback; a row already pointing at the planned node is skipped, so a second run writes nothing. After a successful apply the equipment list is re-read with skipCache so the panel recomputes and the applied rows stop showing as pending. No production document, Firestore rule, schema, permission, Report or AI code changed",
     "FIX-0019": "Make the reconciliation reachable. The panel shipped in 3.14/3.15 was an inline banner gated on being on an equipment tab AND having a non-zero matched or ambiguous count, so with the hierarchy not yet imported both counts were zero and it rendered on no tab at all - the feature existed in the bundle and nowhere on screen. It is now a dedicated Master Data utility, \"Reconcile Codes with Hierarchy\", beside the existing quality-report actions, opening a panel that always shows all four buckets including zeroes and an explicit no-data state. Reconciliation now spans presses, furnaces and mills together instead of only the open tab. Read-only by design for this step: the applier service is not imported by the screen at all and the Apply button is rendered disabled, so opening the panel cannot write. The Cost Center Hierarchy browser is a separate control and is untouched",
@@ -92,8 +93,8 @@
     "UI-0010": "Financial Accounts import opens a dedicated Master Data importer instead of the Historical Excel Import screen: the action no longer navigates to the bulk-entry route (which App.tsx renders as DataImportView); a new in-place modal reuses the existing financialAccounts schema, XLSX reader, row validation, duplicate detection and chunked commit, adds sheet selection and parent/cycle relationship checks, and keeps partial import so invalid rows never block valid ones",
     "DB-0009": "Category-first Master Data over an extensible registry; Financial Accounts master data with Excel import and hierarchical editing (new financialAccounts collection and its Firestore rule); one shared generic hierarchy resolver reused by Master Data, Production Review and production aggregation; hierarchical cost-centre editing with cycle, self-parent and unknown-parent protection"
   },
-  "previousVersion": "3.16.0",
-  "versionBump": "MINOR",
-  "classificationConfidence": "MEDIUM",
-  "previousReleaseId": "REL-2026-0015"
+  "previousVersion": "3.17.0",
+  "versionBump": "PATCH",
+  "classificationConfidence": "HIGH",
+  "previousReleaseId": "REL-2026-0016"
 }

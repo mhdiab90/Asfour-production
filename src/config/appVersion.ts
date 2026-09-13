@@ -37,7 +37,7 @@ const DEPLOYMENT_ID_INJECTED = typeof __BUILD_DEPLOYMENT_ID__ === 'string' ? __B
 
 export const CURRENT_APP_VERSION: AppVersionInfo = {
   /** Set by the automatic release planner from the classified change set - see releasePlannerPure.ts. */
-  version: '3.17.0',
+  version: '3.17.1',
   buildId: BUILD_ID_INJECTED,
   buildTimestamp: BUILD_TIMESTAMP_INJECTED,
   gitCommit: COMMIT_SHA_INJECTED,
@@ -46,6 +46,16 @@ export const CURRENT_APP_VERSION: AppVersionInfo = {
   environment: 'production',
   releaseDate: '2026-08-22',
   changelog: [
+    {
+      version: '3.17.1',
+      date: '2026-09-13',
+      highlights: [
+        'توحيد التنقل في البيانات الأساسية في شريط واحد بدل ثلاثة عناصر اختيار',
+        'مراكز التكاليف تعرض بيانات التسلسل الهرمي المستورد مباشرة، وتصنيفاتها داخل نفس الشاشة',
+        'اختيار مراكز التكاليف لم يعد يفتح نافذة الصيانة الهرمية',
+        'إزالة المكابس والأفران والطواحين والأقسام القديمة كفئات مكررة - بياناتها كما هي دون حذف'
+      ]
+    },
     {
       version: '3.17.0',
       date: '2026-09-12',

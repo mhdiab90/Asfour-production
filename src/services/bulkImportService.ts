@@ -26,7 +26,16 @@ export interface MasterDataSchemaField {
   aliases?: string[];
 }
 
-export const MASTER_DATA_SCHEMAS: Record<MasterDataTab, { title: string; fields: MasterDataSchemaField[] }> = {
+/**
+ * Schemas for the generic, column-mapped importer.
+ *
+ * `costCenterHierarchy` is deliberately excluded: the hierarchy is imported
+ * through its own dedicated Sheet1 panel, which understands the parent/child
+ * structure a flat column mapping cannot express. The registry says the same
+ * thing (`supportsImport: false`); excluding the key here makes it true at the
+ * type level too, so no caller can accidentally point this importer at it.
+ */
+export const MASTER_DATA_SCHEMAS: Record<Exclude<MasterDataTab, 'costCenterHierarchy'>, { title: string; fields: MasterDataSchemaField[] }> = {
   products: {
     title: 'المنتجات الحرارية (الاستيراد الذكي)',
     fields: [

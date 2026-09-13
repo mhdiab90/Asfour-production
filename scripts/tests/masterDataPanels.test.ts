@@ -52,88 +52,63 @@ async function bootstrap() {
 }
 
 const VIEW = 'src/components/masterData/MasterDataView.tsx';
-const EMPTY = () => panels.EMPTY_PANEL_SELECTION;
-
-/** Tick several categories in order. */
-function pick(...ids: string[]) {
-  let state = EMPTY();
-  for (const id of ids) state = panels.toggleCategory(state, id);
-  return state;
-}
 
 // ==================================================
-// A. AREA 1 / AREA 2 (§27 TEST 1-8)
+// A. UNIFIED PRIMARY NAVIGATION (§26 TEST 1-4)
+//
+// The multi-select panel is gone; one row is the whole navigation. These
+// assertions cover which categories it offers and, just as importantly, which
+// it must NOT - the duplicates that made one machine look like two master
+// records.
 // ==================================================
 
-test('A1. TEST 1 - the seven top-level categories all come from the registry', () => {
+test('A1. TEST 2 - the primary navigation is exactly the seven categories', () => {
   const ids = [...panels.PANEL_CATEGORY_IDS];
-  assert.deepEqual(ids.sort(), ['costCenters', 'customers', 'employees', 'financialAccounts', 'materials', 'products', 'shifts']);
-  // Every one resolves to a real registry entry with a label and a tab.
+  assert.deepEqual(
+    ids.sort(),
+    ['customers', 'employees', 'financialAccounts', 'hierarchicalCostCenters', 'materials', 'products', 'shifts'],
+  );
+  assert.equal(panels.panelCategories().length, 7);
+  // Every one resolves to a real registry entry with labels and a tab.
   for (const category of panels.panelCategories()) {
     assert.ok(category.labelAr && category.labelEn, `${category.id} must carry both labels`);
-    assert.ok(category.tab, `${category.id} must map to an existing tab`);
+    assert.ok(category.tab, `${category.id} must map to a tab the shared loader can serve`);
     assert.ok(reg.getCategory(category.id), `${category.id} must exist in the shared registry`);
   }
-  assert.equal(panels.panelCategories().length, 7);
 });
 
-test('A2. TEST 2 - selecting one category shows it in Area 2 and makes it active', () => {
-  const state = pick('products');
-  assert.deepEqual(state.selectedCategoryIds, ['products']);
-  assert.equal(state.activeCategoryId, 'products', 'the first selection becomes active');
-  assert.equal(panels.isEmptyState(state), false);
+test('A2. TEST 3 / CRITICAL 3 - the duplicate primary categories are gone', () => {
+  const ids = [...panels.PANEL_CATEGORY_IDS];
+  for (const removed of ['presses', 'furnaces', 'mills', 'costCenters', 'productTypes', 'furnaceCars']) {
+    assert.equal(ids.includes(removed), false, `${removed} must not be a primary category`);
+  }
+  // They still EXIST as data - this is a presentation change, not a deletion.
+  for (const kept of ['presses', 'furnaces', 'mills', 'costCenters']) {
+    assert.ok(reg.getCategory(kept), `${kept} must remain in the registry for internal use`);
+  }
 });
 
-test('A3. TEST 3 - selecting two shows both, and the first stays active', () => {
-  const state = pick('products', 'customers');
-  assert.deepEqual(state.selectedCategoryIds.sort(), ['customers', 'products']);
-  assert.equal(state.activeCategoryId, 'products', 'adding a second must not steal focus');
+test('A3. CRITICAL 4 - cost centres are served by the HIERARCHY, not the legacy list', () => {
+  assert.equal(panels.COST_CENTER_CATEGORY_ID, 'hierarchicalCostCenters');
+  const category = reg.getCategory(panels.COST_CENTER_CATEGORY_ID);
+  assert.equal(category.collection, 'costCenterHierarchy', 'the imported tree is the source');
+  assert.equal(category.codeField, 'sheet1Code');
+  assert.equal(panels.COST_CENTER_CODE_FIELD, 'sheet1Code');
+  // And the legacy flat list is still a distinct, untouched registry entry.
+  assert.equal(reg.getCategory('costCenters').collection, 'departments');
 });
 
-test('A4. TEST 4 - unticking removes it from Area 2, with nothing stale left', () => {
-  const state = panels.toggleCategory(pick('products', 'customers'), 'customers');
-  assert.deepEqual(state.selectedCategoryIds, ['products']);
-  assert.equal(state.selectedCategoryIds.includes('customers'), false);
+test('A4. TEST 1 - the removed multi-select leaves no selection API behind', () => {
+  for (const gone of ['toggleCategory', 'selectAllCategories', 'clearCategories', 'setActiveCategory', 'isCategorySelected', 'isEmptyState', 'EMPTY_PANEL_SELECTION']) {
+    assert.equal(typeof panels[gone], 'undefined', `${gone} must not survive as dead API`);
+  }
 });
 
-test('A5. §17 - unticking the ACTIVE category moves focus to another selected one', () => {
-  const state = panels.toggleCategory(pick('products', 'customers'), 'products');
-  assert.deepEqual(state.selectedCategoryIds, ['customers']);
-  assert.equal(state.activeCategoryId, 'customers', 'Area 3 must never point at a removed category');
-});
-
-test('A6. TEST 5/6 - clicking a category in Area 2 makes it active', () => {
-  const state = panels.setActiveCategory(pick('products', 'customers'), 'customers');
-  assert.equal(state.activeCategoryId, 'customers');
-  // And only ONE category is ever active, so Area 3 never merges datasets.
-  assert.equal(typeof state.activeCategoryId, 'string');
-});
-
-test('A7. §5 - a category that is not selected can never become active', () => {
-  const state = panels.setActiveCategory(pick('products'), 'shifts');
-  assert.equal(state.activeCategoryId, 'products', 'the request is refused');
-  assert.equal(state.selectedCategoryIds.includes('shifts'), false);
-});
-
-test('A8. TEST 7 - select-all shows all seven', () => {
-  const state = panels.selectAllCategories(EMPTY());
-  assert.equal(state.selectedCategoryIds.length, 7);
-  assert.ok(state.activeCategoryId, 'something becomes active');
-});
-
-test('A9. TEST 8 - clearing empties Area 2 and puts Area 3 in its empty state', () => {
-  const state = panels.clearCategories();
-  assert.deepEqual(state.selectedCategoryIds, []);
-  assert.equal(state.activeCategoryId, null);
-  assert.equal(panels.isEmptyState(state), true);
-  // Unticking the last one does the same.
-  assert.equal(panels.isEmptyState(panels.toggleCategory(pick('products'), 'products')), true);
-});
-
-test('A10. selection order is canonical, not click order, so Area 2 is stable', () => {
-  const a = pick('shifts', 'products');
-  const b = pick('products', 'shifts');
-  assert.deepEqual(a.selectedCategoryIds, b.selectedCategoryIds);
+test('A5. §15 - Financial Accounts stay a separate category from cost centres', () => {
+  assert.ok([...panels.PANEL_CATEGORY_IDS].includes('financialAccounts'));
+  assert.notEqual(panels.COST_CENTER_CATEGORY_ID, 'financialAccounts');
+  assert.equal(reg.getCategory('financialAccounts').collection, 'financialAccounts',
+    'their own collection, never merged into the hierarchy');
 });
 
 // ==================================================
@@ -142,17 +117,17 @@ test('A10. selection order is canonical, not click order, so Area 2 is stable', 
 
 /** Codes shaped like the real ones, including two the rule must NOT classify. */
 const COST_CENTERS = [
-  { id: 'a', code: '5001', name: 'إنتاج 1' },
-  { id: 'b', code: '5120', name: 'إنتاج 2' },
-  { id: 'c', code: '6120', name: 'خدمي' },
-  { id: 'd', code: '7340', name: 'تسويقي' },
-  { id: 'e', code: '8120', name: 'إداري' },
-  { id: 'f', code: '9020', name: 'رأسمالي' },
-  { id: 'g', code: '0501', name: 'كود يبدأ بصفر' },
-  { id: 'h', code: '1234', name: 'خارج النطاق' },
+  { id: 'a', sheet1Code: '5001', name: 'إنتاج 1' },
+  { id: 'b', sheet1Code: '5120', name: 'إنتاج 2' },
+  { id: 'c', sheet1Code: '6120', name: 'خدمي' },
+  { id: 'd', sheet1Code: '7340', name: 'تسويقي' },
+  { id: 'e', sheet1Code: '8120', name: 'إداري' },
+  { id: 'f', sheet1Code: '9020', name: 'رأسمالي' },
+  { id: 'g', sheet1Code: '0501', name: 'كود يبدأ بصفر' },
+  { id: 'h', sheet1Code: '1234', name: 'خارج النطاق' },
 ];
 const ids = (rows: any[]) => rows.map((r) => r.id).sort();
-const filt = (digits: string[]) => panels.filterByCostCenterSubCategories(COST_CENTERS, digits, 'code');
+const filt = (digits: string[]) => panels.filterByCostCenterSubCategories(COST_CENTERS, digits, panels.COST_CENTER_CODE_FIELD);
 
 test('B1. TEST 9 - the five sub-categories come from the EXISTING rule', () => {
   const subs = panels.costCenterSubCategories();
@@ -186,7 +161,7 @@ test('B5. TEST 17 / CRITICAL 7 - "0501" is NOT a 5; the leading zero is signific
   assert.equal(panels.costCenterRootDigit('0501'), null, 'a leading zero is never stripped to force a match');
   assert.equal(filt(['5']).some((r: any) => r.id === 'g'), false);
   // It is not silently dropped either - it is counted as unclassified.
-  const counts = panels.costCenterSubCategoryCounts(COST_CENTERS, 'code');
+  const counts = panels.costCenterSubCategoryCounts(COST_CENTERS, panels.COST_CENTER_CODE_FIELD);
   assert.equal(counts.unclassified, 2, '0501 and 1234');
   assert.equal(counts.total, COST_CENTERS.length);
 });
@@ -201,11 +176,11 @@ test('B6. §8 - the root is the first character, taken from a trimmed string cod
 });
 
 test('B7. §10/§11 - counts per digit, and an empty one is reported not hidden', () => {
-  const counts = panels.costCenterSubCategoryCounts(COST_CENTERS, 'code');
+  const counts = panels.costCenterSubCategoryCounts(COST_CENTERS, panels.COST_CENTER_CODE_FIELD);
   assert.equal(counts.byDigit['5'], 2);
   assert.equal(counts.byDigit['6'], 1);
   // A digit with no records still has an entry, so the classification stays visible.
-  const sparse = panels.costCenterSubCategoryCounts([{ code: '5001' }], 'code');
+  const sparse = panels.costCenterSubCategoryCounts([{ sheet1Code: '5001' }], panels.COST_CENTER_CODE_FIELD);
   for (const digit of ['5', '6', '7', '8', '9']) {
     assert.equal(typeof sparse.byDigit[digit], 'number', `${digit} must be present even at zero`);
   }
@@ -260,45 +235,45 @@ test('C3. CRITICAL 8 - cost centres are not equated with production equipment', 
 });
 
 // ==================================================
-// D. WIRING AND REGRESSION (§6, §24, §25, §26, §29)
+// D. WIRING AND REGRESSION (§24, §21, §30)
 // ==================================================
 
-test('D1. §20 - the three areas are rendered and identifiable', () => {
+test('D1. TEST 1/§2 - the redundant multi-select panel is gone from the screen', () => {
   const src = readCode(VIEW);
-  assert.ok(/id="master-data-code-type-menu"/.test(src), 'Area 1 - the checkbox menu');
-  assert.ok(/id="master-data-selected-categories"/.test(src), 'Area 2 - the selected categories');
-  assert.ok(/id="master-data-empty-state"/.test(src), 'Area 3 - the empty state');
-  assert.ok(/id="cost-center-subcategories"/.test(src), 'the cost-centre sub-category controls');
+  for (const gone of [
+    'master-data-code-type-menu',      // the checkbox panel
+    'master-data-selected-categories', // the second, derived row
+    'master-data-category-select',     // the older dropdown that opened the modal
+  ]) {
+    assert.equal(src.includes(gone), false, `${gone} must no longer be rendered`);
+  }
+  // Exactly one navigation control remains.
+  assert.ok(/id="master-data-primary-categories"/.test(src), 'the single primary row');
 });
 
-test('D2. §2/§3 - Area 1 is a checkbox multi-select driven by the registry', () => {
+test('D2. §24 - the primary row is built from the registry, not a literal list', () => {
   const src = readCode(VIEW);
-  assert.ok(/areaCategories\.map\(\(category\) =>/.test(src), 'the list comes from the registry');
-  /*
-   * The window is generous on purpose: between the input and its handler sit
-   * the className and the `checked` binding, and pinning a tight character
-   * count would make this assertion fail on formatting rather than on the
-   * behaviour it is meant to guard.
-   */
-  assert.ok(/type="checkbox"[\s\S]{0,400}toggleCategory\(prev, category\.id\)/.test(src),
-    'each category has a checkbox that toggles selection');
-  assert.ok(/checked=\{isCategorySelected\(panelSelection, category\.id\)\}/.test(src),
-    'and reflects the current selection');
+  assert.ok(/areaCategories\.map\(\(category\) =>/.test(src), 'it iterates the registry categories');
   assert.ok(/panelCategories\(\)/.test(src), 'via the shared helper');
-  // No hard-coded category list in the component.
+  assert.ok(/setActiveCategoryId\(category\.id\)/.test(src), 'clicking one makes it active');
   assert.equal(/'products',\s*'customers',\s*'materials'/.test(src), false, 'no literal category list');
 });
 
-test('D3. §4/§5 - Area 2 shows only selected categories and drives Area 3', () => {
+test('D3. TEST 18 / §21 / CRITICAL 11 - choosing Cost Centers does NOT open the hierarchy modal', () => {
   const src = readCode(VIEW);
-  assert.ok(/panelSelection\.selectedCategoryIds\.map\(\(categoryId\) =>/.test(src),
-    'Area 2 iterates the SELECTED ids, not every category');
-  assert.ok(/setActiveCategory\(prev, categoryId\)/.test(src), 'clicking makes it active');
-  assert.ok(/if \(category\?\.tab\) setActiveTab\(category\.tab as MasterDataTab\)/.test(src),
-    'and the active category drives the existing tab engine');
+  // The only opener left is the dedicated maintenance utility button.
+  const openers = src.split('setIsHierarchyPanelOpen(true)').length - 1;
+  assert.equal(openers, 1, `expected exactly one opener, found ${openers}`);
+  assert.ok(/id="master-data-cost-center-hierarchy-btn"[\s\S]{0,300}setIsHierarchyPanelOpen\(true\)/.test(src),
+    'and it is the utility button, not a category choice');
+  // No category handler may open it.
+  assert.equal(/setActiveCategoryId\([\s\S]{0,120}setIsHierarchyPanelOpen/.test(src), false,
+    'selecting a category must never open the modal');
+  assert.equal(/reader === .costCenterHierarchy.[\s\S]{0,120}setIsHierarchyPanelOpen/.test(src), false,
+    'the old reader-based redirect must be gone');
 });
 
-test('D4. §6 - Area 3 keeps every existing capability', () => {
+test('D4. §14 - the data area keeps every existing capability', () => {
   const src = readCode(VIEW);
   for (const kept of [
     'searchQuery', 'statusFilter', 'handleOpenEdit', 'handleExport',
@@ -308,23 +283,23 @@ test('D4. §6 - Area 3 keeps every existing capability', () => {
   }
 });
 
-test('D5. §9/§10 - the cost-centre filter composes with the existing filters', () => {
+test('D5. TEST 4/§9 - the cost-centre classifications are INLINE and compose with the filters', () => {
   const src = readCode(VIEW);
-  assert.ok(/filterByCostCenterSubCategories\(filteredItems, costCenterDigits, 'code'\)/.test(src),
+  assert.ok(/id="cost-center-subcategories"/.test(src), 'rendered inline on the same screen');
+  assert.ok(/filterByCostCenterSubCategories\(filteredItems, costCenterDigits, COST_CENTER_CODE_FIELD\)/.test(src),
     'it narrows the ALREADY filtered rows rather than replacing them');
-  assert.ok(/isCostCenterActive \? filterByCostCenterSubCategories/.test(src),
-    'and only when cost centres are active');
-  // Everything the table renders uses the sub-filtered list.
+  assert.ok(/isCostCenterActive \? filterByCostCenterSubCategories/.test(src), 'and only when cost centres are active');
   assert.ok(/visibleItems\.map\(\(item\) =>/.test(src), 'the table renders the sub-filtered rows');
 });
 
-test('D6. §17 - the table is hidden, not stale, when nothing is selected', () => {
+test('D6. §11 - the hierarchy path is shown for the hierarchical category', () => {
   const src = readCode(VIEW);
-  assert.ok(/\{!isEmptyState\(panelSelection\) && \(/.test(src), 'Area 3 content is guarded');
-  assert.ok(/isEmptyState\(panelSelection\) && \(/.test(src), 'and an empty state is shown instead');
+  assert.ok(/currentCategory\?\.hierarchical/.test(src), 'the category declares itself hierarchical');
+  assert.ok(/getNodePath\(/.test(src), 'and the path comes from the shared resolver');
+  assert.equal(reg.getCategory(panels.COST_CENTER_CATEGORY_ID).hierarchical, true);
 });
 
-test('D7. TEST 20/§24 - Financial Account import still opens its dedicated modal', () => {
+test('D7. TEST 21/§24 - Financial Account import still opens its dedicated modal', () => {
   const src = readCode(VIEW);
   assert.ok(/<FinancialAccountsImportModal/.test(src), 'the dedicated importer is still rendered');
   assert.ok(/setIsAccountsImportOpen\(true\)/.test(src), 'and still opened by the action');
@@ -332,27 +307,26 @@ test('D7. TEST 20/§24 - Financial Account import still opens its dedicated moda
     'it must never route to Historical Import');
 });
 
-test('D8. TEST 21/22 / §25/§26 - the two hierarchy utilities remain separate', () => {
+test('D8. TEST 16/17 / §22/§23 - both utilities remain, separate from browsing', () => {
   const src = readSource(VIEW);
-  assert.ok(src.includes('التسلسل الهرمي لمراكز التكلفة'), 'the Cost Center Hierarchy utility remains');
+  assert.ok(src.includes('التسلسل الهرمي لمراكز التكلفة'), 'the hierarchy maintenance utility remains');
   assert.ok(src.includes('مطابقة الأكواد مع التسلسل الهرمي'), 'the reconciliation utility remains');
   assert.ok(/id="master-data-reconcile-btn"/.test(src), 'reconciliation is still reachable');
   assert.ok(/<CostCenterHierarchyPanel/.test(src), 'the hierarchy panel is still rendered');
-  // Neither is inside the category list.
-  const code = readCode(VIEW);
-  const menuAt = code.indexOf('id="master-data-code-type-menu"');
-  const menuBlock = code.slice(menuAt, menuAt + 900);
-  assert.equal(/reconcile|CostCenterHierarchyPanel/.test(menuBlock), false,
-    'utilities must not appear as categories');
+  // Neither is a category.
+  const ids = [...panels.PANEL_CATEGORY_IDS];
+  assert.equal(ids.includes('reconciliation'), false);
 });
 
-test('D9. TEST 23-26 / §13 - the hierarchy, Production Records, Reports and AI are untouched', () => {
+test('D9. TEST 15 / §17-§20 - hierarchy, Production Records, Reports, AI and Dashboard untouched', () => {
   for (const rel of [
     'src/services/hierarchyResolverPure.ts',
     'src/services/hierarchySelectorPure.ts',
+    'src/services/legacyHierarchyReconciliationPure.ts',
     'src/components/production/ProductionRecordsView.tsx',
     'src/components/reports/ReportsView.tsx',
     'src/assistant/tools/stageReportTools.ts',
+    'src/components/dashboard/DashboardView.tsx',
   ]) {
     const src = readCode(rel);
     assert.equal(/masterDataPanelsPure|PANEL_CATEGORY_IDS|costCenterRootDigit/.test(src), false,
@@ -360,25 +334,40 @@ test('D9. TEST 23-26 / §13 - the hierarchy, Production Records, Reports and AI 
   }
 });
 
-test('D10. §15/§30/§31 - selection is UI state only: no writes, no extra reads', () => {
+test('D10. §5/CRITICAL 14-16 - no second registry, resolver or import system', () => {
   const src = readCode('src/services/masterDataPanelsPure.ts');
-  assert.equal(/getDocs|firebase|await |fetchMasterData|updateDoc|setDoc/.test(src), false,
-    'the selection module must stay pure and synchronous');
-  const view = readCode(VIEW);
-  // Ticking a category must not trigger a fetch.
-  assert.equal(/toggleCategory[\s\S]{0,160}fetchMasterData/.test(view), false,
-    'selecting a category must not read');
-  // Counts come from rows already loaded.
-  assert.ok(/costCenterSubCategoryCounts\(items, 'code'\)/.test(view),
-    'counts are computed from the loaded rows, not a new query');
+  assert.ok(/from '\.\/masterDataCategoryRegistry'/.test(src), 'labels/collections come from the registry');
+  assert.equal(/labelAr:\s*'/.test(src), false, 'no label duplicated');
+  assert.equal(/collection:\s*'/.test(src), false, 'no collection duplicated');
+  assert.equal(/getChildIds|descendant/i.test(src), false, 'no traversal of its own');
+  // The generic importer still refuses the hierarchy - it has its own Sheet1 panel.
+  const bulk = readCode('src/services/bulkImportService.ts');
+  assert.ok(/Exclude<MasterDataTab, 'costCenterHierarchy'>/.test(bulk),
+    'the hierarchy is excluded from the generic importer at the type level');
 });
 
-test('D11. §23 - no new permission was introduced', () => {
-  const src = readCode(VIEW) + readCode('src/services/masterDataPanelsPure.ts');
-  for (const invented of ['masterData.categories', 'panel.view', 'costCenter.view', 'masterData.panels']) {
-    assert.equal(src.includes(invented), false, `must not invent ${invented}`);
+test('D11. §31/§33 - no writes, no extra reads, no new permission', () => {
+  const src = readCode('src/services/masterDataPanelsPure.ts');
+  assert.equal(/getDocs|firebase|await |fetchMasterData|updateDoc|setDoc/.test(src), false,
+    'the module must stay pure and synchronous');
+  const view = readCode(VIEW);
+  assert.ok(/costCenterSubCategoryCounts\(items, COST_CENTER_CODE_FIELD\)/.test(view),
+    'counts are computed from the loaded rows, not a new query');
+  for (const invented of ['masterData.categories', 'costCenter.view', 'masterData.panels']) {
+    assert.equal(view.includes(invented), false, `must not invent ${invented}`);
   }
-  assert.ok(/canImportMasterData/.test(readCode(VIEW)), 'the existing permission gate remains');
+  assert.ok(/canImportMasterData/.test(view), 'the existing permission gate remains');
+});
+
+test('D12. §6/§13 - the hierarchy uses the SHARED loader; legacy data is untouched', () => {
+  const md = readCode('src/services/masterDataService.ts');
+  assert.ok(/costCenterHierarchy: 'costCenterHierarchy'/.test(md),
+    'registered so the shared cache-first read and subscription serve it');
+  // The legacy departments collection is still registered and still used.
+  assert.ok(/departments: 'departments'/.test(md), 'the legacy collection is not removed');
+  const view = readCode(VIEW);
+  assert.equal(/deleteMasterDataItem\([\s\S]{0,80}departments/.test(view), false,
+    'nothing deletes the legacy list');
 });
 
 (async () => {

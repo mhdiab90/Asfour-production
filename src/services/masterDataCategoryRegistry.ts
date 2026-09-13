@@ -325,8 +325,9 @@ export const MASTER_DATA_CATEGORIES: MasterDataCategory[] = [
     labelEn: 'Hierarchical Cost Centers',
     // Served by listCostCenterHierarchyNodes(), which itself goes through the
     // shared cache-first master-data read.
-    collection: null,
+    collection: 'costCenterHierarchy',
     reader: 'costCenterHierarchy',
+    tab: 'costCenterHierarchy',
     codeField: 'sheet1Code',
     displayFields: ['name', 'sheet1Code'],
     searchFields: ['sheet1Code', 'name', 'rootCategoryName'],
