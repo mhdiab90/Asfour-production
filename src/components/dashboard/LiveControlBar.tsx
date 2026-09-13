@@ -28,8 +28,8 @@ import React, { useEffect, useState } from 'react';
 import { CostCenterScopeSelector } from './CostCenterScopeSelector';
 import { HierarchyIndex } from '../../services/hierarchyResolverPure';
 import { RotateCcw, RefreshCw, Circle, X } from 'lucide-react';
-import { Shift, Press, Product, Customer, Employee, ProductionStageType } from '../../types';
-import { GlobalDashboardFilters, TimeRangePreset, TIME_RANGE_LABELS, ALL_STAGES, getStageDisplayName, CrossFilterState, resolveTimeRangePreset } from '../../services/dashboardRegistry';
+import { Shift, Press, Product, Customer, Employee } from '../../types';
+import { GlobalDashboardFilters, TimeRangePreset, TIME_RANGE_LABELS, CrossFilterState, resolveTimeRangePreset } from '../../services/dashboardRegistry';
 import { MetricModeToggle } from './DashboardMetricControls';
 import {
   DASHBOARD_FILTER_PANEL,
@@ -132,7 +132,6 @@ export const LiveControlBar: React.FC<LiveControlBarProps> = ({
     live: language === 'ar' ? 'مباشر' : 'Live',
     refreshingLabel: language === 'ar' ? 'جارٍ التحديث...' : 'Refreshing...',
     updated: (s: string) => language === 'ar' ? `تم التحديث ${s}` : `Updated ${s}`,
-    stage: language === 'ar' ? 'المرحلة' : 'Stage',
     shift: language === 'ar' ? 'الوردية' : 'Shift',
     employee: language === 'ar' ? 'الموظف' : 'Employee',
     press: language === 'ar' ? 'المكبس/المعدة' : 'Press/Equipment',
@@ -155,7 +154,6 @@ export const LiveControlBar: React.FC<LiveControlBarProps> = ({
     : presetLabel;
   const fullWidthSelect = `${DASHBOARD_FILTER_SELECT} w-full min-w-0`;
 
-  const stageLabel = globalFilters.stageType === 'all' ? t.all : getStageDisplayName(globalFilters.stageType, language);
   const shiftLabel = globalFilters.shiftId ? shifts.find((s) => s.id === globalFilters.shiftId)?.name : undefined;
   const employeeLabel = globalFilters.employeeId ? employees.find((e) => e.id === globalFilters.employeeId)?.name : undefined;
   const pressLabel = globalFilters.pressId ? presses.find((p) => p.id === globalFilters.pressId)?.name : undefined;
@@ -265,18 +263,13 @@ export const LiveControlBar: React.FC<LiveControlBarProps> = ({
         cramped and nothing scrolls sideways.
       */}
       <div id="custom-dashboard-filter-grid" className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2">
-        <select value={globalFilters.stageType} onChange={(e) => onChangeFilters({ stageType: e.target.value as ProductionStageType | 'all' })} className={fullWidthSelect} title={t.stage}>
-          <option value="all">{t.stage}: {t.all}</option>
-          {ALL_STAGES.map((s) => <option key={s} value={s}>{getStageDisplayName(s, language)}</option>)}
-        </select>
-        <select value={globalFilters.shiftId || ''} onChange={(e) => onChangeFilters({ shiftId: e.target.value || undefined })} className={fullWidthSelect} title={t.shift}>
-          <option value="">{t.shift}: {t.all}</option>
-          {shifts.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
-        </select>
         {/*
-          Cost centres from the hierarchy - the same selector the classic
-          Dashboard uses (search, 5/6/7/8/9 groups, recursive checkboxes).
-          It replaces the flat legacy press list.
+          Cost centres from the hierarchy - THE organisational filter, the same
+          selector the classic Dashboard uses (search, 5/6/7/8/9 groups,
+          recursive checkboxes). There is deliberately no dashboard-wide Stage
+          or press dropdown beside it: those showed the same organisational
+          dimension twice ("التشكيل والمكابس" next to "المكابس"). A widget's own
+          stage lives in its widget settings.
         */}
         <CostCenterScopeSelector
           index={hierarchyIndex}
@@ -286,6 +279,10 @@ export const LiveControlBar: React.FC<LiveControlBarProps> = ({
           tone="dark"
           block
         />
+        <select value={globalFilters.shiftId || ''} onChange={(e) => onChangeFilters({ shiftId: e.target.value || undefined })} className={fullWidthSelect} title={t.shift}>
+          <option value="">{t.shift}: {t.all}</option>
+          {shifts.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
+        </select>
         <select value={globalFilters.productId || ''} onChange={(e) => onChangeFilters({ productId: e.target.value || undefined })} className={fullWidthSelect} title={t.product}>
           <option value="">{t.product}: {t.all}</option>
           {products.slice(0, 200).map((p) => <option key={p.id} value={p.id}>{p.name || p.productName}</option>)}

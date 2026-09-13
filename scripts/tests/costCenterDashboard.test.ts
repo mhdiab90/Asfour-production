@@ -9,6 +9,8 @@
  * S  selector search by code/name with path context, and recursive tri-state
  *    checkbox selection resolved against the full hierarchy
  * P  Custom Dashboard visual parity with the classic Dashboard
+ * I  Custom Dashboard filter / content integration: one filter state, no
+ *    duplicate stage filter, widgets stay mounted through every change
  * W  wiring, asserted by source inspection with comments stripped (the screens
  *    import Firebase, so they cannot run here)
  *
@@ -668,8 +670,8 @@ test('P6. quantity, financial and both remain separate in the Custom Dashboard',
   assert.ok(/<MetricModeToggle[\s\S]{0,120}mode=\{globalFilters\.metricMode \?\? 'QUANTITY'\}[\s\S]{0,120}onChangeFilters\(\{ metricMode \}\)/.test(lcb));
   const bv = readCode(BVP);
   assert.ok(/metricFlags\(globalFilters\.metricMode \?\? 'QUANTITY'\)/.test(bv));
-  assert.ok(/\{showFinancial && <FinancialValueCard id="custom-dashboard-financial-value"/.test(bv), 'money in its own card');
-  assert.ok(/\{!showQuantity \? null : isLoading/.test(bv), 'quantity widgets hide only when quantities are unticked');
+  assert.ok(/<FinancialValueCard id="custom-dashboard-financial-value"/.test(bv), 'money in its own card');
+  assert.ok(/quantityHidden=\{!showQuantity\}/.test(bv), 'unticking quantities is a widget state, not an unmount');
   assert.ok(/metricMode\?: DashboardMetricMode;/.test(readCode('src/services/dashboardRegistry.ts')), 'one shared filter model, optional field');
 });
 
@@ -735,6 +737,97 @@ test('P11. no new reads or subscriptions were introduced for the layout', () => 
   }
   const shared = readCode('src/components/dashboard/DashboardMetricControls.tsx');
   assert.equal((shared.match(/listFinancialTransactions\(\)/g) || []).length, 1, 'one gated financial read, shared');
+});
+
+// ==================================================
+// I. CUSTOM DASHBOARD FILTER / CONTENT INTEGRATION
+// ==================================================
+
+const WRI = 'src/components/dashboard/WidgetRenderer.tsx';
+
+test('I1. the duplicate dashboard-wide stage filter is gone from the bar', () => {
+  const lcb = readCode(LCBP);
+  assert.equal(/globalFilters\.stageType/.test(lcb), false, 'the bar neither shows nor writes a stage');
+  assert.equal(/ALL_STAGES|getStageDisplayName/.test(lcb), false, 'no stage options are built');
+  assert.equal(/<select[^>]*stageType/.test(lcb), false);
+});
+
+test('I2. the cost-centre hierarchy stays the canonical organisational filter, first in the grid', () => {
+  const lcb = readCode(LCBP);
+  assert.ok(/id="custom-dashboard-filter-grid"[^>]*>\s*(?:\{\}\s*)?<CostCenterScopeSelector/.test(lcb), 'first cell');
+  assert.equal(/presses\.map\(\(p\) => <option/.test(lcb), false, 'no legacy press dropdown either');
+});
+
+test('I3. stage is normalised out of the dashboard filter state on every write', () => {
+  assert.deepEqual(dash.toRuntimeDashboardFilters({ timeRangePreset: 'LAST_30_DAYS', stageType: 'pressing', productId: 'p1' }),
+    { timeRangePreset: 'LAST_30_DAYS', stageType: 'all', productId: 'p1' }, 'a saved stage never survives');
+  const original = { timeRangePreset: 'THIS_MONTH', stageType: 'sorting', costCenterNodeIds: ['513'] };
+  const runtime = dash.toRuntimeDashboardFilters(original);
+  assert.equal(original.stageType, 'sorting', 'the input is not mutated');
+  assert.deepEqual(runtime.costCenterNodeIds, ['513'], 'every other dimension is kept');
+});
+
+test('I4. ONE filter state: every write in the Builder goes through the normalising setter', () => {
+  const bv = readCode(BVP);
+  assert.equal((bv.match(/useState<GlobalDashboardFilters>/g) || []).length, 1, 'exactly one filter state');
+  assert.ok(/setGlobalFiltersState\(\(prev\) => toRuntimeDashboardFilters\(typeof next === 'function' \? next\(prev\) : next\)\)/.test(bv));
+  assert.equal((bv.match(/setGlobalFiltersState\(/g) || []).length, 1, 'the raw setter is used only inside the normalising one');
+  assert.ok((bv.match(/setGlobalFilters\(/g) || []).length >= 8, 'bar, load, AI action, template, prefill, reset and designer all use it');
+  assert.ok(/defaultFilters: globalFilters/.test(bv), 'an explicit save-as-default stores the normalised state');
+});
+
+test('I5. the widget grid is never swapped out for a loading box', () => {
+  const bv = readCode(BVP);
+  assert.equal(/isLoading \? \(\s*<div className="p-16/.test(bv), false, 'the unmounting loading branch is gone');
+  assert.equal(/!showQuantity \? null/.test(bv), false, 'unticking quantities no longer drops the dashboard');
+  assert.ok(/<div id="custom-dashboard-sections" className="space-y-6" aria-busy=\{isLoading\}>/.test(bv), 'the sections container always renders');
+  assert.ok(/isLoading=\{isLoading\}\s*quantityHidden=\{!showQuantity\}/.test(bv), 'loading and metric mode reach each widget as state');
+});
+
+test('I6. widgets show loading, quantities-off and no-data states inside the card', () => {
+  const wr = readCode(WRI);
+  assert.ok(/data-widget-state=\{isLoading \? 'loading' : quantityHidden \? 'quantity-hidden' : 'ready'\}/.test(wr));
+  assert.ok(/\{isLoading \? \(/.test(wr) && /\) : quantityHidden \? \(/.test(wr));
+  assert.ok(/لا توجد بيانات لهذه الفترة \/ لهذا الاختيار\./.test(wr), 'widget-level empty state wording');
+});
+
+test('I7. every filter reaches every widget in every section through the same props', () => {
+  const bv = readCode(BVP);
+  const renderer = /<WidgetRenderer\s+config=\{widget\}\s+allRecords=\{allRecords\}\s+globalFilters=\{globalFilters\}\s+hierarchyScope=\{hierarchyScope\}/;
+  assert.ok(renderer.test(bv), 'the renderer is inside draft.sections.map - all sections, all widgets');
+  assert.ok(/draft\.sections\.map\(\(section, sIdx\) =>/.test(bv));
+  const wr = readCode(WRI);
+  assert.ok(/useMemo\(\(\) => resolveWidgetFilters\(config, globalFilters\), \[config, globalFilters\]\)/.test(wr), 'date / product / customer / shift / metric');
+  assert.ok(/\}, hierarchyScope\);\s*\}, \[allRecords, resolved, hierarchyScope\]\)/.test(wr), 'cost-centre scope is a dependency');
+  assert.equal(/key=\{[^}]*(?:globalFilters|timeRangePreset|dateKey|JSON\.stringify)/.test(bv), false, 'no filter-derived key forces a remount');
+});
+
+test('I8. the refetch stays keyed on the date bounds only - other filters cause no reads', () => {
+  const bv = readCode(BVP);
+  assert.ok(/\}, \[fetchRange\.startDate, fetchRange\.endDate\]\);/.test(bv));
+  assert.equal((bv.match(/fetchUniversalStageRecords\(/g) || []).length, 1, 'one shared fetch for all widgets');
+});
+
+test('I9. the financial value is a section of the same dashboard, not a separate area', () => {
+  const bv = readCode(BVP);
+  const sections = bv.indexOf('<div id="custom-dashboard-sections"');
+  const card = bv.indexOf('<FinancialValueCard id="custom-dashboard-financial-value"');
+  const firstWidgetSection = bv.indexOf('draft.sections.map((section, sIdx)');
+  assert.ok(sections >= 0 && card > sections && card < firstWidgetSection, 'inside the dashboard container');
+  assert.ok(/data-section-id="financial-values"/.test(bv));
+});
+
+test('I10. the assistant never reports a stage filter the dashboard does not apply', async () => {
+  const tools = readCode('src/assistant/tools/customDashboardTools.ts');
+  assert.equal(/patch\.stageType = input\.stageType/.test(tools), false, 'no stage patch is sent');
+  assert.ok(/const stageNotApplicable = !!input\.stageType && input\.stageType !== 'all';/.test(tools));
+  assert.ok(/if \(stageNotApplicable\) \{\s*return \{ success: false, errorCode: 'INVALID_REQUEST', messageAr: stageNoteAr/.test(tools), 'a stage-only request says where stage lives now');
+});
+
+test('I11. Reports and the classic Dashboard keep their own stage filter', () => {
+  assert.ok(/value=\{stageType\}/.test(readCode(DV)), 'classic Dashboard stage select unchanged');
+  assert.equal(/toRuntimeDashboardFilters/.test(readCode(DV)), false);
+  assert.equal(/toRuntimeDashboardFilters/.test(readCode('src/components/reports/ReportsView.tsx')), false);
 });
 
 (async () => {

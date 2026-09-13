@@ -291,3 +291,21 @@ export function selectAllCostCenterNodes<T extends HierarchyNodeInput>(
   for (const id of targetIds) promoteAncestors(index, effective, id);
   return [...effective];
 }
+
+// --- Dashboard-level filter dimensions ------------------------------------------
+
+/**
+ * The Custom Dashboard's runtime filters, normalised to the dimensions the
+ * dashboard actually offers.
+ *
+ * Production stage is no longer a dashboard-level filter there: the cost-centre
+ * hierarchy is the organisational filter, and a dashboard-wide "التشكيل
+ * والمكابس" beside "مراكز التكاليف" showed the same business dimension twice. A
+ * widget keeps its OWN stage (widget settings), which is a property of what the
+ * widget measures, not a filter. Every write to the dashboard filter state -
+ * the bar, a loaded or saved dashboard, the assistant, a template - passes
+ * through here, so an old saved stage can never linger as an invisible filter.
+ */
+export function toRuntimeDashboardFilters<T extends { stageType?: unknown }>(filters: T): T {
+  return { ...filters, stageType: 'all' };
+}

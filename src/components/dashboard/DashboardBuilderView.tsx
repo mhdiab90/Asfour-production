@@ -22,13 +22,13 @@ import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react'
 import {
   LayoutDashboard, Plus, Save, Trash2, Copy, Star, Pencil, X, Check,
   ChevronUp, ChevronDown, ChevronLeft, ChevronRight, Sparkles, Printer, FolderOpen,
-  FileSpreadsheet, FileDown, FilterX, Filter, GripVertical, LayoutTemplate, MoveRight, ArrowRightLeft,
+  FileSpreadsheet, FileDown, FilterX, Filter, GripVertical, LayoutTemplate, MoveRight, ArrowRightLeft, RefreshCw,
 } from 'lucide-react';
 import { UniversalStageRecord, NavigationPage, Shift, Press, Product, Customer, Employee } from '../../types';
 import { fetchUniversalStageRecords } from '../../services/stageRecordService';
 import { fetchMasterData } from '../../services/masterDataService';
 import { listCostCenterHierarchyNodes, buildCostCenterHierarchyIndex, CostCenterHierarchyRecord } from '../../services/costCenterHierarchyService';
-import { resolveCostCenterProductionScope, resolveCostCenterCodeScope, metricFlags } from '../../services/costCenterDashboardPure';
+import { resolveCostCenterProductionScope, resolveCostCenterCodeScope, metricFlags, toRuntimeDashboardFilters } from '../../services/costCenterDashboardPure';
 import { FinancialValueCard, useFinancialValue } from './DashboardMetricControls';
 import { useLanguage } from '../../i18n/LanguageContext';
 import { useAuth } from '../../context/AuthContext';
@@ -204,7 +204,23 @@ export const DashboardBuilderView: React.FC<DashboardBuilderViewProps> = ({ onNa
   const [selectedWidgetId, setSelectedWidgetId] = useState<string | null>(null);
   const setAssistantSelection = useSetAssistantSelection();
 
-  const [globalFilters, setGlobalFilters] = useState<GlobalDashboardFilters>({ ...BUILDER_DEFAULT_GLOBAL_FILTERS });
+  /*
+   * THE dashboard filter state - the only one. The filter bar writes it, every
+   * widget, the financial card, the print view and the export read it.
+   *
+   * Every write goes through setGlobalFilters below, which normalises the value
+   * to the dimensions this dashboard offers (toRuntimeDashboardFilters). That
+   * covers the bar, a loaded or template dashboard's saved defaults, the
+   * assistant's filter action and the AI designer alike, so a dimension the bar
+   * no longer shows can never survive as an invisible filter.
+   */
+  const [globalFilters, setGlobalFiltersState] = useState<GlobalDashboardFilters>({ ...BUILDER_DEFAULT_GLOBAL_FILTERS });
+  const setGlobalFilters = useCallback(
+    (next: GlobalDashboardFilters | ((prev: GlobalDashboardFilters) => GlobalDashboardFilters)) => {
+      setGlobalFiltersState((prev) => toRuntimeDashboardFilters(typeof next === 'function' ? next(prev) : next));
+    },
+    [],
+  );
 
   // Live Control Bar master-data lookups (Part 4 §16) - fetched ONCE, same
   // as the shift/press/product/customer lookups every entry form already
@@ -949,12 +965,32 @@ export const DashboardBuilderView: React.FC<DashboardBuilderViewProps> = ({ onNa
             language={language}
           />
 
-          {showFinancial && <FinancialValueCard id="custom-dashboard-financial-value" value={financialValue} language={language} />}
+          {/*
+            THE dashboard. Everything below the filter bar is this one tree and
+            it is never swapped out: a refetch after a date change used to
+            replace the whole widget grid with a loading box and rebuild it, and
+            unticking quantities used to drop it entirely. Now loading, "no data"
+            and "quantities not shown" are states INSIDE each widget, and the
+            financial value is a section of the same dashboard, not a separate
+            area above it.
+          */}
+          <div id="custom-dashboard-sections" className="space-y-6" aria-busy={isLoading}>
+              {isLoading && (
+                <div id="custom-dashboard-loading" className="flex items-center gap-2 bg-white border border-slate-200 shadow-xs px-4 py-2 text-xs font-bold text-indigo-600">
+                  <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                  {t.loading}
+                </div>
+              )}
 
-          {!showQuantity ? null : isLoading ? (
-            <div className="p-16 text-center text-xs text-slate-400 bg-white border border-slate-200 shadow-xs">{t.loading}</div>
-          ) : (
-            <div id="custom-dashboard-sections" className="space-y-6">
+              {showFinancial && (
+                <div className="space-y-3" data-section-id="financial-values">
+                  <div className="bg-white border border-slate-200 shadow-xs px-4 py-2.5">
+                    <h2 className="font-bold text-slate-700 text-sm">{language === 'ar' ? 'القيم المالية' : 'Financial values'}</h2>
+                  </div>
+                  <FinancialValueCard id="custom-dashboard-financial-value" value={financialValue} language={language} />
+                </div>
+              )}
+
               {draft.sections.map((section, sIdx) => (
                 <div
                   key={section.sectionId}
@@ -1062,6 +1098,8 @@ export const DashboardBuilderView: React.FC<DashboardBuilderViewProps> = ({ onNa
                             onEdit={() => setWidgetFormState({ sectionId: section.sectionId, widget })}
                             onDuplicate={() => handleDuplicateWidget(section.sectionId, widget)}
                             onRemove={() => handleRemoveWidget(section.sectionId, widget.widgetId)}
+                            isLoading={isLoading}
+                            quantityHidden={!showQuantity}
                           />
                         </div>
                       ))}
@@ -1073,8 +1111,7 @@ export const DashboardBuilderView: React.FC<DashboardBuilderViewProps> = ({ onNa
               <button type="button" onClick={handleAddSection} className="w-full py-3 border-2 border-dashed border-slate-200 hover:border-indigo-300 hover:bg-indigo-50/40 rounded text-xs font-bold text-slate-400 hover:text-indigo-600 cursor-pointer flex items-center justify-center gap-1.5">
                 <Plus className="w-4 h-4" />{t.addSection}
               </button>
-            </div>
-          )}
+          </div>
         </>
       )}
 

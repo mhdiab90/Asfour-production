@@ -224,11 +224,16 @@ const setCustomDashboardFilters: ToolDefinition = {
       partsAr.push(`الفترة: ${input.timeRangePreset}`);
       partsEn.push(`period: ${input.timeRangePreset}`);
     }
-    if (input.stageType) {
-      patch.stageType = input.stageType;
-      partsAr.push(`المرحلة: ${input.stageType}`);
-      partsEn.push(`stage: ${input.stageType}`);
-    }
+    /*
+     * Compatibility: production stage is no longer a dashboard-level filter on
+     * a custom dashboard - the cost-centre hierarchy is the organisational
+     * filter, and the dashboard normalises any stage back to all stages. So a
+     * stage request is never reported as applied; the assistant says where
+     * stage lives now instead of claiming a filter the screen does not show.
+     */
+    const stageNotApplicable = !!input.stageType && input.stageType !== 'all';
+    const stageNoteAr = 'المرحلة لم تعد فلترًا على مستوى اللوحة المخصصة - استخدم «مراكز التكاليف»، أو اضبط مرحلة العنصر نفسه من إعداداته.';
+    const stageNoteEn = 'Stage is no longer a dashboard-level filter on custom dashboards - use "Cost centres", or set the stage on the widget itself in its settings.';
     for (const field of ['shift', 'employee', 'press', 'product', 'customer'] as const) {
       if (input[field] === undefined) continue;
       const filterKey = ENTITY_FIELD_TO_FILTER_KEY[field];
@@ -253,6 +258,9 @@ const setCustomDashboardFilters: ToolDefinition = {
     }
 
     if (Object.keys(patch).length === 0) {
+      if (stageNotApplicable) {
+        return { success: false, errorCode: 'INVALID_REQUEST', messageAr: stageNoteAr, messageEn: stageNoteEn };
+      }
       return { success: false, errorCode: 'INVALID_REQUEST', messageAr: 'لم يتم تحديد أي فلتر لتطبيقه.', messageEn: 'No filter was specified to apply.' };
     }
 
@@ -260,8 +268,8 @@ const setCustomDashboardFilters: ToolDefinition = {
     return {
       success: true,
       data: { dashboardId: dash.dashboardId, patch },
-      messageAr: `تم تطبيق الفلاتر على لوحة ${dash.dashboardNumber}: ${partsAr.join('، ')}.`,
-      messageEn: `Applied filters to Dashboard ${dash.dashboardNumber}: ${partsEn.join(', ')}.`,
+      messageAr: `تم تطبيق الفلاتر على لوحة ${dash.dashboardNumber}: ${partsAr.join('، ')}.${stageNotApplicable ? ` ${stageNoteAr}` : ''}`,
+      messageEn: `Applied filters to Dashboard ${dash.dashboardNumber}: ${partsEn.join(', ')}.${stageNotApplicable ? ` ${stageNoteEn}` : ''}`,
     };
   },
 };

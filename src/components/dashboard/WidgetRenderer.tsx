@@ -16,7 +16,7 @@ import {
   PolarGrid, PolarAngleAxis, PolarRadiusAxis, XAxis, YAxis, Tooltip,
   CartesianGrid, Legend,
 } from 'recharts';
-import { GripVertical, Settings2, Copy, Trash2, Info, Search, FileBarChart2, Filter, X as XIcon } from 'lucide-react';
+import { GripVertical, Settings2, Copy, Trash2, Info, Search, FileBarChart2, Filter, X as XIcon, RefreshCw } from 'lucide-react';
 import { UniversalStageRecord } from '../../types';
 import { aggregateByDimension, filterUniversalRecords, getStageDisplayName, AggregatedReportRow } from '../../services/reportingEngine';
 import {
@@ -57,11 +57,24 @@ interface WidgetRendererProps {
    * Builder through the shared resolver. null = no cost-centre narrowing.
    */
   hierarchyScope?: Set<string> | null;
+  /**
+   * The dashboard's shared data is being (re)loaded. The card stays mounted and
+   * shows a loading state in its body - the dashboard never swaps the widget
+   * grid out for a loading box.
+   */
+  isLoading?: boolean;
+  /**
+   * The dashboard's metric type has quantities unticked. Every current widget
+   * metric is a production quantity, so the card stays in place and says so,
+   * rather than disappearing; money is shown in its own card, never here.
+   */
+  quantityHidden?: boolean;
 }
 
 export const WidgetRenderer: React.FC<WidgetRendererProps> = ({
   config, allRecords, globalFilters, language, onDrillDown, onEdit, onDuplicate, onRemove, editable, dragHandleProps,
   crossFilter, onCrossFilterRequest, onClearCrossFilter, onDrillThrough, hierarchyScope = null,
+  isLoading = false, quantityHidden = false,
 }) => {
   const resolved = useMemo(() => resolveWidgetFilters(config, globalFilters), [config, globalFilters]);
   const metricDef = METRIC_REGISTRY[config.metric];
@@ -188,11 +201,18 @@ export const WidgetRenderer: React.FC<WidgetRendererProps> = ({
         </div>
       </div>
 
-      <div className="flex-1 min-h-0">
-        {!stageSupported ? (
+      <div className="flex-1 min-h-0" data-widget-state={isLoading ? 'loading' : quantityHidden ? 'quantity-hidden' : 'ready'}>
+        {isLoading ? (
+          <div className="h-full flex flex-col items-center justify-center gap-2 text-[11px] font-bold text-indigo-500">
+            <RefreshCw className="w-4 h-4 animate-spin" />
+            {language === 'ar' ? 'جارٍ تحديث البيانات...' : 'Updating data...'}
+          </div>
+        ) : quantityHidden ? (
+          <EmptyState language={language} text={language === 'ar' ? 'هذا العنصر يعرض كميات الإنتاج - فعّل «الكميات» في نوع المقياس لعرضه. القيم المالية معروضة في قسمها المستقل.' : 'This widget shows production quantities - tick "Quantities" in the metric type to show it. Financial values are shown in their own section.'} />
+        ) : !stageSupported ? (
           <EmptyState language={language} text={language === 'ar' ? 'هذا المقياس غير متاح لهذه المرحلة الإنتاجية.' : 'This metric is not available for the selected production stage.'} />
         ) : rows.length === 0 || rows.every((r) => r.value === 0 && r.records.length === 0) ? (
-          <EmptyState language={language} text={language === 'ar' ? 'لا توجد بيانات كافية لعرض هذا العنصر.' : 'Not enough data to display this widget.'} />
+          <EmptyState language={language} text={language === 'ar' ? 'لا توجد بيانات لهذه الفترة / لهذا الاختيار.' : 'No data for this period / selection.'} />
         ) : config.widgetType === 'KPI_CARD' ? (
           <KpiBody rows={rows} unitSuffix={unitSuffix} secondaryValues={secondaryValues} language={language} onClick={() => rows[0] && handleElementClick(rows[0])} />
         ) : config.widgetType === 'TABLE' || config.chartType === 'TABLE' ? (

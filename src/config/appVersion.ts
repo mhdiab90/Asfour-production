@@ -37,7 +37,7 @@ const DEPLOYMENT_ID_INJECTED = typeof __BUILD_DEPLOYMENT_ID__ === 'string' ? __B
 
 export const CURRENT_APP_VERSION: AppVersionInfo = {
   /** Set by the automatic release planner from the classified change set - see releasePlannerPure.ts. */
-  version: '3.19.1',
+  version: '3.19.2',
   buildId: BUILD_ID_INJECTED,
   buildTimestamp: BUILD_TIMESTAMP_INJECTED,
   gitCommit: COMMIT_SHA_INJECTED,
@@ -46,6 +46,16 @@ export const CURRENT_APP_VERSION: AppVersionInfo = {
   environment: 'production',
   releaseDate: '2026-08-22',
   changelog: [
+    {
+      version: '3.19.2',
+      date: '2026-09-13',
+      highlights: [
+        'إزالة فلتر المرحلة المكرر من اللوحات المخصصة - مراكز التكاليف هي الفلتر التنظيمي',
+        'الفلاتر تتحكم مباشرة في عناصر اللوحة، والعناصر تبقى ظاهرة أثناء التحديث',
+        'حالة التحميل وعدم وجود بيانات تظهر داخل كل عنصر بدل اختفاء اللوحة',
+        'القيم المالية أصبحت قسمًا ضمن نفس اللوحة'
+      ]
+    },
     {
       version: '3.19.1',
       date: '2026-09-13',
