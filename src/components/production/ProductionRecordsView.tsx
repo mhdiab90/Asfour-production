@@ -1,9 +1,10 @@
 /**
  * Production Records Management View
- * Features comprehensive filtering (Date, Shift, Press, Product, Customer),
- * real-time aggregate KPI metrics, single record editing, deletion, and Excel export.
+ * Features comprehensive filtering (Date, Cost Centre, Shift, Product, Customer,
+ * Search), real-time aggregate KPI metrics, single record editing, single and
+ * bulk deletion of selected records, and Excel export.
  */
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { 
   FileText, 
   Search, 
@@ -29,49 +30,28 @@ import { ProductionRecord, Shift, Press, Furnace, Product, Customer, NavigationP
 import { subscribeProductionRecords, updateProductionRecord, deleteProductionRecord } from '../../services/productionService';
 import { fetchMasterData } from '../../services/masterDataService';
 /*
- * Category -> code filtering. Both modules are already in production: the
- * registry declares which record field each category maps to, and the engine
- * turns a selection into a filter. This screen reuses them rather than deciding
- * for itself what "Production Centers" means - which is how two screens end up
- * quietly disagreeing about a total.
+ * The organisational filter is the canonical cost-centre HIERARCHY, through the
+ * SAME selector component the Dashboard and the Custom Dashboard use (search,
+ * 5/6/7/8/9 groups, recursive checkboxes). What a ticked node covers is decided
+ * by the shared engine: node -> descendants -> linked equipment -> the records
+ * naming that equipment (pressId / furnaceId). This screen does not walk the
+ * tree and does not match equipment fields by hand.
+ *
+ * It replaces three controls that expressed the same dimension: a multi-level
+ * drill-down, a separate equipment checklist beneath it, and a Code Type ->
+ * Codes pair.
  */
-import {
-  MasterDataCategory,
-  legacyProductionCategories,
-  legacyCodeSourceCategories,
-  normaliseSelection,
-} from '../../services/masterDataCategoryRegistry';
+import { CostCenterScopeSelector } from '../dashboard/CostCenterScopeSelector';
+import { normaliseSelection } from '../../services/masterDataCategoryRegistry';
 import {
   asNodeSelection,
   filterLegacyProductionRecords,
 } from '../../services/productionFilterEnginePure';
-/*
- * The hierarchy nodes, read through the EXISTING cache-first reader. Selecting
- * a node resolves through the equipment link, so a production record is reached
- * as: record -> pressId/furnaceId -> equipment -> hierarchyNodeId -> ancestors.
- */
-import { listCostCenterHierarchyNodes, CostCenterHierarchyRecord } from '../../services/costCenterHierarchyService';
-import { buildHierarchyIndex, getNodePath, buildEquipmentByNode } from '../../services/hierarchyResolverPure';
-/*
- * Multi-level drill-down state. The selector owns WHAT the user picked; every
- * question about the tree is answered by the shared resolver, so there is still
- * exactly one traversal in the system.
- */
 import {
-  EMPTY_HIERARCHY_SELECTION,
-  levelOptions,
-  toggleAtLevel,
-  selectAllAtLevel,
-  clearLevel,
-  clearSelection,
-  effectiveLevel,
-  equipmentUnderSelection,
-  toggleEquipment,
-  selectAllEquipment,
-  deselectAllEquipment,
-  resolveSelectedEquipment,
-  selectionLabels,
-} from '../../services/hierarchySelectorPure';
+  listCostCenterHierarchyNodes,
+  buildCostCenterHierarchyIndex,
+  CostCenterHierarchyRecord,
+} from '../../services/costCenterHierarchyService';
 /*
  * Legacy code <-> hierarchy reconciliation, applied in memory.
  *
@@ -100,6 +80,23 @@ import {
   areAllVisibleSelected,
 } from '../../services/bulkEditPure';
 import { exportProductionRecordsToExcel } from '../../services/exportService';
+/*
+ * Bulk delete: the plan (selected ∩ visible) and the one-record-at-a-time loop.
+ * The delete itself is the existing deleteProductionRecord primitive, injected.
+ */
+import {
+  planBulkDelete,
+  executeBulkDelete,
+  BulkDeletePlan,
+  BulkDeleteOutcome,
+} from '../../services/productionRecordsBulkDeletePure';
+import { useAuth } from '../../context/AuthContext';
+import {
+  DASHBOARD_FILTER_PANEL,
+  DASHBOARD_FILTER_SELECT,
+  DASHBOARD_DATE_INPUT,
+  DASHBOARD_PANEL_BUTTON,
+} from '../dashboard/dashboardFilterStyles';
 import { Badge } from '../common/Badge';
 import { Modal } from '../common/Modal';
 import { formatNumber, formatDecimal } from '../../utils/formatters';
@@ -117,23 +114,15 @@ export const ProductionRecordsView: React.FC<ProductionRecordsViewProps> = ({ on
   const [presses, setPresses] = useState<Press[]>([]);
   const [furnaces, setFurnaces] = useState<Furnace[]>([]);
   const [hierarchyNodes, setHierarchyNodes] = useState<CostCenterHierarchyRecord[]>([]);
-  /** Where the user has drilled to, and what they ticked. Depth is whatever the data has. */
-  const [hierarchySelection, setHierarchySelection] = useState(EMPTY_HIERARCHY_SELECTION);
   const [products, setProducts] = useState<Product[]>([]);
   const [customers, setCustomers] = useState<Customer[]>([]);
 
   // Filter Values
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [filterShift, setFilterShift] = useState<string>('all');
-  /*
-   * Category -> code filter, replacing the press-only selector.
-   *
-   * ONE / MULTIPLE / ALL are not three separate controls: an empty code list IS
-   * ALL, exactly as normaliseSelection already defines it everywhere else. So
-   * ALL stays a mode and never materialises every code into an array.
-   */
-  const [filterCategoryId, setFilterCategoryId] = useState<string>('productionCenters');
-  const [filterCodes, setFilterCodes] = useState<string[]>([]);
+  /** Ticked cost-centre hierarchy nodes. Empty = every cost centre. */
+  const [costCenterNodeIds, setCostCenterNodeIds] = useState<string[]>([]);
+  const [filterCustomer, setFilterCustomer] = useState<string>('all');
   const [filterProduct, setFilterProduct] = useState<string>('all');
   const [startDate, setStartDate] = useState<string>('');
   const [endDate, setEndDate] = useState<string>('');
@@ -149,11 +138,24 @@ export const ProductionRecordsView: React.FC<ProductionRecordsViewProps> = ({ on
    * index, so sorting, refiltering and live snapshot refreshes cannot silently
    * move a selection onto a different record.
    *
-   * This is the selection FOUNDATION only. Nothing acts on it yet: there is no
-   * bulk action here, and deliberately no bulk delete - see the note above the
-   * selection toolbar.
+   * The only action that consumes it is Delete Selected, and only after an
+   * explicit confirmation - selecting a row never changes any data.
    */
   const [selection, setSelection] = useState(EMPTY_SELECTION_STATE);
+
+  /*
+   * Bulk delete, gated on the EXISTING production.delete permission - no new
+   * key. The plan is frozen when the confirmation opens, so the count the user
+   * confirms is exactly the batch that runs.
+   */
+  const { hasPermission } = useAuth();
+  const canDeleteRecords = hasPermission('production.delete');
+  const [bulkDeletePlan, setBulkDeletePlan] = useState<BulkDeletePlan | null>(null);
+  const [bulkDeleteProgress, setBulkDeleteProgress] = useState<{ done: number; total: number } | null>(null);
+  const [bulkDeleteOutcome, setBulkDeleteOutcome] = useState<BulkDeleteOutcome | null>(null);
+  /** The live snapshot, read at the moment of each delete - never a stale closure. */
+  const recordsRef = useRef<ProductionRecord[]>(records);
+  recordsRef.current = records;
   const [isUpdating, setIsUpdating] = useState<boolean>(false);
 
   useEffect(() => {
@@ -181,28 +183,8 @@ export const ProductionRecordsView: React.FC<ProductionRecordsViewProps> = ({ on
     return () => unsubscribe();
   }, []);
 
-  /** Which categories can actually filter THIS screen - declared on the registry, never hard-coded here. */
-  const codeCategories = useMemo<MasterDataCategory[]>(() => legacyProductionCategories(), []);
-
-  /** The loaded Master Data, keyed by the category that owns it. */
-  const masterDataByCategory = useMemo<Record<string, Array<{ id?: string; code?: string; name?: string }>>>(
-    () => ({ presses, furnaces, products, customers, shifts }),
-    [presses, furnaces, products, customers, shifts],
-  );
-
-  /** The node graph, built once through the shared resolver. */
-  const hierarchyIndex = useMemo(
-    () =>
-      buildHierarchyIndex(
-        hierarchyNodes.map((node) => ({
-          ...node,
-          id: node.id,
-          code: node.sheet1Code,
-          parentId: node.parentSheet1Code,
-        })),
-      ),
-    [hierarchyNodes],
-  );
+  /** The node graph - the canonical index the Dashboard selector uses (id = sheet1Code). */
+  const hierarchyIndex = useMemo(() => buildCostCenterHierarchyIndex(hierarchyNodes), [hierarchyNodes]);
 
   /*
    * The equipment whose links make hierarchy filtering work.
@@ -231,114 +213,20 @@ export const ProductionRecordsView: React.FC<ProductionRecordsViewProps> = ({ on
     return applyReconciliationToEquipment(raw, report).map((e) => ({ id: e.id, hierarchyNodeId: e.hierarchyNodeId }));
   }, [presses, furnaces, hierarchyNodes]);
 
-  /*
-   * The codes offered for the selected category.
-   *
-   * Read from the Master Data this screen already loaded, so a newly imported or
-   * edited code appears as soon as that cache refreshes - nothing about the list
-   * is hard-coded in this component, and no extra Firestore read is issued to
-   * build it. A category may draw on more than one collection (production
-   * centres are presses AND furnaces), which is why the sources come from the
-   * registry rather than from a switch here.
-   */
-  const availableCodes = useMemo(() => {
-    const out: Array<{ value: string; label: string; source: string }> = [];
-    const seen = new Set<string>();
-
-    /*
-     * Hierarchy nodes come FIRST for equipment categories, because selecting a
-     * node is what gives the aggregate meaning: choosing "Presses" includes
-     * every descendant node's linked equipment, so the user never has to pick
-     * the individual machines. Each option is labelled with its full path and
-     * carries the node's stable id, never its display text.
-     */
-    if (filterCategoryId === 'productionCenters' && hierarchyNodes.length > 0) {
-      for (const node of hierarchyNodes) {
-        const value = asNodeSelection(node.id);
-        if (seen.has(value)) continue;
-        seen.add(value);
-        const path = getNodePath(hierarchyIndex, node.id, (x: any) => x.name || x.sheet1Code, ' ← ');
-        out.push({
-          value,
-          label: `${path || node.name || node.sheet1Code}`,
-          source: 'hierarchy',
-        });
-      }
-    }
-
-    /*
-     * Then the equipment itself. Equipment already reachable through a node is
-     * still listed so it can be picked directly, and equipment with NO link is
-     * listed because a node selection can never reach it - that is the
-     * backward-compatible path for records that predate the hierarchy.
-     */
-    for (const source of legacyCodeSourceCategories(filterCategoryId)) {
-      for (const item of masterDataByCategory[source.id] ?? []) {
-        const value = String(item.id ?? '');
-        if (!value || seen.has(value)) continue;
-        seen.add(value);
-        const unlinked = filterCategoryId === 'productionCenters' && !(item as any).hierarchyNodeId;
-        out.push({
-          value,
-          label: unlinked ? `${item.name || item.code || value} — غير مرتبط` : (item.name || item.code || value),
-          source: source.labelAr,
-        });
-      }
-    }
-    return out;
-  }, [filterCategoryId, masterDataByCategory, hierarchyNodes, hierarchyIndex, equipmentLinks]);
-
-  /** node id -> equipment linked to it, built once. */
-  const equipmentByNode = useMemo(() => buildEquipmentByNode(equipmentLinks), [equipmentLinks]);
-
-  /** One entry per level to draw: roots, then the chosen node's children, and so on. */
-  const hierarchyLevels = useMemo(
-    () => levelOptions(hierarchyIndex, hierarchySelection),
-    [hierarchyIndex, hierarchySelection],
-  );
-
-  /** The equipment hanging below the branch currently drilled into. */
-  const branchEquipment = useMemo(
-    () => equipmentUnderSelection(hierarchyIndex, equipmentByNode, hierarchySelection),
-    [hierarchyIndex, equipmentByNode, hierarchySelection],
-  );
-
-  /** Readable labels for whatever is in play. From the data, never a constant. */
-  const hierarchyCrumbs = useMemo(
-    () => selectionLabels(hierarchyIndex, hierarchySelection, (x: any) => x.name || x.sheet1Code || x.id),
-    [hierarchyIndex, hierarchySelection],
-  );
-
   /**
-   * What the hierarchy drill-down actually filters on.
-   *
-   * null when nothing is drilled into, so the screen keeps its existing
-   * behaviour untouched. Otherwise: the whole branch, or exactly what was
-   * ticked - the shared rule, decided in one place.
+   * The cost-centre selection in the shared selection shape. Empty = ALL, which
+   * stays a mode and never materialises every node.
    */
-  const hierarchyEquipmentIds = useMemo(
-    () => resolveSelectedEquipment(hierarchyIndex, equipmentByNode, hierarchySelection),
-    [hierarchyIndex, equipmentByNode, hierarchySelection],
-  );
-
-  const equipmentNameById = useMemo(() => {
-    const map = new Map<string, string>();
-    for (const e of [...presses, ...furnaces]) {
-      if (e.id) map.set(String(e.id), e.name || e.code || String(e.id));
-    }
-    return map;
-  }, [presses, furnaces]);
-
-  /** Empty codes = ALL. One = ONE. Several = MULTIPLE. The shared semantics, unchanged. */
-  const codeSelection = useMemo(
-    () => normaliseSelection(filterCategoryId, filterCodes, filterCodes.length === 0),
-    [filterCategoryId, filterCodes],
+  const costCenterSelection = useMemo(
+    () => normaliseSelection('productionCenters', costCenterNodeIds.map(asNodeSelection), costCenterNodeIds.length === 0),
+    [costCenterNodeIds],
   );
 
   // Filter logic
   const filteredRecords = filterLegacyProductionRecords(records.filter((rec) => {
     if (filterShift !== 'all' && rec.shiftId !== filterShift) return false;
     if (filterProduct !== 'all' && rec.productId !== filterProduct) return false;
+    if (filterCustomer !== 'all' && rec.customerId !== filterCustomer) return false;
     if (startDate && rec.date < startDate) return false;
     if (endDate && rec.date > endDate) return false;
 
@@ -353,20 +241,7 @@ export const ProductionRecordsView: React.FC<ProductionRecordsViewProps> = ({ on
     }
 
     return true;
-  }).filter((rec) => {
-    /*
-     * The hierarchy drill-down, applied as one more AND beside date, shift,
-     * product and search. null means nothing was drilled into, so this is the
-     * identity case and the screen behaves exactly as before.
-     *
-     * Matches on the record's OWN equipment fields - a job belongs to the branch
-     * whether it names the press or the furnace - and each record is tested
-     * once, so it can never be emitted twice.
-     */
-    if (hierarchyEquipmentIds == null) return true;
-    const wanted = new Set(hierarchyEquipmentIds);
-    return [rec.pressId, rec.furnaceId].some((v) => v != null && wanted.has(String(v)));
-  }), codeSelection, { index: hierarchyIndex }, { equipment: equipmentLinks });
+  }), costCenterSelection, { index: hierarchyIndex }, { equipment: equipmentLinks });
 
   /*
    * The ids actually on screen right now.
@@ -469,6 +344,43 @@ export const ProductionRecordsView: React.FC<ProductionRecordsViewProps> = ({ on
     }
   };
 
+  /** Opens the confirmation with the exact batch: selected ∩ visible. Nothing is deleted here. */
+  const openBulkDelete = () => {
+    if (!canDeleteRecords) return;
+    const plan = planBulkDelete(selection.selectedIds, visibleIds);
+    if (plan.targetIds.length === 0) return;
+    setBulkDeleteOutcome(null);
+    setBulkDeletePlan(plan);
+  };
+
+  /**
+   * Runs the confirmed batch through the existing single-record primitive.
+   *
+   * Sequential, one call per record, failures isolated and nothing rolled back.
+   * A record that is no longer in the live snapshot when its turn comes is
+   * skipped as already removed. Succeeded rows leave the table through the live
+   * subscription and the selection pruning; failed rows stay listed and selected
+   * so they can be retried.
+   */
+  const handleConfirmBulkDelete = async () => {
+    const plan = bulkDeletePlan;
+    if (!canDeleteRecords || !plan || bulkDeleteProgress) return;
+    const labelById = new Map(
+      records.filter((r) => r.id).map((r) => [String(r.id), `${r.date} - ${r.productName} (${r.pressName})`]),
+    );
+    setBulkDeleteProgress({ done: 0, total: plan.targetIds.length });
+    const outcome = await executeBulkDelete(plan.targetIds, {
+      isStillPresent: (id) => recordsRef.current.some((r) => r.id === id),
+      deleteOne: (id) => deleteProductionRecord(id, labelById.get(id)),
+      onProgress: (done, total) => setBulkDeleteProgress({ done, total }),
+    });
+    setBulkDeleteProgress(null);
+    setBulkDeletePlan(null);
+    setBulkDeleteOutcome(outcome);
+  };
+
+  const bulkDeleteCount = planBulkDelete(selection.selectedIds, visibleIds).targetIds.length;
+
   const handleExport = () => {
     exportProductionRecordsToExcel(filteredRecords, `سجلات_إنتاج_عصفور_${new Date().toISOString().split('T')[0]}.xlsx`);
   };
@@ -476,8 +388,8 @@ export const ProductionRecordsView: React.FC<ProductionRecordsViewProps> = ({ on
   const clearFilters = () => {
     setSearchQuery('');
     setFilterShift('all');
-    setFilterCodes([]);
-    setHierarchySelection(clearSelection());
+    setCostCenterNodeIds([]);
+    setFilterCustomer('all');
     setFilterProduct('all');
     setStartDate('');
     setEndDate('');
@@ -485,304 +397,111 @@ export const ProductionRecordsView: React.FC<ProductionRecordsViewProps> = ({ on
 
   return (
     <div className="space-y-6">
-      {/* Top Filter & Control Panel */}
-      <div className="bg-white rounded-2xl p-5 border border-slate-200 shadow-xs space-y-4">
-        <div className="flex flex-col md:flex-row items-stretch md:items-center justify-between gap-3">
-          <div className="relative flex-1 max-w-md">
-            <div className="absolute inset-y-0 right-0 pr-3 flex items-center pointer-events-none text-slate-400">
-              <Search className="w-4 h-4" />
-            </div>
-            <input
-              id="records-search-input"
-              type="text"
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              placeholder="البحث بالمنتج، الكود، المكبس، العميل، أو العامل..."
-              className="w-full bg-slate-50 border border-slate-200 rounded-xl pr-9 pl-4 py-2 text-xs text-slate-800 placeholder:text-slate-400 focus:outline-none focus:border-amber-500 focus:bg-white transition-colors"
-            />
-          </div>
-
-          <div className="flex items-center gap-2">
-            <button
-              id="export-records-btn"
-              type="button"
-              onClick={handleExport}
-              disabled={filteredRecords.length === 0}
-              className="flex items-center gap-1.5 px-3.5 py-2 text-xs font-bold text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-xl transition-colors cursor-pointer disabled:opacity-50"
-            >
-              <Download className="w-3.5 h-3.5" />
-              <span>تصدير إلى Excel</span>
+      {/*
+        Production Records filters - ONE panel, in the Dashboard's filter-panel
+        style (shared dashboardFilterStyles tokens): period, the canonical
+        cost-centre hierarchy, shift, product, customer and search, then the
+        screen actions. The cost-centre selector opens inline; it never opens
+        hierarchy maintenance.
+      */}
+      <div id="production-records-filter-panel" className={DASHBOARD_FILTER_PANEL}>
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="text-xs font-black text-slate-200 flex items-center gap-1.5">
+            <Filter className="w-3.5 h-3.5 text-amber-400" />
+            فلاتر سجلات الإنتاج
+          </span>
+          <div className="flex-grow" />
+          {(searchQuery || filterShift !== 'all' || costCenterNodeIds.length > 0 || filterCustomer !== 'all' || filterProduct !== 'all' || startDate || endDate) && (
+            <button type="button" onClick={clearFilters} className={DASHBOARD_PANEL_BUTTON}>
+              <X className="w-3.5 h-3.5" />
+              <span>إعادة ضبط وتفريغ الفلاتر</span>
             </button>
-
-            <button
-              id="new-production-entry-btn"
-              type="button"
-              onClick={() => onNavigate('production-entry')}
-              className="flex items-center gap-1.5 px-4 py-2 text-xs font-extrabold text-slate-950 bg-amber-400 hover:bg-amber-500 rounded-xl shadow-xs transition-colors cursor-pointer"
-            >
-              <Plus className="w-4 h-4" />
-              <span>تسجيل إنتاج جديد</span>
-            </button>
-          </div>
+          )}
+          <button
+            id="export-records-btn"
+            type="button"
+            onClick={handleExport}
+            disabled={filteredRecords.length === 0}
+            className={`${DASHBOARD_PANEL_BUTTON} disabled:opacity-50`}
+          >
+            <Download className="w-3.5 h-3.5" />
+            <span>تصدير إلى Excel</span>
+          </button>
+          <button
+            id="new-production-entry-btn"
+            type="button"
+            onClick={() => onNavigate('production-entry')}
+            className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-extrabold text-slate-950 bg-amber-400 hover:bg-amber-500 rounded transition-colors cursor-pointer"
+          >
+            <Plus className="w-4 h-4" />
+            <span>تسجيل إنتاج جديد</span>
+          </button>
         </div>
 
-        {/* Dropdown Filters */}
-        <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-6 gap-2.5 pt-2 border-t border-slate-100 text-xs">
-          {/* Shift */}
+        <div id="production-records-filter-grid" className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2 text-xs">
+          <label className="block">
+            <span className="block text-[11px] font-bold text-slate-400 mb-1">من تاريخ</span>
+            <input type="date" value={startDate} max={endDate || undefined} onChange={(e) => setStartDate(e.target.value)} className={`${DASHBOARD_DATE_INPUT} border-slate-700 w-full py-1.5`} />
+          </label>
+          <label className="block">
+            <span className="block text-[11px] font-bold text-slate-400 mb-1">إلى تاريخ</span>
+            <input type="date" value={endDate} min={startDate || undefined} onChange={(e) => setEndDate(e.target.value)} className={`${DASHBOARD_DATE_INPUT} border-slate-700 w-full py-1.5`} />
+          </label>
           <div>
-            <label className="block text-[11px] font-bold text-slate-500 mb-1">الوردية</label>
-            <select
-              value={filterShift}
-              onChange={(e) => setFilterShift(e.target.value)}
-              className="w-full bg-slate-50 border border-slate-200 rounded-xl px-2.5 py-1.5 font-semibold text-slate-700"
-            >
+            <span className="block text-[11px] font-bold text-slate-400 mb-1">مراكز التكاليف</span>
+            <CostCenterScopeSelector
+              index={hierarchyIndex}
+              selectedNodeIds={costCenterNodeIds}
+              onChange={setCostCenterNodeIds}
+              language="ar"
+              tone="dark"
+              block
+            />
+          </div>
+          <label className="block">
+            <span className="block text-[11px] font-bold text-slate-400 mb-1">الوردية</span>
+            <select value={filterShift} onChange={(e) => setFilterShift(e.target.value)} className={`${DASHBOARD_FILTER_SELECT} w-full`}>
               <option value="all">كل الورديات</option>
               {shifts.map(s => (
                 <option key={s.id} value={s.id}>{s.name}</option>
               ))}
             </select>
-          </div>
-
-          {/*
-            Multi-level production-centre drill-down.
-
-            Level 1 is the hierarchy's real roots; every later level is exactly
-            the chosen node's children. Levels are drawn from the data, so the
-            depth is whatever the hierarchy has and no centre name appears here.
-
-            Stopping at any level means the whole branch below it; ticking
-            equipment narrows to exactly what is ticked.
-          */}
-          {hierarchyLevels.length > 0 && hierarchyIndex.size > 0 && (
-            <div className="col-span-2 sm:col-span-3 md:col-span-6 border-t border-slate-100 pt-2 space-y-2">
-              <div className="flex items-center gap-2 flex-wrap">
-                <span className="text-[11px] font-bold text-slate-500">المراكز الإنتاجية</span>
-                {hierarchyCrumbs.length > 0 && (
-                  <span id="production-records-hierarchy-path" className="text-[11px] font-bold text-sky-700">
-                    {hierarchyCrumbs.join(' + ')}
-                  </span>
-                )}
-                {effectiveLevel(hierarchySelection) > 0 && (
-                  <button
-                    type="button"
-                    onClick={() => setHierarchySelection(clearSelection())}
-                    className="px-2 py-1 text-[11px] font-bold text-amber-700 hover:text-amber-900 cursor-pointer"
-                  >
-                    مسح الاختيار
-                  </button>
-                )}
-              </div>
-
-              {/*
-                One checkbox column per level. Level 1 is the hierarchy's roots;
-                every later level is the union of the children of whatever is
-                ticked above it, so ticking two sibling branches shows both
-                branches' children and nothing else.
-
-                Ticking deeper NARROWS - which is also why a parent and its own
-                child can never double-count.
-              */}
-              <div className="flex flex-wrap gap-3 items-start">
-                {hierarchyLevels.map((lvl) => (
-                  <div
-                    key={lvl.level}
-                    id={`production-records-hierarchy-level-${lvl.level}`}
-                    className="min-w-[160px] max-w-[240px] border border-slate-200 rounded-xl p-2 bg-slate-50/60"
-                  >
-                    <div className="flex items-center justify-between gap-1 mb-1">
-                      <span className="text-[10px] font-black text-slate-600">{`المستوى ${lvl.level}`}</span>
-                      <span className="text-[10px] font-bold text-sky-700">{`المحدد: ${lvl.selectedIds.length}`}</span>
-                    </div>
-                    <div className="flex gap-1 mb-1">
-                      <button
-                        type="button"
-                        onClick={() => setHierarchySelection(selectAllAtLevel(hierarchyIndex, hierarchySelection, lvl.level))}
-                        className="px-1.5 py-0.5 text-[10px] font-bold text-slate-700 bg-slate-100 hover:bg-slate-200 rounded cursor-pointer"
-                      >
-                        تحديد الكل
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => setHierarchySelection(clearLevel(hierarchyIndex, hierarchySelection, lvl.level))}
-                        disabled={lvl.selectedIds.length === 0}
-                        className="px-1.5 py-0.5 text-[10px] font-bold text-slate-700 bg-slate-100 hover:bg-slate-200 disabled:opacity-50 rounded cursor-pointer"
-                      >
-                        مسح
-                      </button>
-                    </div>
-                    <div className="max-h-32 overflow-y-auto space-y-0.5">
-                      {lvl.optionIds.map((id) => {
-                        const node: any = hierarchyIndex.byId.get(id);
-                        return (
-                          <label key={id} className="flex items-center gap-1.5 text-[11px] font-semibold text-slate-700 cursor-pointer">
-                            <input
-                              type="checkbox"
-                              className="w-3.5 h-3.5 accent-sky-600 cursor-pointer shrink-0"
-                              checked={lvl.selectedIds.includes(id)}
-                              onChange={() => setHierarchySelection(toggleAtLevel(hierarchyIndex, hierarchySelection, lvl.level, id))}
-                            />
-                            <span className="truncate" title={node?.name || node?.sheet1Code || id}>
-                              {node?.name || node?.sheet1Code || id}
-                            </span>
-                          </label>
-                        );
-                      })}
-                    </div>
-                  </div>
-                ))}
-              </div>
-
-              {/* Equipment for whatever is in play. A leaf IS its equipment. */}
-              {effectiveLevel(hierarchySelection) > 0 && (
-                <div className="space-y-1.5">
-                  <div className="flex items-center gap-2 flex-wrap text-[11px]">
-                    <span className="font-bold text-slate-500">
-                      المعدات ({branchEquipment.length}) — المحدد: <span className="text-sky-700">{hierarchySelection.equipmentIds.length}</span>
-                    </span>
-                    <button
-                      type="button"
-                      onClick={() => setHierarchySelection(selectAllEquipment(hierarchyIndex, equipmentByNode, hierarchySelection))}
-                      disabled={branchEquipment.length === 0}
-                      className="px-2 py-1 font-bold text-slate-700 bg-slate-100 hover:bg-slate-200 disabled:opacity-50 rounded-lg cursor-pointer"
-                    >
-                      تحديد الكل
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setHierarchySelection(deselectAllEquipment(hierarchySelection))}
-                      disabled={hierarchySelection.equipmentIds.length === 0}
-                      className="px-2 py-1 font-bold text-slate-700 bg-slate-100 hover:bg-slate-200 disabled:opacity-50 rounded-lg cursor-pointer"
-                    >
-                      إلغاء تحديد الكل
-                    </button>
-                    {hierarchySelection.equipmentIds.length === 0 && branchEquipment.length > 0 && (
-                      <span className="text-slate-400">بدون تحديد = كل معدات هذا الفرع</span>
-                    )}
-                  </div>
-                  {branchEquipment.length === 0 ? (
-                    <p className="text-[11px] text-amber-700 font-bold">
-                      لا توجد معدة مرتبطة بالاختيار الحالي - لا بالعقدة نفسها ولا بأي فرع تابع لها. يمكن ربط المعدة من البيانات الأساسية أو بمطابقة الكود.
-                    </p>
-                  ) : (
-                    <div className="flex flex-wrap gap-x-4 gap-y-1 max-h-28 overflow-y-auto">
-                      {branchEquipment.map((id) => (
-                        <label key={id} className="flex items-center gap-1.5 text-[11px] font-semibold text-slate-700 cursor-pointer">
-                          <input
-                            type="checkbox"
-                            className="w-3.5 h-3.5 accent-sky-600 cursor-pointer"
-                            checked={hierarchySelection.equipmentIds.includes(id)}
-                            onChange={() => setHierarchySelection(toggleEquipment(hierarchySelection, id))}
-                          />
-                          <span>{equipmentNameById.get(id) || id}</span>
-                        </label>
-                      ))}
-                    </div>
-                  )}
-                </div>
-              )}
-            </div>
-          )}
-
-          {/*
-            Code Type -> Codes, replacing the press-only selector.
-
-            The category list and each category's code list both come from the
-            shared registry and the already-loaded Master Data, so adding a
-            category or a code never means editing this component.
-          */}
-          <div>
-            <label className="block text-[11px] font-bold text-slate-500 mb-1">نوع الأكواد</label>
-            <select
-              id="production-records-code-category"
-              value={filterCategoryId}
-              onChange={(e) => { setFilterCategoryId(e.target.value); setFilterCodes([]); }}
-              className="w-full bg-slate-50 border border-slate-200 rounded-xl px-2.5 py-1.5 font-semibold text-slate-700"
-            >
-              {codeCategories.map((c) => (
-                <option key={c.id} value={c.id}>{c.labelAr}</option>
-              ))}
-            </select>
-          </div>
-
-          <div>
-            <label className="block text-[11px] font-bold text-slate-500 mb-1">
-              الأكواد
-              <span className="font-normal text-slate-400">
-                {' '}({filterCodes.length === 0
-                  ? 'كل الأكواد'
-                  : filterCodes.length === 1
-                  ? 'كود واحد'
-                  : `عدة أكواد: ${filterCodes.length}`})
-              </span>
-            </label>
-            <select
-              id="production-records-codes"
-              multiple
-              size={3}
-              value={filterCodes}
-              onChange={(e) =>
-                setFilterCodes(Array.from(e.target.selectedOptions, (o) => o.value))
-              }
-              className="w-full bg-slate-50 border border-slate-200 rounded-xl px-2.5 py-1.5 font-semibold text-slate-700"
-              title="اترك الاختيار فارغًا ليعني كل الأكواد. اختر كودًا واحدًا أو عدة أكواد للتضييق."
-            >
-              {availableCodes.map((c) => (
-                <option key={c.value} value={c.value}>{c.label}</option>
-              ))}
-            </select>
-          </div>
-
-          {/* Product */}
-          <div>
-            <label className="block text-[11px] font-bold text-slate-500 mb-1">المنتج الحراري</label>
-            <select
-              value={filterProduct}
-              onChange={(e) => setFilterProduct(e.target.value)}
-              className="w-full bg-slate-50 border border-slate-200 rounded-xl px-2.5 py-1.5 font-semibold text-slate-700"
-            >
+          </label>
+          <label className="block">
+            <span className="block text-[11px] font-bold text-slate-400 mb-1">المنتج الحراري</span>
+            <select value={filterProduct} onChange={(e) => setFilterProduct(e.target.value)} className={`${DASHBOARD_FILTER_SELECT} w-full`}>
               <option value="all">كل المنتجات</option>
               {products.map(pr => (
                 <option key={pr.id} value={pr.id}>{pr.name}</option>
               ))}
             </select>
-          </div>
-
-          {/* Start Date */}
-          <div>
-            <label className="block text-[11px] font-bold text-slate-500 mb-1">من تاريخ</label>
-            <input
-              type="date"
-              value={startDate}
-              onChange={(e) => setStartDate(e.target.value)}
-              className="w-full bg-slate-50 border border-slate-200 rounded-xl px-2 py-1 text-slate-700"
-            />
-          </div>
-
-          {/* End Date */}
-          <div>
-            <label className="block text-[11px] font-bold text-slate-500 mb-1">إلى تاريخ</label>
-            <input
-              type="date"
-              value={endDate}
-              onChange={(e) => setEndDate(e.target.value)}
-              className="w-full bg-slate-50 border border-slate-200 rounded-xl px-2 py-1 text-slate-700"
-            />
-          </div>
+          </label>
+          <label className="block">
+            <span className="block text-[11px] font-bold text-slate-400 mb-1">العميل</span>
+            <select id="production-records-customer-filter" value={filterCustomer} onChange={(e) => setFilterCustomer(e.target.value)} className={`${DASHBOARD_FILTER_SELECT} w-full`}>
+              <option value="all">كل العملاء</option>
+              {customers.map(c => (
+                <option key={c.id} value={c.id}>{c.name}</option>
+              ))}
+            </select>
+          </label>
+          <label className="block sm:col-span-2">
+            <span className="block text-[11px] font-bold text-slate-400 mb-1">بحث</span>
+            <span className="relative block">
+              <span className="absolute inset-y-0 start-0 ps-2.5 flex items-center pointer-events-none text-slate-400">
+                <Search className="w-3.5 h-3.5" />
+              </span>
+              <input
+                id="records-search-input"
+                type="text"
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                placeholder="البحث بالمنتج، الكود، المكبس، العميل، أو العامل..."
+                className={`${DASHBOARD_FILTER_SELECT} w-full ps-8 placeholder:text-slate-500 placeholder:font-semibold`}
+              />
+            </span>
+          </label>
         </div>
-
-        {/* Clear filter shortcut */}
-        {(searchQuery || filterShift !== 'all' || filterCodes.length > 0 || effectiveLevel(hierarchySelection) > 0 || filterProduct !== 'all' || startDate || endDate) && (
-          <div className="flex justify-end pt-1">
-            <button
-              type="button"
-              onClick={clearFilters}
-              className="text-xs text-amber-700 hover:text-amber-900 font-bold flex items-center gap-1 cursor-pointer"
-            >
-              <X className="w-3.5 h-3.5" />
-              <span>إعادة ضبط وتفريغ الفلاتر</span>
-            </button>
-          </div>
-        )}
       </div>
 
       {/* Aggregate KPI Strip for Filtered Results */}
@@ -857,12 +576,10 @@ export const ProductionRecordsView: React.FC<ProductionRecordsViewProps> = ({ on
         ) : (
           <>
           {/*
-            Selection summary and controls.
-
-            There is deliberately NO bulk action here - this is the selection
-            foundation only. In particular there is no bulk delete: deleting many
-            production records at once is a separate, explicit decision that has
-            not been taken.
+            Selection summary and controls, and the one bulk action: Delete
+            Selected. It is rendered only for a user holding production.delete
+            and only while something is selected, and it opens a confirmation -
+            it deletes nothing by itself.
           */}
           <div className="px-4 py-3 border-b border-slate-200 flex items-center gap-3 flex-wrap text-xs">
             <span className="font-bold text-slate-600">
@@ -887,6 +604,18 @@ export const ProductionRecordsView: React.FC<ProductionRecordsViewProps> = ({ on
             >
               إلغاء تحديد الكل
             </button>
+            {canDeleteRecords && bulkDeleteCount > 0 && (
+              <button
+                id="production-records-bulk-delete-btn"
+                type="button"
+                onClick={openBulkDelete}
+                disabled={!!bulkDeleteProgress}
+                className="ms-auto flex items-center gap-1.5 px-3 py-1.5 font-bold text-white bg-rose-600 hover:bg-rose-700 disabled:opacity-50 rounded-lg cursor-pointer"
+              >
+                <Trash2 className="w-3.5 h-3.5" />
+                حذف السجلات المحددة ({bulkDeleteCount})
+              </button>
+            )}
           </div>
           <div className="overflow-x-auto">
             <table className="w-full text-right text-xs">
@@ -1186,6 +915,107 @@ export const ProductionRecordsView: React.FC<ProductionRecordsViewProps> = ({ on
             </button>
           </div>
         </div>
+      </Modal>
+
+      {/*
+        Bulk delete confirmation. The count is the frozen plan's length - the
+        exact batch that will run. Permanent: there is no undo or restore.
+      */}
+      <Modal
+        isOpen={!!bulkDeletePlan}
+        onClose={() => { if (!bulkDeleteProgress) setBulkDeletePlan(null); }}
+        title="تأكيد حذف السجلات المحددة"
+        maxWidth="md"
+      >
+        {bulkDeletePlan && (
+          <div id="production-records-bulk-delete-confirm" className="space-y-4 text-xs">
+            <div className="flex items-start gap-2.5 bg-rose-50 border border-rose-200 rounded-xl px-4 py-3">
+              <AlertCircle className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
+              <p className="text-rose-900 font-bold leading-relaxed">
+                {`سيتم حذف ${bulkDeletePlan.targetIds.length} سجل من سجلات الإنتاج نهائيًا. هذا الإجراء لا يمكن التراجع عنه من خلال النظام الحالي. هل تريد المتابعة؟`}
+              </p>
+            </div>
+            <p className="text-[11px] text-slate-500" dir="ltr">
+              {`${bulkDeletePlan.targetIds.length} production records will be permanently deleted. This action cannot be undone through the current system. Continue?`}
+            </p>
+            {bulkDeleteProgress && (
+              <p className="font-bold text-slate-700">
+                جارٍ الحذف: {bulkDeleteProgress.done} / {bulkDeleteProgress.total}
+              </p>
+            )}
+            <div className="flex items-center justify-end gap-2 pt-2">
+              <button
+                type="button"
+                onClick={() => setBulkDeletePlan(null)}
+                disabled={!!bulkDeleteProgress}
+                className="px-3.5 py-2 font-bold text-slate-600 hover:bg-slate-100 disabled:opacity-50 rounded-xl cursor-pointer"
+              >
+                إلغاء
+              </button>
+              <button
+                id="production-records-bulk-delete-confirm-btn"
+                type="button"
+                onClick={handleConfirmBulkDelete}
+                disabled={!!bulkDeleteProgress}
+                className="px-4 py-2 font-bold text-white bg-rose-600 hover:bg-rose-700 disabled:opacity-50 rounded-xl shadow-xs cursor-pointer"
+              >
+                {bulkDeleteProgress ? 'جارٍ الحذف...' : 'تأكيد الحذف'}
+              </button>
+            </div>
+          </div>
+        )}
+      </Modal>
+
+      {/* Bulk delete summary - what actually happened, record by record. */}
+      <Modal
+        isOpen={!!bulkDeleteOutcome}
+        onClose={() => setBulkDeleteOutcome(null)}
+        title="نتيجة حذف السجلات المحددة"
+        maxWidth="md"
+      >
+        {bulkDeleteOutcome && (
+          <div id="production-records-bulk-delete-summary" className="space-y-3 text-xs">
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+              <div className="rounded-xl px-3 py-2 bg-emerald-50 border border-emerald-200 text-emerald-800">
+                <p className="text-[10px] font-bold">تم الحذف بنجاح</p>
+                <p className="text-lg font-black">{bulkDeleteOutcome.successCount}</p>
+              </div>
+              <div className="rounded-xl px-3 py-2 bg-rose-50 border border-rose-200 text-rose-800">
+                <p className="text-[10px] font-bold">فشل</p>
+                <p className="text-lg font-black">{bulkDeleteOutcome.failedCount}</p>
+              </div>
+              <div className="rounded-xl px-3 py-2 bg-amber-50 border border-amber-200 text-amber-800">
+                <p className="text-[10px] font-bold">تم تخطيه (محذوف مسبقًا)</p>
+                <p className="text-lg font-black">{bulkDeleteOutcome.skippedCount}</p>
+              </div>
+              <div className="rounded-xl px-3 py-2 bg-slate-100 text-slate-800">
+                <p className="text-[10px] font-bold">المحدد</p>
+                <p className="text-lg font-black">{bulkDeleteOutcome.selectedCount}</p>
+              </div>
+            </div>
+            {bulkDeleteOutcome.failed.length > 0 && (
+              <div className="space-y-1">
+                <p className="font-bold text-rose-800">
+                  السجلات التي فشل حذفها ما زالت موجودة ومحددة في الجدول - يمكنك إعادة المحاولة:
+                </p>
+                <ul className="max-h-40 overflow-y-auto space-y-0.5 font-mono text-[11px] text-slate-700">
+                  {bulkDeleteOutcome.failed.map((f) => (
+                    <li key={f.id} title={f.error}>{f.id}</li>
+                  ))}
+                </ul>
+              </div>
+            )}
+            <div className="flex justify-end pt-1">
+              <button
+                type="button"
+                onClick={() => setBulkDeleteOutcome(null)}
+                className="px-4 py-2 font-bold text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-xl cursor-pointer"
+              >
+                إغلاق
+              </button>
+            </div>
+          </div>
+        )}
       </Modal>
     </div>
   );

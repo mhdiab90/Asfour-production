@@ -37,7 +37,7 @@ const DEPLOYMENT_ID_INJECTED = typeof __BUILD_DEPLOYMENT_ID__ === 'string' ? __B
 
 export const CURRENT_APP_VERSION: AppVersionInfo = {
   /** Set by the automatic release planner from the classified change set - see releasePlannerPure.ts. */
-  version: '3.19.2',
+  version: '3.20.0',
   buildId: BUILD_ID_INJECTED,
   buildTimestamp: BUILD_TIMESTAMP_INJECTED,
   gitCommit: COMMIT_SHA_INJECTED,
@@ -46,6 +46,16 @@ export const CURRENT_APP_VERSION: AppVersionInfo = {
   environment: 'production',
   releaseDate: '2026-08-22',
   changelog: [
+    {
+      version: '3.20.0',
+      date: '2026-09-13',
+      highlights: [
+        'سجلات الإنتاج: محدد مراكز التكاليف الهرمي نفسه المستخدم في لوحة التحكم بدل فلاتر المستويات ونوع الأكواد',
+        'لوحة فلاتر موحدة: الفترة، مراكز التكاليف، الوردية، المنتج، العميل، والبحث',
+        'حذف السجلات المحددة لمن يملك صلاحية الحذف، مع تأكيد صريح بأن الحذف نهائي',
+        'ملخص بعد الحذف: تم الحذف، فشل، تم تخطيه، والمحدد - والسجلات التي فشل حذفها تبقى ظاهرة'
+      ]
+    },
     {
       version: '3.19.2',
       date: '2026-09-13',

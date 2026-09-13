@@ -315,8 +315,10 @@ test('E5. TEST 20/21/22/23 - selection, Bulk Edit, Edit and single Delete are un
   const prv = readCode('src/components/production/ProductionRecordsView.tsx');
   assert.ok(/pruneToVisible\(prev, visibleIds\)/.test(prv), 'row selection pruning must remain');
   assert.ok(/handleOpenEdit/.test(prv), 'row Edit must remain');
-  assert.equal((prv.match(/deleteProductionRecord\(/g) || []).length, 1, 'one delete call site only');
-  for (const forbidden of ['handleBulkDelete', 'bulkDelete', 'deleteSelected', 'deleteStageRecord']) {
+  // Bulk delete was later authorised: it reuses the same primitive, so the call
+  // sites are the single-row confirm and the injected bulk delete - no more.
+  assert.equal((prv.match(/deleteProductionRecord\(/g) || []).length, 2, 'the existing primitive only');
+  for (const forbidden of ['deleteStageRecord', 'deleteMany', 'writeBatch']) {
     assert.equal(prv.includes(forbidden), false, `${forbidden} must not exist`);
   }
   // Data Review's bulk edit is untouched by this task.

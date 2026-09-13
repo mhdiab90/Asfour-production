@@ -1,9 +1,9 @@
 {
   "_doc": "Release Manifest precursor. Describes WHAT is being released so the gate checks a committed declaration rather than whatever flags an operator typed. commitSha/buildId/deploymentId are left null until a release is cut - the gate fills the comparison from the build itself, and only enforces a field that is set here. This is NOT the Change Registry: no change IDs, no Firestore, no UI.",
-  "version": "3.19.2",
-  "releaseId": "REL-2026-0021",
+  "version": "3.20.0",
+  "releaseId": "REL-2026-0022",
   "changeIds": [
-    "FIX-0026"
+    "PERM-0027"
   ],
   "commitSha": null,
   "buildId": null,
@@ -21,12 +21,10 @@
     "التوابع",
     "financial-accounts-import-modal",
     "production-records-selected-count",
-    "production-records-code-category",
     "equipment-hierarchy-node",
     "reports-hierarchy-scope",
     "productionCenters",
     "cost-center-scope-selector",
-    "production-records-hierarchy-path",
     "master-data-reconcile-btn",
     "reconcile-apply-btn",
     "master-data-primary-categories",
@@ -36,7 +34,9 @@
     "financial-transactions-import-modal",
     "cost-center-scope-search",
     "custom-dashboard-filter-grid",
-    "data-widget-state"
+    "data-widget-state",
+    "production-records-filter-panel",
+    "production-records-bulk-delete-btn"
   ],
   "_markerNotes": {
     "ai-provider-management": "AI Provider Management route - absent means the AI Assistant closure was dropped",
@@ -51,12 +51,10 @@
     "التوابع": "The Descendants column - proves the shared hierarchy resolver is wired to the UI",
     "financial-accounts-import-modal": "The dedicated Financial Accounts importer's own dialog id - absent means the action still routes to Historical Excel Import",
     "production-records-selected-count": "The Production Records selection counter - absent means the row-selection foundation was dropped",
-    "production-records-code-category": "The Production Records code-type selector - absent means the category/code filter was dropped",
     "equipment-hierarchy-node": "The equipment -> hierarchy node selector in Master Data - absent means the link that makes hierarchy filtering work was dropped",
     "reports-hierarchy-scope": "The Reports production-centre scope selector - absent means hierarchy-aware reporting was dropped",
     "productionCenters": "The assistant generateReport hierarchy parameter - absent means the AI hierarchy integration was dropped",
     "cost-center-scope-selector": "The shared hierarchical cost-centre selector used by both Dashboards - absent means they reverted to the legacy press list",
-    "production-records-hierarchy-path": "The Production Records drill-down breadcrumb - absent means the multi-level selector was dropped",
     "master-data-reconcile-btn": "The Reconcile Codes with Hierarchy entry point - absent means the reconciliation panel is unreachable again",
     "reconcile-apply-btn": "The Apply Safe Matches action - absent means the safe links can no longer be written",
     "master-data-primary-categories": "The single Master Data category navigation - absent means the unified navigation was dropped",
@@ -66,7 +64,9 @@
     "financial-transactions-import-modal": "The dedicated Financial Transactions importer - absent means transactions cannot be imported from Master Data",
     "cost-center-scope-search": "The cost-centre selector search box - absent means search by code or name was dropped",
     "custom-dashboard-filter-grid": "The Custom Dashboard responsive filter grid - absent means it reverted to the cramped horizontally scrolling strip",
-    "data-widget-state": "Widget-level loading / no-data / quantities-off state - absent means filter changes may unmount the Custom Dashboard widget grid again"
+    "data-widget-state": "Widget-level loading / no-data / quantities-off state - absent means filter changes may unmount the Custom Dashboard widget grid again",
+    "production-records-filter-panel": "The unified Production Records filter panel with the shared cost-centre selector - absent means the redundant drill-down / code-type filters returned",
+    "production-records-bulk-delete-btn": "The permission-gated Delete Selected action - absent means bulk delete of selected production records was dropped"
   },
   "tests": [
     "buildIdentity",
@@ -86,11 +86,13 @@
     "hierarchySelectorUi",
     "legacyHierarchyReconciliation",
     "masterDataPanels",
-    "costCenterDashboard"
+    "costCenterDashboard",
+    "productionRecordsBulkDelete"
   ],
   "deployCommand": "firebase deploy --only hosting --project asfourproduction-70e6e",
   "treeClean": true,
   "_changeNotes": {
+    "PERM-0027": "Production Records: canonical cost-centre filter and safe bulk delete. FILTER: the screen carried three controls for one organisational dimension - a multi-level drill-down with per-level checkbox columns, an equipment checklist beneath it (which said there was no equipment for a childless node), and a Code Type -> Codes pair. All three and their state are removed. The organisational filter is now the SAME CostCenterScopeSelector the Dashboard and Custom Dashboard use (search by code/name with path context, 5/6/7/8/9 groups, recursive checkboxes, clear, select all), over the canonical hierarchy index; ticked node ids go through the shared selection shape into the existing filterLegacyProductionRecords engine with the reconciled equipment links, so node -> descendants -> linked equipment -> records naming that press or furnace, and a leaf is its equipment. Date, cost centres, shift, product, a new customer filter (records already carry customerId) and search sit in one panel in the Dashboard filter-panel style with the export and new-entry actions. BULK DELETE (explicitly authorised): with production.delete (the existing key - no new permission) and at least one selected row, Delete Selected shows the exact count. The batch is selected ∩ visible, deduplicated, by document id, and is frozen when the confirmation opens; the confirmation states the deletion is permanent and cannot be undone through the current system. Nothing is deleted by selecting or by opening the dialog. On confirm, each record is checked against the live snapshot and passed to the existing deleteProductionRecord primitive one at a time - its existing audit entry per record, no batch write, no second delete service, no deleteStageRecord. Failures are isolated and nothing is rolled back; records already removed are skipped; a summary reports succeeded, failed (with ids), skipped and selected, and failed rows remain listed and selected for retry. No undo, restore or soft delete is claimed. Master Data, the hierarchy, Reports, AI and the Dashboard are not touched; no Firestore rule, schema or permission changed",
     "FIX-0026": "Custom Dashboard filter and content integration. Two defects, both traced to their cause. (1) The widget grid was not stable: the Builder rendered `isLoading ? <loading box> : <sections>`, so every date change - which re-runs the shared, date-bounded fetch - unmounted the whole widget tree and rebuilt it, and unticking quantities (3.19.1) dropped it entirely, leaving an empty shell with the financial card as a separate area above. The sections container now always renders; loading, 'quantities not shown' and 'no data for this period / selection' are states inside each widget card, the financial value is a section of the same dashboard, and nothing uses a filter-derived key. Product, customer, shift, cost-centre and metric changes never refetched and still do not; widgets recompute from the one shared dataset through resolveWidgetFilters and the shared hierarchy scope. (2) A dashboard-wide Stage dropdown ('التشكيل والمكابس' once a saved or template dashboard set pressing) duplicated the organisational dimension the cost-centre hierarchy already provides. It is removed from the bar, and the dashboard filter state is normalised on EVERY write - the bar, a loaded, template or prefilled dashboard's saved defaults, the assistant's SET_FILTERS action, the AI designer, reset and save-as-default - so an old saved stage cannot linger as an invisible filter or be re-serialised. A widget keeps its own stage in its settings. The assistant's setCustomDashboardFilters no longer sends or reports a stage patch; a stage request is answered with where stage lives now. The classic Dashboard and Reports keep their own stage filters. One filter state, no new reads, no Firestore rule, schema, permission or data change",
     "UI-0025": "Custom Dashboard visual parity with the classic Dashboard. Both already render in the same page container; the compression came from inside the Builder. Its Live Control Bar squeezed every filter into one overflow-x-auto strip of non-shrinking controls, which forced horizontal scrolling and clipped the cost-centre dropdown (an overflow container clips its absolutely positioned children), in a smaller light style unlike the classic dark filter panel; the dashboard name also appeared three times (a generic header, a narrow identity strip, and the filter bar). The filter panel now uses the classic Dashboard's own classes, extracted into shared dashboardFilterStyles tokens that the classic Dashboard uses too (identical class strings): period and actions, wrapping period presets, then a responsive 1/2/4-column filter grid with no scroll strip. The shared hierarchical cost-centre selector fills its cell and opens a 24rem panel capped at 90vw. The open dashboard is the page title with rename/duplicate/default/delete beside it and every dashboard action on the other side; section headers, widget toolbars and widget cards use the classic card treatment with readable controls; widget sizes and section columns are unchanged. The metric type toggle, financial card and gated financial read were moved out of DashboardView into shared DashboardMetricControls and reused by the Custom Dashboard, whose metric type is an optional field on the existing GlobalDashboardFilters (absent = QUANTITY, so saved dashboards are unchanged). No Firestore rule, schema, permission, query or data changed",
     "MOD-0024": "Cost-centre selector search and recursive selection. The shared selector used by the classic Dashboard and the Custom Dashboard Builder gains a search box matching code, Arabic name and English name where present - case-insensitive, whitespace-tolerant, and folding Arabic spelling variants through the existing normaliseLookupText rather than a new normaliser. Results keep hierarchy context: a matched child is shown under its ancestors and a matched parent with its branch, never as a flat list, and search changes only the rows shown, never the selection. Checkboxes are now recursive: checking a node selects it and its entire branch resolved from the FULL hierarchy (so a search cannot narrow what a tick selects), unchecking removes that branch and un-ticks its ancestors without touching any other branch, a partly selected branch shows its parents as indeterminate, and a parent becomes checked once all its children are. Select All adds every classified root, or every match while searching. All descendants, ancestors and children come from the shared hierarchy resolver over the already-loaded hierarchy; selection is local state with ids as identity, typing and ticking issue no Firestore read or write. The production and financial scopes read a materialised branch exactly as they read the parent alone, so Dashboard, Builder and Reports totals are unchanged for the same selection. No Firestore rule, schema, Report, AI, Production Records or production data changed",
@@ -110,8 +112,8 @@
     "UI-0010": "Financial Accounts import opens a dedicated Master Data importer instead of the Historical Excel Import screen: the action no longer navigates to the bulk-entry route (which App.tsx renders as DataImportView); a new in-place modal reuses the existing financialAccounts schema, XLSX reader, row validation, duplicate detection and chunked commit, adds sheet selection and parent/cycle relationship checks, and keeps partial import so invalid rows never block valid ones",
     "DB-0009": "Category-first Master Data over an extensible registry; Financial Accounts master data with Excel import and hierarchical editing (new financialAccounts collection and its Firestore rule); one shared generic hierarchy resolver reused by Master Data, Production Review and production aggregation; hierarchical cost-centre editing with cycle, self-parent and unknown-parent protection"
   },
-  "previousVersion": "3.19.1",
-  "versionBump": "PATCH",
-  "classificationConfidence": "HIGH",
-  "previousReleaseId": "REL-2026-0020"
+  "previousVersion": "3.19.2",
+  "versionBump": "MINOR",
+  "classificationConfidence": "MEDIUM",
+  "previousReleaseId": "REL-2026-0021"
 }

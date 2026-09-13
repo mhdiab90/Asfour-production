@@ -255,33 +255,31 @@ test('B10. §11 - selection is pure UI state: no Firestore read or write was add
 });
 
 // ==================================================
-// C. NO DELETION ARCHITECTURE (§1, §9, §15)
+// C. ONE DELETION ARCHITECTURE (§1, §9, §15)
 //
-// This screen already hard-deletes a SINGLE row. The point of these assertions
-// is that the new selection is not wired to it, and that no bulk/multi delete
-// has appeared.
+// Bulk delete of selected records was later authorised explicitly. What these
+// assertions still guarantee: it reuses the ONE existing primitive through the
+// shared planner, never a second delete path, a batch write or a soft-delete
+// state - and selecting a row by itself deletes nothing.
+// (Full behaviour: productionRecordsBulkDelete.test.ts.)
 // ==================================================
 
-test('C1. §15 - no bulk delete handler exists on this screen', () => {
+test('C1. §15 - no second delete architecture exists on this screen', () => {
   const src = readCode(VIEW);
-  for (const forbidden of [
-    'handleBulkDelete', 'bulkDelete', 'deleteSelected', 'deleteMany',
-    'deleteStageRecord', 'softDelete', 'markDeleted',
-  ]) {
+  for (const forbidden of ['deleteMany', 'deleteStageRecord', 'softDelete', 'markDeleted', 'writeBatch', 'deleteDoc']) {
     assert.equal(src.includes(forbidden), false, `a deletion path named ${forbidden} must not exist`);
   }
+  assert.ok(/from '\.\.\/\.\.\/services\/productionRecordsBulkDeletePure'/.test(src), 'bulk delete goes through the shared planner/executor');
 });
 
-test('C2. §15 - the existing single-row delete is not reachable from the selection', () => {
+test('C2. §15 - the selection reaches the primitive only through the confirmed plan', () => {
   const src = readCode(VIEW);
-  // deleteProductionRecord must still be called exactly once, from the existing
-  // single-record confirmation - never over a list of ids.
   const calls = src.match(/deleteProductionRecord\(/g) || [];
-  assert.equal(calls.length, 1, `expected exactly one delete call site, found ${calls.length}`);
-  assert.equal(/selectedIds[\s\S]{0,200}deleteProductionRecord/.test(src), false,
-    'the selection must never feed the delete path');
+  assert.equal(calls.length, 2, `expected the single-row confirm and the injected bulk primitive, found ${calls.length}`);
+  assert.ok(/deleteOne: \(id\) => deleteProductionRecord\(id, labelById\.get\(id\)\)/.test(src), 'one call per planned id');
   assert.equal(/deleteProductionRecord\([^)]*(selection|selectedIds|map|forEach)/.test(src), false,
-    'delete must never be applied over a collection of selected ids');
+    'delete is never applied over the raw selection');
+  assert.ok(/planBulkDelete\(selection\.selectedIds, visibleIds\)/.test(src), 'the batch is selected ∩ visible');
 });
 
 test('C3. §15 - no deleted/voided record state was introduced', () => {
@@ -523,25 +521,19 @@ test('D17. §8 - there is still exactly ONE descendant walk in the system', () =
 
 const PRV = 'src/components/production/ProductionRecordsView.tsx';
 
-test('D18. TEST 13 - the code list is driven by Master Data, never hard-coded', () => {
+test('D18. TEST 13 - the organisational options come from loaded data, never hard-coded', () => {
   const src = readCode(PRV);
-  assert.ok(/legacyCodeSourceCategories\(filterCategoryId\)/.test(src),
-    'the sources must come from the registry');
-  assert.ok(/legacyProductionCategories\(\)/.test(src), 'the category list must come from the registry');
+  assert.ok(/listCostCenterHierarchyNodes\(\)/.test(src), 'the hierarchy is read through the cache-first reader');
   assert.ok(/fetchMasterData<Furnace>\('furnaces'\)/.test(src), 'furnace master data must be loaded');
-  // No literal press/centre list left in the component.
   assert.equal(/const\s+(PRESSES|CENTERS|CODE_LIST)\s*=/.test(src), false, 'no hard-coded code list');
 });
 
-test('D19. §2 - the press-only selector is gone, replaced by category -> code', () => {
+test('D19. §2 - the press-only and code-type selectors are gone, replaced by the cost-centre hierarchy', () => {
   const src = readCode(PRV);
   assert.equal(/filterPress/.test(src), false, 'the press-only filter state must be gone');
-  assert.ok(/id="production-records-code-category"/.test(src), 'the category selector must exist');
-  assert.ok(/id="production-records-codes"/.test(src), 'the dependent code selector must exist');
-  // The code selector depends on the category.
-  assert.ok(/availableCodes/.test(src), 'the code options must come from the category-derived list');
-  assert.ok(/setFilterCategoryId\(e\.target\.value\); setFilterCodes\(\[\]\)/.test(src),
-    'changing category must clear the now-unrelated codes');
+  assert.equal(/id="production-records-code-category"|id="production-records-codes"|filterCategoryId|filterCodes/.test(src), false,
+    'the Code Type -> Codes pair was superseded by the canonical hierarchy selector');
+  assert.ok(/<CostCenterScopeSelector/.test(src), 'the shared hierarchical selector must exist');
 });
 
 test('D20. §18 - filtering goes through the shared engine, not a local reimplementation', () => {
@@ -573,10 +565,9 @@ test('D23. TEST 17/18 - Edit and individual Delete are untouched', () => {
   const src = readCode(PRV);
   assert.ok(/handleOpenEdit/.test(src), 'row Edit must remain');
   assert.ok(/updateProductionRecord\(/.test(src), 'the edit write path must remain');
-  const deletes = (src.match(/deleteProductionRecord\(/g) || []).length;
-  assert.equal(deletes, 1, `the single-row delete must remain exactly one call site, found ${deletes}`);
-  for (const forbidden of ['handleBulkDelete', 'bulkDelete', 'deleteSelected', 'deleteStageRecord', 'handleBulkEdit']) {
-    assert.equal(src.includes(forbidden), false, `${forbidden} must not be introduced by a filtering task`);
+  assert.ok(/await deleteProductionRecord\(\s*deleteConfirmRecord\.id,/.test(src), 'the single-row delete must remain');
+  for (const forbidden of ['deleteStageRecord', 'handleBulkEdit', 'deleteMany']) {
+    assert.equal(src.includes(forbidden), false, `${forbidden} must not be introduced`);
   }
 });
 

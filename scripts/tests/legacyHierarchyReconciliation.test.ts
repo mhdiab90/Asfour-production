@@ -250,7 +250,7 @@ test('D1. §31 - the reconciliation feeds the SAME resolver map, not a new path'
   const src = readCode('src/components/production/ProductionRecordsView.tsx');
   assert.ok(/reconcileLegacyWithHierarchy\(/.test(src));
   assert.ok(/applyReconciliationToEquipment\(/.test(src));
-  assert.ok(/buildEquipmentByNode\(equipmentLinks\)/.test(src), 'results flow into the shared equipment map');
+  assert.ok(/\{ equipment: equipmentLinks \}\)/.test(src), 'results flow into the shared engine, which builds the equipment map');
   // No second resolver.
   assert.equal(/while\s*\(queue|getDescendants/.test(src), false);
 });

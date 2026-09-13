@@ -375,28 +375,27 @@ test('G1. CRITICAL 15 - there is still exactly ONE traversal', () => {
   }
 });
 
-test('G2. the view renders a checkbox column per level, not a single dropdown', () => {
+test('G2. the multi-level drill-down was superseded by the shared hierarchical selector', () => {
   const src = readCode(PRV);
-  assert.ok(/hierarchyLevels\.map\(\(lvl\) =>/.test(src), 'one block per level');
-  assert.ok(/toggleAtLevel\(hierarchyIndex, hierarchySelection, lvl\.level, id\)/.test(src), 'ticks go through the state machine');
-  assert.ok(/selectAllAtLevel\(hierarchyIndex, hierarchySelection, lvl\.level\)/.test(src), 'per-level select all');
-  assert.ok(/clearLevel\(hierarchyIndex, hierarchySelection, lvl\.level\)/.test(src), 'per-level clear');
-  assert.ok(/المحدد: \$\{lvl\.selectedIds\.length\}/.test(src), 'per-level selected count');
+  assert.equal(/hierarchyLevels|toggleAtLevel|selectAllAtLevel/.test(src), false, 'the per-level columns are gone');
+  assert.ok(/<CostCenterScopeSelector/.test(src), 'one shared selector: search, groups, recursive checkboxes');
+  // The state machine itself stays available and tested (sections A-E above).
+  assert.ok(/export function toggleAtLevel/.test(readCode('src/services/hierarchySelectorPure.ts')));
 });
 
-test('G3. §31 - the reconciliation feeds the SAME equipment map everything else uses', () => {
+test('G3. §31 - the reconciliation feeds the SAME equipment context everything else uses', () => {
   const src = readCode(PRV);
   assert.ok(/applyReconciliationToEquipment\(/.test(src), 'links are completed from the code match');
   assert.ok(/reconcileLegacyWithHierarchy\(/.test(src));
-  assert.ok(/buildEquipmentByNode\(equipmentLinks\)/.test(src), 'and flow into the shared resolver map');
+  assert.ok(/\{ equipment: equipmentLinks \}\)/.test(src), 'and flow into the shared engine');
 });
 
-test('G4. §29/§47 - production records, Edit and single Delete are untouched', () => {
+test('G4. §29/§47 - production records are matched by the engine; Edit and single Delete remain', () => {
   const src = readCode(PRV);
-  assert.ok(/\[rec\.pressId, rec\.furnaceId\]\.some\(/.test(src), 'existing record fields only');
+  assert.equal(/rec\.pressId|rec\.furnaceId/.test(src), false, 'equipment fields are matched by the shared engine, not by hand');
   assert.ok(/handleOpenEdit/.test(src));
-  assert.equal((src.match(/deleteProductionRecord\(/g) || []).length, 1);
-  for (const forbidden of ['handleBulkDelete', 'bulkDelete', 'deleteSelected', 'deleteStageRecord']) {
+  assert.ok(/await deleteProductionRecord\(\s*deleteConfirmRecord\.id,/.test(src), 'single delete unchanged');
+  for (const forbidden of ['deleteStageRecord', 'deleteMany', 'writeBatch']) {
     assert.equal(src.includes(forbidden), false, `${forbidden} must not exist`);
   }
 });

@@ -606,10 +606,13 @@ test('S19. performance: no reads, writes or tree walks of its own while typing o
   assert.ok(/normaliseLookupText/.test(pure), 'the existing Arabic normaliser, not a new one');
 });
 
-test('S20. Reports, AI and Production Records selectors were not touched', () => {
-  for (const rel of ['src/components/reports/ReportsView.tsx', 'src/assistant/tools/stageReportTools.ts', 'src/components/production/ProductionRecordsView.tsx']) {
+test('S20. Reports and AI keep their own selectors; Production Records reuses the shared one', () => {
+  for (const rel of ['src/components/reports/ReportsView.tsx', 'src/assistant/tools/stageReportTools.ts']) {
     assert.equal(/toggleCostCenterNode|searchCostCenterNodes|CostCenterScopeSelector/.test(readCode(rel)), false, rel);
   }
+  const prv = readCode('src/components/production/ProductionRecordsView.tsx');
+  assert.ok(/import \{ CostCenterScopeSelector \} from '\.\.\/dashboard\/CostCenterScopeSelector'/.test(prv), 'the shared component, not a copy');
+  assert.equal(/toggleCostCenterNode|searchCostCenterNodes/.test(prv), false, 'no second copy of the selection logic');
 });
 
 // ==================================================
