@@ -20,39 +20,19 @@ import {
 import { db, handleFirestoreError, OperationType } from '../config/firebase';
 import { ProductType } from '../types';
 import { logAuditAction } from './auditService';
+import { INITIAL_PRODUCT_TYPES, computeMissingSeedDocuments } from './productTypeSeedPure';
 
-export const INITIAL_PRODUCT_TYPES: Omit<ProductType, 'id'>[] = [
-  { prefixCode: 'BAR', nameEn: 'Bricks Acid Resistance', nameAr: 'طوب مقاوم للأحماض', active: true },
-  { prefixCode: 'BC2', nameEn: 'Ball Clay', nameAr: 'طين كروي BC2', active: true },
-  { prefixCode: 'BC3', nameEn: 'Ball Clay Type B (Bulk)', nameAr: 'طين كروي صب BC3', active: true },
-  { prefixCode: 'BCB', nameEn: 'Bricks Chemical Bond', nameAr: 'طوب بروابط كيميائية BCB', active: true },
-  { prefixCode: 'BCM', nameEn: 'Bricks Chemical Bond', nameAr: 'طوب بروابط كيميائية BCM', active: true },
-  { prefixCode: 'BFC', nameEn: 'Bricks Semi Silica', nameAr: 'طوب نصف سيليكا', active: true },
-  { prefixCode: 'BHA', nameEn: 'Bricks High Alumina', nameAr: 'طوب عالي الألومينا BHA', active: true },
-  { prefixCode: 'BHS', nameEn: 'Bricks High Alumina', nameAr: 'طوب عالي الألومينا BHS', active: true },
-  { prefixCode: 'BLW', nameEn: 'Bricks Lightweight', nameAr: 'طوب خفيف عازل', active: true },
-  { prefixCode: 'BMG', nameEn: 'Magnesite Bricks', nameAr: 'مجنزيت', active: true },
-  { prefixCode: 'BSI', nameEn: 'Bricks Silicon Carbide', nameAr: 'طوب كربيد السيليكون', active: true },
-  { prefixCode: 'CAL', nameEn: 'Calcined Alumina', nameAr: 'ألومينا محروقة', active: true },
-  { prefixCode: 'CBA', nameEn: 'Asfour Calcined Bauxite', nameAr: 'بوكسيت عصفور محروق', active: true },
-  { prefixCode: 'CBC', nameEn: 'China Calcined Bauxite', nameAr: 'بوكسيت صيني محروق', active: true },
-  { prefixCode: 'CHC', nameEn: 'Cordierite Chamotte', nameAr: 'شاموت كورديريت', active: true },
-  { prefixCode: 'CHR', nameEn: 'Kaolin', nameAr: 'كاولين', active: true },
-  { prefixCode: 'CHS', nameEn: 'Chamotte Sanitaryware', nameAr: 'شاموت أدوات صحية', active: true },
-  { prefixCode: 'CLW', nameEn: 'Castable Lightweight', nameAr: 'خرسانة خفيفة عازلة', active: true },
-  { prefixCode: 'COC', nameEn: 'Castable Cordierite', nameAr: 'خرسانة كورديريت', active: true },
-  { prefixCode: 'FBF', nameEn: 'Bricks Fire Clay', nameAr: 'طوب طيني حراري', active: true },
-  { prefixCode: 'FBJ', nameEn: 'Crushed Bricks', nameAr: 'كسر طوب', active: true },
-  { prefixCode: 'GPS', nameEn: 'Ref. Gypsum', nameAr: 'جبس حراري', active: true },
-  { prefixCode: 'GRA', nameEn: 'Ground Graphite', nameAr: 'جرافيت مطحون', active: true },
-  { prefixCode: 'LCC', nameEn: 'Castable LCC', nameAr: 'خرسانة حرارية LCC منخفضة الأسمنت', active: true },
-  { prefixCode: 'LCM', nameEn: 'Castable LCM', nameAr: 'خرسانة حرارية LCM متوسطة الأسمنت', active: true },
-  { prefixCode: 'LMC', nameEn: 'Castable Cordierite', nameAr: 'خرسانة كورديريت LMC', active: true },
-  { prefixCode: 'LWC', nameEn: 'Lightweight Chamotte', nameAr: 'شاموت خفيف الوزن', active: true },
-];
+export { INITIAL_PRODUCT_TYPES, computeMissingSeedDocuments };
 
 // In-memory cache for fast parser lookups
 let cachedProductTypes: ProductType[] = [];
+
+// In-flight guard: multiple mounts in the SAME tab (MasterDataView + BulkEntryView
+// both call subscribeProductTypes -> seedInitialProductTypes) share one in-flight
+// seed call instead of firing redundant concurrent reads/writes. This does not
+// replace the deterministic-ID fix above (which is what makes CROSS-TAB/cross-session
+// concurrency safe) - it just avoids doing the work twice within one tab.
+let inFlightSeed: Promise<void> | null = null;
 
 export function getCachedProductTypes(): ProductType[] {
   if (cachedProductTypes.length === 0) {
@@ -73,47 +53,49 @@ export function setCachedProductTypes(types: ProductType[]) {
 
 /**
  * Seed initial 27 Product Types into Firestore if they don't already exist.
+ *
+ * Concurrency-safe via deterministic doc IDs (see computeMissingSeedDocuments):
+ * two callers racing this function - two tabs, two components mounting at
+ * once - both resolve a missing prefix to the SAME target doc ID, so their
+ * writes converge on one document instead of creating duplicates. This only
+ * decides where a MISSING prefix gets created; it never touches an existing
+ * document (including the 27 pre-existing duplicate pairs from the old
+ * random-auto-ID scheme - those are out of scope for this fix and are left
+ * exactly as-is).
  */
 export async function seedInitialProductTypes(): Promise<void> {
-  try {
-    const snapshot = await getDocs(collection(db, 'productTypes'));
-    const existingPrefixes = new Set<string>();
-    snapshot.forEach((d) => {
-      const data = d.data();
-      if (data.prefixCode) {
-        existingPrefixes.add(String(data.prefixCode).toUpperCase());
-      }
-    });
+  if (inFlightSeed) return inFlightSeed;
+  inFlightSeed = (async () => {
+    try {
+      const snapshot = await getDocs(collection(db, 'productTypes'));
+      const existingPrefixes = new Set<string>();
+      snapshot.forEach((d) => {
+        const data = d.data();
+        if (data.prefixCode) {
+          existingPrefixes.add(String(data.prefixCode).toUpperCase());
+        }
+      });
 
-    const batch = writeBatch(db);
-    let addedCount = 0;
+      const toCreate = computeMissingSeedDocuments(existingPrefixes);
+      if (toCreate.length === 0) return;
 
-    for (const item of INITIAL_PRODUCT_TYPES) {
-      const normalizedPrefix = item.prefixCode.toUpperCase();
-      if (!existingPrefixes.has(normalizedPrefix)) {
-        const newDocRef = doc(collection(db, 'productTypes'));
-        batch.set(newDocRef, {
-          prefixCode: normalizedPrefix,
-          nameEn: item.nameEn,
-          nameAr: item.nameAr,
-          description: `تصنيف تلقائي لنوع المنتج (${item.prefixCode})`,
-          active: true,
-          createdAt: new Date().toISOString(),
-          updatedAt: new Date().toISOString(),
+      const batch = writeBatch(db);
+      for (const { id, data } of toCreate) {
+        batch.set(doc(db, 'productTypes', id), {
+          ...data,
           serverCreatedAt: serverTimestamp(),
           serverUpdatedAt: serverTimestamp(),
         });
-        addedCount++;
       }
-    }
-
-    if (addedCount > 0) {
       await batch.commit();
-      console.log(`Seeded ${addedCount} initial product types to Firestore.`);
+      console.log(`Seeded ${toCreate.length} initial product types to Firestore.`);
+    } catch (error) {
+      console.warn('Initial product types seeding check notice:', error);
+    } finally {
+      inFlightSeed = null;
     }
-  } catch (error) {
-    console.warn('Initial product types seeding check notice:', error);
-  }
+  })();
+  return inFlightSeed;
 }
 
 /**

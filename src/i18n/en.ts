@@ -147,6 +147,9 @@ export const en = {
   stage_mixing: 'Mixing & Material Preparation',
   stage_lightweight_foam: 'Lightweight & Foam',
   stage_sorting: 'Sorting & Final Quality Control',
+  stage_thermal_concrete: 'Thermal Concrete',
+  stage_tunnel_kiln: 'Tunnel Kiln',
+  stage_handmade_brick: 'Hand-made Brick',
 
   // Production Entry Form Fields
   entry_title: 'Record New Production Batch',

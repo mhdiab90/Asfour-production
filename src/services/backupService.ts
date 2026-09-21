@@ -51,6 +51,9 @@ export const BACKUP_COLLECTIONS = [
   'stage_mixing',
   'stage_lightweight_foam',
   'stage_sorting',
+  'stage_thermal_concrete',
+  'stage_tunnel_kiln',
+  'stage_handmade_brick',
   'audit_logs',
   'system_settings'
 ];

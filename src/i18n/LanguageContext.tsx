@@ -5,11 +5,14 @@
  * Provides automatic translation of industrial terms, fallback diagnostics, and coverage report.
  */
 import React, { createContext, useContext, useState, useEffect, useMemo } from 'react';
+import { onAuthStateChanged } from 'firebase/auth';
 import { ar } from './ar';
 import { en } from './en';
+import { auth } from '../config/firebase';
+import { subscribeTranslationOverrides, TranslationOverrideDoc } from '../services/translationOverrideService';
+import type { Language, Direction } from './types';
 
-export type Language = 'ar' | 'en';
-export type Direction = 'rtl' | 'ltr';
+export type { Language, Direction };
 
 export type TranslationKey = keyof typeof ar;
 
@@ -165,6 +168,19 @@ interface LanguageContextValue {
   toggleLanguage: () => void;
   t: (key: TranslationKey | string, fallback?: string) => string;
   getCoverageReport: () => CoverageReport;
+  /** Raw override docs for the active language, `key -> doc` - used by the Translation Manager/Language Audit tools. */
+  overrides: Record<string, TranslationOverrideDoc>;
+  /**
+   * PHASE 4E: the SAME unfiltered `${language}__${key} -> doc` map this
+   * provider already holds internally (both ar and en overrides at once),
+   * now also exposed so TranslationManagerView.tsx (which needs both
+   * languages side by side, unlike every other consumer) can read it here
+   * instead of opening its own second onSnapshot listener on the
+   * identical translationOverrides collection - eliminating a confirmed
+   * duplicate listener (Phase 3 audit) via this existing Context rather
+   * than a new store.
+   */
+  allOverrides: Record<string, TranslationOverrideDoc>;
 }
 
 const STORAGE_KEY = 'asfour_erp_lang';
@@ -186,6 +202,40 @@ export const LanguageProvider: React.FC<{ children: React.ReactNode }> = ({ chil
 
   const direction: Direction = language === 'ar' ? 'rtl' : 'ltr';
   const isRtl = direction === 'rtl';
+
+  // Translation overrides (§11/§12) - only subscribed once a user is signed
+  // in, since the Firestore rule for `translationOverrides` requires it and
+  // LanguageProvider mounts BEFORE AuthProvider (it wraps it in App.tsx), so
+  // it cannot consume AuthContext directly - it listens to Firebase auth
+  // state itself instead.
+  const [allOverrides, setAllOverrides] = useState<Record<string, TranslationOverrideDoc>>({});
+
+  useEffect(() => {
+    let unsubscribeOverrides: (() => void) | undefined;
+    const unsubscribeAuth = onAuthStateChanged(auth, (user) => {
+      if (unsubscribeOverrides) {
+        unsubscribeOverrides();
+        unsubscribeOverrides = undefined;
+      }
+      if (user) {
+        unsubscribeOverrides = subscribeTranslationOverrides(setAllOverrides);
+      } else {
+        setAllOverrides({});
+      }
+    });
+    return () => {
+      unsubscribeAuth();
+      if (unsubscribeOverrides) unsubscribeOverrides();
+    };
+  }, []);
+
+  const overrides = useMemo(() => {
+    const map: Record<string, TranslationOverrideDoc> = {};
+    for (const o of Object.values(allOverrides)) {
+      if (o.language === language) map[o.key] = o;
+    }
+    return map;
+  }, [allOverrides, language]);
 
   useEffect(() => {
     try {
@@ -211,6 +261,12 @@ export const LanguageProvider: React.FC<{ children: React.ReactNode }> = ({ chil
   const t = (key: TranslationKey | string, fallback?: string): string => {
     if (!key) return '';
 
+    // Admin translation override always wins first (§11: "Admin Override OR
+    // Default Translation") - the source dictionary below is never rewritten.
+    if (key in overrides) {
+      return overrides[key].value;
+    }
+
     // Direct key in active dictionary
     if (key in dictionary) {
       return (dictionary as Record<string, string>)[key];
@@ -218,8 +274,9 @@ export const LanguageProvider: React.FC<{ children: React.ReactNode }> = ({ chil
 
     // Convert dot notation like production.operatingHours -> operating_hours
     const flatKey = key.includes('.') ? key.split('.').pop()?.replace(/([A-Z])/g, '_$1').toLowerCase() : key;
-    if (flatKey && flatKey in dictionary) {
-      return (dictionary as Record<string, string>)[flatKey];
+    if (flatKey) {
+      if (flatKey in overrides) return overrides[flatKey].value;
+      if (flatKey in dictionary) return (dictionary as Record<string, string>)[flatKey];
     }
 
     // If English is active, check direct Arabic-to-English translation table
@@ -276,9 +333,11 @@ export const LanguageProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       toggleLanguage,
       t,
       getCoverageReport,
+      overrides,
+      allOverrides,
     }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [language, direction, isRtl]
+    [language, direction, isRtl, overrides, allOverrides]
   );
 
   return <LanguageContext.Provider value={value}>{children}</LanguageContext.Provider>;

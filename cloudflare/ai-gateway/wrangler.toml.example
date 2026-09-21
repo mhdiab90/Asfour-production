@@ -1,0 +1,30 @@
+name = "asfour-ai-gateway"
+main = "worker.js"
+compatibility_date = "2024-11-01"
+
+# Non-secret variables. Copy this file to wrangler.toml and fill in real
+# values before deploying - wrangler.toml is gitignored so it never gets
+# committed with your real ALLOWED_ORIGIN if you'd rather keep it private.
+[vars]
+ANTHROPIC_MODEL = "claude-sonnet-4-5-20250929"
+GEMINI_MODEL = "gemini-3.6-flash"
+CLOUDFLARE_AI_MODEL = "@cf/meta/llama-3.3-70b-instruct-fp8-fast"
+OPENROUTER_MODEL = "openrouter/free"
+FIREBASE_PROJECT_ID = "asfourproduction-70e6e"
+# One or more allowed frontend origins, comma-separated (e.g. local dev PLUS
+# your deployed Firebase Hosting origin) - always exact origins, never "*".
+ALLOWED_ORIGIN = "http://localhost:3000,https://your-project.web.app"
+
+# Cloudflare Workers AI - a native binding, NOT a secret. No separate API
+# key/token needed; this Worker can call Workers AI models simply because it
+# runs inside your Cloudflare account. Keep this section even if you don't
+# plan to use Workers AI yet - it costs nothing to leave enabled.
+[ai]
+binding = "AI"
+
+# ANTHROPIC_API_KEY, GEMINI_API_KEY, and OPENROUTER_API_KEY are NOT set here.
+# Set them as secrets after first deploy - never put a real key in this file
+# or in any file committed to git:
+#   wrangler secret put ANTHROPIC_API_KEY
+#   wrangler secret put GEMINI_API_KEY       # optional - only if/when you enable Gemini
+#   wrangler secret put OPENROUTER_API_KEY   # optional - only if/when you enable OpenRouter Free

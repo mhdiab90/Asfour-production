@@ -5,26 +5,16 @@
  * bulk deletion of selected records, and Excel export.
  */
 import React, { useState, useEffect, useMemo, useRef } from 'react';
-import { 
-  FileText, 
-  Search, 
-  Filter, 
-  Download, 
-  Plus, 
-  Edit, 
-  Trash2, 
-  Calendar, 
-  Clock, 
-  Cpu, 
-  Box, 
-  Users, 
-  RefreshCw, 
-  AlertCircle, 
-  TrendingDown, 
-  TrendingUp, 
-  CheckCircle2, 
+import {
+  Search,
+  Filter,
+  Download,
+  Plus,
+  Edit,
+  Trash2,
+  RefreshCw,
+  AlertCircle,
   X,
-  Layers
 } from 'lucide-react';
 import { ProductionRecord, Shift, Press, Furnace, Product, Customer, NavigationPage } from '../../types';
 import { subscribeProductionRecords, updateProductionRecord, deleteProductionRecord } from '../../services/productionService';
@@ -64,10 +54,14 @@ import {
   reconcileLegacyWithHierarchy,
   applyReconciliationToEquipment,
 } from '../../services/legacyHierarchyReconciliationPure';
+import { exportProductionRecordsToExcel } from '../../services/exportService';
+import { Modal } from '../common/Modal';
+import { formatNumber, formatDecimal } from '../../utils/formatters';
+import { useLanguage } from '../../i18n/LanguageContext';
 /*
- * Row selection reuses the SAME primitives the Data Review screen already uses -
- * there is one selection architecture in this codebase, not two. These are pure
- * functions over an id list: no Firestore, no writes, no reads.
+ * Row selection reuses the SAME primitives the Data Review screen already
+ * uses - there is one selection architecture in this codebase, not two.
+ * These are pure functions over an id list: no Firestore, no writes, no reads.
  */
 import {
   EMPTY_SELECTION_STATE,
@@ -79,7 +73,6 @@ import {
   isSelected,
   areAllVisibleSelected,
 } from '../../services/bulkEditPure';
-import { exportProductionRecordsToExcel } from '../../services/exportService';
 /*
  * Bulk delete: the plan (selected ∩ visible) and the one-record-at-a-time loop.
  * The delete itself is the existing deleteProductionRecord primitive, injected.
@@ -97,15 +90,13 @@ import {
   DASHBOARD_DATE_INPUT,
   DASHBOARD_PANEL_BUTTON,
 } from '../dashboard/dashboardFilterStyles';
-import { Badge } from '../common/Badge';
-import { Modal } from '../common/Modal';
-import { formatNumber, formatDecimal } from '../../utils/formatters';
 
 interface ProductionRecordsViewProps {
   onNavigate: (page: NavigationPage) => void;
 }
 
 export const ProductionRecordsView: React.FC<ProductionRecordsViewProps> = ({ onNavigate }) => {
+  const { language, isRtl } = useLanguage();
   const [records, setRecords] = useState<ProductionRecord[]>([]);
   const [isLoading, setIsLoading] = useState<boolean>(true);
 
@@ -159,6 +150,32 @@ export const ProductionRecordsView: React.FC<ProductionRecordsViewProps> = ({ on
   const [isUpdating, setIsUpdating] = useState<boolean>(false);
 
   useEffect(() => {
+    fetchMasterData<Shift>('shifts').then(setShifts).catch(() => {});
+    fetchMasterData<Press>('presses').then(setPresses).catch(() => {});
+    fetchMasterData<Furnace>('furnaces').then(setFurnaces).catch(() => {});
+    listCostCenterHierarchyNodes()
+      .then(setHierarchyNodes)
+      .catch(() => { /* an unavailable hierarchy only costs the node options */ });
+    fetchMasterData<Product>('products').then(setProducts).catch(() => {});
+    fetchMasterData<Customer>('customers').then(setCustomers).catch(() => {});
+  }, []);
+
+  /**
+   * PHASE 4C - split out of the former single mount-only effect above so
+   * that changing the date filter re-subscribes ONLY the Production
+   * listener (with the same startDate/endDate now passed server-side),
+   * never re-fetching Master Data. startDate/endDate were already being
+   * applied client-side in `filteredRecords` below - this wires the exact
+   * same values through to Firestore instead of ignoring them
+   * server-side, so this UI's own date filter now controls how many
+   * documents the live listener actually downloads. Empty-string
+   * startDate/endDate (the initial/cleared state) still resolve to an
+   * unbounded query, identical to this view's pre-Phase-4C behavior.
+   * React's effect-cleanup contract unsubscribes the previous listener
+   * before this effect body runs again on a startDate/endDate change, so
+   * there is never more than one active subscription.
+   */
+  useEffect(() => {
     setIsLoading(true);
     const unsubscribe = subscribeProductionRecords(
       (data) => {
@@ -168,20 +185,12 @@ export const ProductionRecordsView: React.FC<ProductionRecordsViewProps> = ({ on
       (err) => {
         console.error('Error loading production records:', err);
         setIsLoading(false);
-      }
+      },
+      { startDate: startDate || undefined, endDate: endDate || undefined }
     );
 
-    fetchMasterData<Shift>('shifts').then(setShifts).catch(() => {});
-    fetchMasterData<Press>('presses').then(setPresses).catch(() => {});
-    fetchMasterData<Furnace>('furnaces').then(setFurnaces).catch(() => {});
-    listCostCenterHierarchyNodes()
-      .then(setHierarchyNodes)
-      .catch(() => { /* an unavailable hierarchy only costs the node options */ });
-    fetchMasterData<Product>('products').then(setProducts).catch(() => {});
-    fetchMasterData<Customer>('customers').then(setCustomers).catch(() => {});
-
     return () => unsubscribe();
-  }, []);
+  }, [startDate, endDate]);
 
   /** The node graph - the canonical index the Dashboard selector uses (id = sheet1Code). */
   const hierarchyIndex = useMemo(() => buildCostCenterHierarchyIndex(hierarchyNodes), [hierarchyNodes]);
@@ -246,11 +255,11 @@ export const ProductionRecordsView: React.FC<ProductionRecordsViewProps> = ({ on
   /*
    * The ids actually on screen right now.
    *
-   * Derived from the SAME `filteredRecords` the table renders, so "select all
-   * visible" can never mean more than what the user can see - no extra fetch and
-   * no extra Firestore read. `filteredRecords` is rebuilt on every render, so the
-   * list is memoised on the id sequence itself; otherwise the pruning effect
-   * below would see a new array identity every render and loop.
+   * Derived from the SAME `filteredRecords` the table renders, so "all visible"
+   * can never mean more than what the user can see - no extra fetch, no extra
+   * Firestore read. `filteredRecords` is rebuilt on every render, so the list is
+   * memoised on the id sequence itself; otherwise the pruning effect below would
+   * see a new array identity every render and loop.
    *
    * A record without a document id cannot be addressed safely, so it is excluded
    * rather than given a synthetic key.
@@ -286,8 +295,8 @@ export const ProductionRecordsView: React.FC<ProductionRecordsViewProps> = ({ on
   const totalDowntimeMinutes = filteredRecords.reduce((sum, r) => sum + (r.totalDowntimeMinutes || 0), 0);
 
   filteredRecords.forEach(r => {
-    const pWeight = r.pieceWeightKg !== undefined && r.pieceWeightKg !== null 
-      ? Number(r.pieceWeightKg) 
+    const pWeight = r.pieceWeightKg !== undefined && r.pieceWeightKg !== null
+      ? Number(r.pieceWeightKg)
       : (r.pieceWeight !== undefined && r.pieceWeight !== null ? Number(r.pieceWeight) : null);
     const hasWeight = pWeight !== null && !isNaN(pWeight) && pWeight > 0;
 
@@ -307,7 +316,7 @@ export const ProductionRecordsView: React.FC<ProductionRecordsViewProps> = ({ on
     }
   });
 
-  const averageWastePercentage = totalProductionTons > 0 
+  const averageWastePercentage = totalProductionTons > 0
     ? Number(((totalWasteTons / totalProductionTons) * 100).toFixed(2))
     : (totalProductionQuantity > 0 ? Number(((totalWasteQuantity / totalProductionQuantity) * 100).toFixed(2)) : 0);
 
@@ -325,7 +334,7 @@ export const ProductionRecordsView: React.FC<ProductionRecordsViewProps> = ({ on
       setIsEditModalOpen(false);
       setEditingRecord(null);
     } catch (err: any) {
-      alert(err.message || 'حدث خطأ أثناء تعديل السجل.');
+      alert(err.message || (language === 'ar' ? 'حدث خطأ أثناء تعديل السجل.' : 'An error occurred while editing the record.'));
     } finally {
       setIsUpdating(false);
     }
@@ -382,7 +391,7 @@ export const ProductionRecordsView: React.FC<ProductionRecordsViewProps> = ({ on
   const bulkDeleteCount = planBulkDelete(selection.selectedIds, visibleIds).targetIds.length;
 
   const handleExport = () => {
-    exportProductionRecordsToExcel(filteredRecords, `سجلات_إنتاج_عصفور_${new Date().toISOString().split('T')[0]}.xlsx`);
+    exportProductionRecordsToExcel(filteredRecords, `production-records-asfour-${new Date().toISOString().split('T')[0]}.xlsx`);
   };
 
   const clearFilters = () => {
@@ -396,7 +405,7 @@ export const ProductionRecordsView: React.FC<ProductionRecordsViewProps> = ({ on
   };
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-6" dir={isRtl ? 'rtl' : 'ltr'}>
       {/*
         Production Records filters - ONE panel, in the Dashboard's filter-panel
         style (shared dashboardFilterStyles tokens): period, the canonical
@@ -408,13 +417,13 @@ export const ProductionRecordsView: React.FC<ProductionRecordsViewProps> = ({ on
         <div className="flex flex-wrap items-center gap-2">
           <span className="text-xs font-black text-slate-200 flex items-center gap-1.5">
             <Filter className="w-3.5 h-3.5 text-amber-400" />
-            فلاتر سجلات الإنتاج
+            {language === 'ar' ? 'فلاتر سجلات الإنتاج' : 'Production Records Filters'}
           </span>
           <div className="flex-grow" />
           {(searchQuery || filterShift !== 'all' || costCenterNodeIds.length > 0 || filterCustomer !== 'all' || filterProduct !== 'all' || startDate || endDate) && (
             <button type="button" onClick={clearFilters} className={DASHBOARD_PANEL_BUTTON}>
               <X className="w-3.5 h-3.5" />
-              <span>إعادة ضبط وتفريغ الفلاتر</span>
+              <span>{language === 'ar' ? 'إعادة ضبط وتفريغ الفلاتر' : 'Reset & Clear Filters'}</span>
             </button>
           )}
           <button
@@ -425,7 +434,7 @@ export const ProductionRecordsView: React.FC<ProductionRecordsViewProps> = ({ on
             className={`${DASHBOARD_PANEL_BUTTON} disabled:opacity-50`}
           >
             <Download className="w-3.5 h-3.5" />
-            <span>تصدير إلى Excel</span>
+            <span>{language === 'ar' ? 'تصدير إلى Excel' : 'Export to Excel'}</span>
           </button>
           <button
             id="new-production-entry-btn"
@@ -434,59 +443,59 @@ export const ProductionRecordsView: React.FC<ProductionRecordsViewProps> = ({ on
             className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-extrabold text-slate-950 bg-amber-400 hover:bg-amber-500 rounded transition-colors cursor-pointer"
           >
             <Plus className="w-4 h-4" />
-            <span>تسجيل إنتاج جديد</span>
+            <span>{language === 'ar' ? 'تسجيل إنتاج جديد' : 'New Production Entry'}</span>
           </button>
         </div>
 
         <div id="production-records-filter-grid" className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2 text-xs">
           <label className="block">
-            <span className="block text-[11px] font-bold text-slate-400 mb-1">من تاريخ</span>
+            <span className="block text-[11px] font-bold text-slate-400 mb-1">{language === 'ar' ? 'من تاريخ' : 'From Date'}</span>
             <input type="date" value={startDate} max={endDate || undefined} onChange={(e) => setStartDate(e.target.value)} className={`${DASHBOARD_DATE_INPUT} border-slate-700 w-full py-1.5`} />
           </label>
           <label className="block">
-            <span className="block text-[11px] font-bold text-slate-400 mb-1">إلى تاريخ</span>
+            <span className="block text-[11px] font-bold text-slate-400 mb-1">{language === 'ar' ? 'إلى تاريخ' : 'To Date'}</span>
             <input type="date" value={endDate} min={startDate || undefined} onChange={(e) => setEndDate(e.target.value)} className={`${DASHBOARD_DATE_INPUT} border-slate-700 w-full py-1.5`} />
           </label>
           <div>
-            <span className="block text-[11px] font-bold text-slate-400 mb-1">مراكز التكاليف</span>
+            <span className="block text-[11px] font-bold text-slate-400 mb-1">{language === 'ar' ? 'مراكز التكاليف' : 'Cost Centres'}</span>
             <CostCenterScopeSelector
               index={hierarchyIndex}
               selectedNodeIds={costCenterNodeIds}
               onChange={setCostCenterNodeIds}
-              language="ar"
+              language={language}
               tone="dark"
               block
             />
           </div>
           <label className="block">
-            <span className="block text-[11px] font-bold text-slate-400 mb-1">الوردية</span>
+            <span className="block text-[11px] font-bold text-slate-400 mb-1">{language === 'ar' ? 'الوردية' : 'Shift'}</span>
             <select value={filterShift} onChange={(e) => setFilterShift(e.target.value)} className={`${DASHBOARD_FILTER_SELECT} w-full`}>
-              <option value="all">كل الورديات</option>
+              <option value="all">{language === 'ar' ? 'كل الورديات' : 'All Shifts'}</option>
               {shifts.map(s => (
                 <option key={s.id} value={s.id}>{s.name}</option>
               ))}
             </select>
           </label>
           <label className="block">
-            <span className="block text-[11px] font-bold text-slate-400 mb-1">المنتج الحراري</span>
+            <span className="block text-[11px] font-bold text-slate-400 mb-1">{language === 'ar' ? 'المنتج الحراري' : 'Product'}</span>
             <select value={filterProduct} onChange={(e) => setFilterProduct(e.target.value)} className={`${DASHBOARD_FILTER_SELECT} w-full`}>
-              <option value="all">كل المنتجات</option>
+              <option value="all">{language === 'ar' ? 'كل المنتجات' : 'All Products'}</option>
               {products.map(pr => (
                 <option key={pr.id} value={pr.id}>{pr.name}</option>
               ))}
             </select>
           </label>
           <label className="block">
-            <span className="block text-[11px] font-bold text-slate-400 mb-1">العميل</span>
+            <span className="block text-[11px] font-bold text-slate-400 mb-1">{language === 'ar' ? 'العميل' : 'Customer'}</span>
             <select id="production-records-customer-filter" value={filterCustomer} onChange={(e) => setFilterCustomer(e.target.value)} className={`${DASHBOARD_FILTER_SELECT} w-full`}>
-              <option value="all">كل العملاء</option>
+              <option value="all">{language === 'ar' ? 'كل العملاء' : 'All Customers'}</option>
               {customers.map(c => (
                 <option key={c.id} value={c.id}>{c.name}</option>
               ))}
             </select>
           </label>
           <label className="block sm:col-span-2">
-            <span className="block text-[11px] font-bold text-slate-400 mb-1">بحث</span>
+            <span className="block text-[11px] font-bold text-slate-400 mb-1">{language === 'ar' ? 'بحث' : 'Search'}</span>
             <span className="relative block">
               <span className="absolute inset-y-0 start-0 ps-2.5 flex items-center pointer-events-none text-slate-400">
                 <Search className="w-3.5 h-3.5" />
@@ -496,7 +505,7 @@ export const ProductionRecordsView: React.FC<ProductionRecordsViewProps> = ({ on
                 type="text"
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
-                placeholder="البحث بالمنتج، الكود، المكبس، العميل، أو العامل..."
+                placeholder={language === 'ar' ? 'البحث بالمنتج، الكود، المكبس، العميل، أو العامل...' : 'Search by product, code, press, customer, or employee...'}
                 className={`${DASHBOARD_FILTER_SELECT} w-full ps-8 placeholder:text-slate-500 placeholder:font-semibold`}
               />
             </span>
@@ -507,53 +516,53 @@ export const ProductionRecordsView: React.FC<ProductionRecordsViewProps> = ({ on
       {/* Aggregate KPI Strip for Filtered Results */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
         <div className="bg-white rounded-xl p-3.5 border border-slate-200 shadow-xs">
-          <span className="text-[11px] font-bold text-slate-500 block">إجمالي الإنتاج المكبوس</span>
+          <span className="text-[11px] font-bold text-slate-500 block">{language === 'ar' ? 'إجمالي الإنتاج' : 'Total Production'}</span>
           <div className="flex items-baseline gap-1 mt-1">
             <span className="text-xl font-extrabold text-slate-900">
               {formatNumber(totalProductionQuantity)}
             </span>
-            <span className="text-xs text-slate-500">قطعة</span>
+            <span className="text-xs text-slate-500">{language === 'ar' ? 'قطعة' : 'pcs'}</span>
           </div>
           <span className="text-[10px] text-emerald-600 font-semibold mt-0.5 block">
-            سليم: {formatNumber(totalGoodQuantity)} قطعة
+            {language === 'ar' ? `سليم: ${formatNumber(totalGoodQuantity)} قطعة` : `Good: ${formatNumber(totalGoodQuantity)} pcs`}
           </span>
         </div>
 
         <div className="bg-white rounded-xl p-3.5 border border-slate-200 shadow-xs">
-          <span className="text-[11px] font-bold text-slate-500 block">إجمالي الوزن المحسوب</span>
+          <span className="text-[11px] font-bold text-slate-500 block">{language === 'ar' ? 'إجمالي الوزن المحسوب' : 'Total Calculated Weight'}</span>
           <div className="flex items-baseline gap-1 mt-1">
             <span className="text-xl font-extrabold text-slate-900">
               {formatDecimal(totalProductionWeightKg / 1000, 2)}
             </span>
-            <span className="text-xs text-slate-500">طن</span>
+            <span className="text-xs text-slate-500">{language === 'ar' ? 'طن' : 't'}</span>
           </div>
           <span className="text-[10px] text-slate-400 font-semibold mt-0.5 block">
-            ({formatNumber(totalProductionWeightKg)} كجم)
+            ({formatNumber(totalProductionWeightKg)} {language === 'ar' ? 'كجم' : 'kg'})
           </span>
         </div>
 
         <div className="bg-white rounded-xl p-3.5 border border-slate-200 shadow-xs">
-          <span className="text-[11px] font-bold text-slate-500 block">متوسط نسبة الهالك</span>
+          <span className="text-[11px] font-bold text-slate-500 block">{language === 'ar' ? 'متوسط نسبة الهالك' : 'Average Waste Rate'}</span>
           <div className="flex items-baseline gap-1 mt-1">
             <span className={`text-xl font-extrabold ${averageWastePercentage > 5 ? 'text-rose-600' : 'text-amber-600'}`}>
               {formatDecimal(averageWastePercentage, 2)}%
             </span>
           </div>
           <span className="text-[10px] text-rose-600 font-semibold mt-0.5 block">
-            هالك: {formatNumber(totalWasteQuantity)} قطعة
+            {language === 'ar' ? `هالك: ${formatNumber(totalWasteQuantity)} قطعة` : `Waste: ${formatNumber(totalWasteQuantity)} pcs`}
           </span>
         </div>
 
         <div className="bg-white rounded-xl p-3.5 border border-slate-200 shadow-xs">
-          <span className="text-[11px] font-bold text-slate-500 block">إجمالي وقت التوقف (الأعطال)</span>
+          <span className="text-[11px] font-bold text-slate-500 block">{language === 'ar' ? 'إجمالي وقت التوقف والأعطال' : 'Total Downtime & Fault Hours'}</span>
           <div className="flex items-baseline gap-1 mt-1">
             <span className="text-xl font-extrabold text-slate-900">
               {(totalDowntimeMinutes / 60).toFixed(1)}
             </span>
-            <span className="text-xs text-slate-500">ساعة</span>
+            <span className="text-xs text-slate-500">{language === 'ar' ? 'ساعة' : 'hr'}</span>
           </div>
           <span className="text-[10px] text-slate-500 font-semibold mt-0.5 block">
-            ({totalDowntimeMinutes} دقيقة)
+            ({totalDowntimeMinutes} {language === 'ar' ? 'دقيقة' : 'min'})
           </span>
         </div>
       </div>
@@ -563,14 +572,14 @@ export const ProductionRecordsView: React.FC<ProductionRecordsViewProps> = ({ on
         {isLoading ? (
           <div className="py-16 text-center text-slate-400">
             <RefreshCw className="w-6 h-6 animate-spin mx-auto mb-2 text-amber-500" />
-            <p className="text-xs font-semibold">جارٍ تحميل سجلات الإنتاج من Firestore...</p>
+            <p className="text-xs font-semibold">{language === 'ar' ? 'جارٍ تحميل سجلات الإنتاج من Firestore...' : 'Loading production records from Firestore...'}</p>
           </div>
         ) : filteredRecords.length === 0 ? (
           <div className="py-16 text-center text-slate-400">
             <AlertCircle className="w-8 h-8 mx-auto mb-2 text-slate-300" />
-            <p className="text-sm font-bold text-slate-700">لا توجد سجلات مطابقة للشروط المحددة</p>
+            <p className="text-sm font-bold text-slate-700">{language === 'ar' ? 'لا توجد سجلات مطابقة للشروط المحددة' : 'No records match the selected criteria'}</p>
             <p className="text-xs text-slate-400 mt-1">
-              يمكنك الضغط على زر "تسجيل إنتاج جديد" لإضافة أول تشغيلة.
+              {language === 'ar' ? 'يمكنك الضغط على زر "تسجيل إنتاج جديد" لإضافة أول تشغيلة.' : 'Click "New Production Entry" to add your first record.'}
             </p>
           </div>
         ) : (
@@ -583,10 +592,11 @@ export const ProductionRecordsView: React.FC<ProductionRecordsViewProps> = ({ on
           */}
           <div className="px-4 py-3 border-b border-slate-200 flex items-center gap-3 flex-wrap text-xs">
             <span className="font-bold text-slate-600">
-              الظاهر: <span className="text-slate-900">{visibleIds.length}</span>
+              {language === 'ar' ? 'الظاهر' : 'Visible'}: <span className="text-slate-900">{visibleIds.length}</span>
             </span>
             <span className="font-bold text-slate-600">
-              المحدد: <span id="production-records-selected-count" className="text-sky-700">{selectionCount(selection)}</span>
+              {language === 'ar' ? 'المحدد' : 'Selected'}:{' '}
+              <span id="production-records-selected-count" className="text-sky-700">{selectionCount(selection)}</span>
             </span>
             <button
               type="button"
@@ -594,7 +604,7 @@ export const ProductionRecordsView: React.FC<ProductionRecordsViewProps> = ({ on
               disabled={visibleIds.length === 0}
               className="px-3 py-1.5 font-bold text-slate-700 bg-slate-100 hover:bg-slate-200 disabled:opacity-50 rounded-lg cursor-pointer"
             >
-              تحديد الكل
+              {language === 'ar' ? 'تحديد الكل' : 'Select all visible'}
             </button>
             <button
               type="button"
@@ -602,7 +612,7 @@ export const ProductionRecordsView: React.FC<ProductionRecordsViewProps> = ({ on
               disabled={selectionCount(selection) === 0}
               className="px-3 py-1.5 font-bold text-slate-700 bg-slate-100 hover:bg-slate-200 disabled:opacity-50 rounded-lg cursor-pointer"
             >
-              إلغاء تحديد الكل
+              {language === 'ar' ? 'إلغاء تحديد الكل' : 'Deselect all'}
             </button>
             {canDeleteRecords && bulkDeleteCount > 0 && (
               <button
@@ -613,7 +623,7 @@ export const ProductionRecordsView: React.FC<ProductionRecordsViewProps> = ({ on
                 className="ms-auto flex items-center gap-1.5 px-3 py-1.5 font-bold text-white bg-rose-600 hover:bg-rose-700 disabled:opacity-50 rounded-lg cursor-pointer"
               >
                 <Trash2 className="w-3.5 h-3.5" />
-                حذف السجلات المحددة ({bulkDeleteCount})
+                {language === 'ar' ? <>حذف السجلات المحددة ({bulkDeleteCount})</> : <>Delete Selected Records ({bulkDeleteCount})</>}
               </button>
             )}
           </div>
@@ -626,22 +636,22 @@ export const ProductionRecordsView: React.FC<ProductionRecordsViewProps> = ({ on
                       id="production-records-select-all"
                       type="checkbox"
                       className="w-4 h-4 accent-sky-600 cursor-pointer align-middle"
-                      aria-label="تحديد كل السجلات الظاهرة"
+                      aria-label={language === 'ar' ? 'تحديد كل السجلات الظاهرة' : 'Select all visible records'}
                       checked={areAllVisibleSelected(selection, visibleIds)}
                       onChange={(e) =>
                         setSelection(e.target.checked ? selectAllVisible(selection, visibleIds) : deselectAll())
                       }
                     />
                   </th>
-                  <th className="px-4 py-3.5">التاريخ والوردية</th>
-                  <th className="px-4 py-3.5">المكبس / الفرن</th>
-                  <th className="px-4 py-3.5">المنتج والمواصفة</th>
-                  <th className="px-4 py-3.5">فريق التشغيل</th>
-                  <th className="px-4 py-3.5">الكمية (إجمالي / سليم)</th>
-                  <th className="px-4 py-3.5">الهالك (%)</th>
-                  <th className="px-4 py-3.5">إجمالي الوزن</th>
-                  <th className="px-4 py-3.5">التوقف</th>
-                  <th className="px-4 py-3.5 text-center">الإجراءات</th>
+                  <th className="px-4 py-3.5">{language === 'ar' ? 'التاريخ والوردية' : 'Date & Shift'}</th>
+                  <th className="px-4 py-3.5">{language === 'ar' ? 'المكبس / الفرن' : 'Press / Furnace'}</th>
+                  <th className="px-4 py-3.5">{language === 'ar' ? 'المنتج والمواصفة' : 'Product & Specification'}</th>
+                  <th className="px-4 py-3.5">{language === 'ar' ? 'فريق التشغيل' : 'Operating Team'}</th>
+                  <th className="px-4 py-3.5">{language === 'ar' ? 'الكمية (إجمالي / سليم)' : 'Quantity (Total / Good)'}</th>
+                  <th className="px-4 py-3.5">{language === 'ar' ? 'الهالك (%)' : 'Waste (%)'}</th>
+                  <th className="px-4 py-3.5">{language === 'ar' ? 'إجمالي الوزن' : 'Total Weight'}</th>
+                  <th className="px-4 py-3.5">{language === 'ar' ? 'التوقف' : 'Downtime'}</th>
+                  <th className="px-4 py-3.5 text-center">{language === 'ar' ? 'الإجراءات' : 'Actions'}</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100 font-medium text-slate-700">
@@ -656,7 +666,7 @@ export const ProductionRecordsView: React.FC<ProductionRecordsViewProps> = ({ on
                       <input
                         type="checkbox"
                         className="w-4 h-4 accent-sky-600 cursor-pointer align-middle disabled:opacity-40"
-                        aria-label="تحديد السجل"
+                        aria-label={language === 'ar' ? 'تحديد السجل' : 'Select record'}
                         disabled={!rec.id}
                         checked={rec.id ? isSelected(selection, rec.id) : false}
                         onChange={() => { if (rec.id) setSelection(toggleRow(selection, rec.id)); }}
@@ -675,7 +685,7 @@ export const ProductionRecordsView: React.FC<ProductionRecordsViewProps> = ({ on
                       )}
                       {rec.furnaceCarNumbers && rec.furnaceCarNumbers.length > 0 && (
                         <div className="text-[10px] text-amber-700 font-mono">
-                          عربات: {rec.furnaceCarNumbers.join(', ')}
+                          {language === 'ar' ? 'عربات: ' : 'Cars: '}{rec.furnaceCarNumbers.join(', ')}
                         </div>
                       )}
                     </td>
@@ -684,15 +694,15 @@ export const ProductionRecordsView: React.FC<ProductionRecordsViewProps> = ({ on
                       <div className="font-bold text-slate-900">{rec.productName}</div>
                       <div className="flex items-center gap-1.5 mt-0.5">
                         <span className="text-[10px] bg-slate-100 px-1.5 py-0.2 rounded font-mono">
-                          {rec.aluminaPercentage}% ألومينا
+                          {rec.aluminaPercentage}% {language === 'ar' ? 'ألومينا' : 'Alumina'}
                         </span>
                         <span className="text-[10px] text-slate-500 font-mono">
-                          {rec.pieceWeight} كجم
+                          {rec.pieceWeight} {language === 'ar' ? 'كجم' : 'kg'}
                         </span>
                       </div>
                       {rec.customerName && (
                         <div className="text-[11px] text-sky-700 font-semibold mt-0.5">
-                          عميل: {rec.customerName}
+                          {language === 'ar' ? 'عميل: ' : 'Customer: '}{rec.customerName}
                         </div>
                       )}
                     </td>
@@ -716,7 +726,7 @@ export const ProductionRecordsView: React.FC<ProductionRecordsViewProps> = ({ on
                         {formatNumber(rec.productionQuantity)}
                       </div>
                       <div className="text-[11px] text-emerald-600 font-semibold">
-                        سليم: {formatNumber(rec.goodQuantity)}
+                        {language === 'ar' ? `سليم: ${formatNumber(rec.goodQuantity)}` : `Good: ${formatNumber(rec.goodQuantity)}`}
                       </div>
                     </td>
 
@@ -725,7 +735,7 @@ export const ProductionRecordsView: React.FC<ProductionRecordsViewProps> = ({ on
                         {formatDecimal(rec.wastePercentage, 2)}%
                       </div>
                       <div className="text-[10px] text-slate-400">
-                        {formatNumber(rec.wasteQuantity)} قطعة
+                        {formatNumber(rec.wasteQuantity)} {language === 'ar' ? 'قطعة' : 'pcs'}
                       </div>
                     </td>
 
@@ -736,23 +746,23 @@ export const ProductionRecordsView: React.FC<ProductionRecordsViewProps> = ({ on
                         const prodTons = rec.productionTons !== undefined && rec.productionTons !== null && Number(rec.productionTons) > 0
                           ? Number(rec.productionTons)
                           : (hasWeight ? (Number(rec.productionQuantity || 0) * Number(pWeight)) / 1000 : null);
-                        
+
                         if (prodTons !== null) {
                           return (
                             <>
                               <div className="font-extrabold text-slate-900">
-                                {formatDecimal(prodTons, 3)} طن
+                                {formatDecimal(prodTons, 3)} {language === 'ar' ? 'طن' : 't'}
                               </div>
                               <div className="text-[10px] text-slate-400 font-mono">
-                                {formatNumber(rec.productionWeight || prodTons * 1000)} كجم
+                                {formatNumber(rec.productionWeight || prodTons * 1000)} {language === 'ar' ? 'كجم' : 'kg'}
                               </div>
                             </>
                           );
                         }
                         return (
                           <div className="text-amber-700 bg-amber-50 px-2 py-0.5 rounded text-[11px] font-bold border border-amber-200 inline-block">
-                            غير محسوب
-                            <div className="text-[9px] font-normal text-amber-600">وزن القطعة غير متوفر</div>
+                            {language === 'ar' ? 'غير محسوب' : 'Not Calculated'}
+                            <div className="text-[9px] font-normal text-amber-600">{language === 'ar' ? 'وزن القطعة غير متوفر' : 'Piece weight not available'}</div>
                           </div>
                         );
                       })()}
@@ -761,10 +771,10 @@ export const ProductionRecordsView: React.FC<ProductionRecordsViewProps> = ({ on
                     <td className="px-4 py-3 font-mono">
                       {rec.totalDowntimeMinutes > 0 ? (
                         <span className="text-rose-700 font-bold bg-rose-50 px-2 py-0.5 rounded">
-                          {rec.totalDowntimeMinutes} د
+                          {rec.totalDowntimeMinutes} {language === 'ar' ? 'د' : 'min'}
                         </span>
                       ) : (
-                        <span className="text-emerald-700 font-semibold">0 د</span>
+                        <span className="text-emerald-700 font-semibold">0 {language === 'ar' ? 'د' : 'min'}</span>
                       )}
                     </td>
 
@@ -774,7 +784,7 @@ export const ProductionRecordsView: React.FC<ProductionRecordsViewProps> = ({ on
                           type="button"
                           onClick={() => handleOpenEdit(rec)}
                           className="w-7 h-7 rounded-lg flex items-center justify-center text-slate-500 hover:text-slate-900 hover:bg-slate-100 transition-colors"
-                          title="تعديل"
+                          title={language === 'ar' ? 'تعديل' : 'Edit'}
                         >
                           <Edit className="w-3.5 h-3.5" />
                         </button>
@@ -782,7 +792,7 @@ export const ProductionRecordsView: React.FC<ProductionRecordsViewProps> = ({ on
                           type="button"
                           onClick={() => setDeleteConfirmRecord(rec)}
                           className="w-7 h-7 rounded-lg flex items-center justify-center text-slate-400 hover:text-rose-600 hover:bg-rose-50 transition-colors"
-                          title="حذف"
+                          title={language === 'ar' ? 'حذف' : 'Delete'}
                         >
                           <Trash2 className="w-3.5 h-3.5" />
                         </button>
@@ -801,15 +811,15 @@ export const ProductionRecordsView: React.FC<ProductionRecordsViewProps> = ({ on
       <Modal
         isOpen={isEditModalOpen}
         onClose={() => setIsEditModalOpen(false)}
-        title="تعديل سجل الإنتاج"
-        subtitle="يتم تحديث وإعادة حساب الأوزان ونسب الهالك تلقائياً في Firestore"
+        title={language === 'ar' ? 'تعديل سجل الإنتاج' : 'Edit Production Record'}
+        subtitle={language === 'ar' ? 'يتم تحديث وإعادة حساب الأوزان ونسب الهالك تلقائياً في Firestore' : 'Weights and waste rates are automatically recalculated and updated in Firestore'}
         maxWidth="lg"
       >
         {editingRecord && (
           <form onSubmit={handleSaveEdit} className="space-y-4 text-xs">
             <div className="grid grid-cols-2 gap-3">
               <div>
-                <label className="block font-bold text-slate-700 mb-1">تاريخ الإنتاج</label>
+                <label className="block font-bold text-slate-700 mb-1">{language === 'ar' ? 'تاريخ الإنتاج' : 'Production Date'}</label>
                 <input
                   type="date"
                   required
@@ -819,7 +829,7 @@ export const ProductionRecordsView: React.FC<ProductionRecordsViewProps> = ({ on
                 />
               </div>
               <div>
-                <label className="block font-bold text-slate-700 mb-1">وزن القطعة (كجم)</label>
+                <label className="block font-bold text-slate-700 mb-1">{language === 'ar' ? 'وزن القطعة (كجم)' : 'Piece Weight (kg)'}</label>
                 <input
                   type="number"
                   step="0.01"
@@ -833,7 +843,7 @@ export const ProductionRecordsView: React.FC<ProductionRecordsViewProps> = ({ on
 
             <div className="grid grid-cols-2 gap-3">
               <div>
-                <label className="block font-bold text-slate-700 mb-1">إجمالي كمية الإنتاج (قطع)</label>
+                <label className="block font-bold text-slate-700 mb-1">{language === 'ar' ? 'إجمالي كمية الإنتاج (قطع)' : 'Total Production Quantity (pcs)'}</label>
                 <input
                   type="number"
                   required
@@ -844,7 +854,7 @@ export const ProductionRecordsView: React.FC<ProductionRecordsViewProps> = ({ on
                 />
               </div>
               <div>
-                <label className="block font-bold text-slate-700 mb-1">كمية الهالك (قطع)</label>
+                <label className="block font-bold text-slate-700 mb-1">{language === 'ar' ? 'كمية الهالك (قطع)' : 'Waste Quantity (pcs)'}</label>
                 <input
                   type="number"
                   required
@@ -857,7 +867,7 @@ export const ProductionRecordsView: React.FC<ProductionRecordsViewProps> = ({ on
             </div>
 
             <div>
-              <label className="block font-bold text-slate-700 mb-1">ملاحظات التشغيل</label>
+              <label className="block font-bold text-slate-700 mb-1">{language === 'ar' ? 'ملاحظات التشغيل' : 'Operation Notes'}</label>
               <input
                 type="text"
                 value={editingRecord.notes || ''}
@@ -872,14 +882,14 @@ export const ProductionRecordsView: React.FC<ProductionRecordsViewProps> = ({ on
                 onClick={() => setIsEditModalOpen(false)}
                 className="px-4 py-2 font-bold text-slate-600 hover:bg-slate-100 rounded-xl"
               >
-                إلغاء
+                {language === 'ar' ? 'إلغاء' : 'Cancel'}
               </button>
               <button
                 type="submit"
                 disabled={isUpdating}
                 className="px-5 py-2 bg-slate-900 hover:bg-slate-800 text-white font-bold rounded-xl shadow-xs flex items-center gap-1.5"
               >
-                {isUpdating ? 'جارٍ الحفظ...' : 'حفظ التعديلات'}
+                {isUpdating ? (language === 'ar' ? 'جارٍ الحفظ...' : 'Saving...') : (language === 'ar' ? 'حفظ التعديلات' : 'Save Changes')}
               </button>
             </div>
           </form>
@@ -890,12 +900,16 @@ export const ProductionRecordsView: React.FC<ProductionRecordsViewProps> = ({ on
       <Modal
         isOpen={!!deleteConfirmRecord}
         onClose={() => setDeleteConfirmRecord(null)}
-        title="تأكيد حذف سجل الإنتاج"
+        title={language === 'ar' ? 'تأكيد حذف سجل الإنتاج' : 'Confirm Production Record Deletion'}
         maxWidth="sm"
       >
         <div className="space-y-4 text-xs">
           <p className="text-slate-600 leading-relaxed">
-            هل أنت متأكد من رغبتك في حذف سجل تشغيلة بتاريخ <span className="font-bold text-slate-900">{deleteConfirmRecord?.date}</span> لمنتج <span className="font-bold text-slate-900">{deleteConfirmRecord?.productName}</span>؟
+            {language === 'ar' ? (
+              <>هل أنت متأكد من رغبتك في حذف سجل تشغيلة بتاريخ <span className="font-bold text-slate-900">{deleteConfirmRecord?.date}</span> لمنتج <span className="font-bold text-slate-900">{deleteConfirmRecord?.productName}</span>؟</>
+            ) : (
+              <>Are you sure you want to delete the record dated <span className="font-bold text-slate-900">{deleteConfirmRecord?.date}</span> for product <span className="font-bold text-slate-900">{deleteConfirmRecord?.productName}</span>?</>
+            )}
           </p>
           <div className="flex items-center justify-end gap-2 pt-2">
             <button
@@ -903,7 +917,7 @@ export const ProductionRecordsView: React.FC<ProductionRecordsViewProps> = ({ on
               onClick={() => setDeleteConfirmRecord(null)}
               className="px-3.5 py-2 font-bold text-slate-600 hover:bg-slate-100 rounded-xl"
             >
-              إلغاء
+              {language === 'ar' ? 'إلغاء' : 'Cancel'}
             </button>
             <button
               id="confirm-delete-record-btn"
@@ -911,7 +925,7 @@ export const ProductionRecordsView: React.FC<ProductionRecordsViewProps> = ({ on
               onClick={handleDelete}
               className="px-4 py-2 font-bold text-white bg-rose-600 hover:bg-rose-700 rounded-xl shadow-xs cursor-pointer"
             >
-              تأكيد الحذف
+              {language === 'ar' ? 'تأكيد الحذف' : 'Confirm Delete'}
             </button>
           </div>
         </div>
@@ -924,7 +938,7 @@ export const ProductionRecordsView: React.FC<ProductionRecordsViewProps> = ({ on
       <Modal
         isOpen={!!bulkDeletePlan}
         onClose={() => { if (!bulkDeleteProgress) setBulkDeletePlan(null); }}
-        title="تأكيد حذف السجلات المحددة"
+        title={language === 'ar' ? 'تأكيد حذف السجلات المحددة' : 'Confirm Delete Selected Records'}
         maxWidth="md"
       >
         {bulkDeletePlan && (
@@ -932,7 +946,9 @@ export const ProductionRecordsView: React.FC<ProductionRecordsViewProps> = ({ on
             <div className="flex items-start gap-2.5 bg-rose-50 border border-rose-200 rounded-xl px-4 py-3">
               <AlertCircle className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
               <p className="text-rose-900 font-bold leading-relaxed">
-                {`سيتم حذف ${bulkDeletePlan.targetIds.length} سجل من سجلات الإنتاج نهائيًا. هذا الإجراء لا يمكن التراجع عنه من خلال النظام الحالي. هل تريد المتابعة؟`}
+                {language === 'ar'
+                  ? `سيتم حذف ${bulkDeletePlan.targetIds.length} سجل من سجلات الإنتاج نهائيًا. هذا الإجراء لا يمكن التراجع عنه من خلال النظام الحالي. هل تريد المتابعة؟`
+                  : `${bulkDeletePlan.targetIds.length} production records will be permanently deleted. This action cannot be undone through the current system. Continue?`}
               </p>
             </div>
             <p className="text-[11px] text-slate-500" dir="ltr">
@@ -940,7 +956,7 @@ export const ProductionRecordsView: React.FC<ProductionRecordsViewProps> = ({ on
             </p>
             {bulkDeleteProgress && (
               <p className="font-bold text-slate-700">
-                جارٍ الحذف: {bulkDeleteProgress.done} / {bulkDeleteProgress.total}
+                {language === 'ar' ? 'جارٍ الحذف' : 'Deleting'}: {bulkDeleteProgress.done} / {bulkDeleteProgress.total}
               </p>
             )}
             <div className="flex items-center justify-end gap-2 pt-2">
@@ -950,7 +966,7 @@ export const ProductionRecordsView: React.FC<ProductionRecordsViewProps> = ({ on
                 disabled={!!bulkDeleteProgress}
                 className="px-3.5 py-2 font-bold text-slate-600 hover:bg-slate-100 disabled:opacity-50 rounded-xl cursor-pointer"
               >
-                إلغاء
+                {language === 'ar' ? 'إلغاء' : 'Cancel'}
               </button>
               <button
                 id="production-records-bulk-delete-confirm-btn"
@@ -959,7 +975,7 @@ export const ProductionRecordsView: React.FC<ProductionRecordsViewProps> = ({ on
                 disabled={!!bulkDeleteProgress}
                 className="px-4 py-2 font-bold text-white bg-rose-600 hover:bg-rose-700 disabled:opacity-50 rounded-xl shadow-xs cursor-pointer"
               >
-                {bulkDeleteProgress ? 'جارٍ الحذف...' : 'تأكيد الحذف'}
+                {bulkDeleteProgress ? (language === 'ar' ? 'جارٍ الحذف...' : 'Deleting...') : (language === 'ar' ? 'تأكيد الحذف' : 'Confirm Delete')}
               </button>
             </div>
           </div>
@@ -970,33 +986,33 @@ export const ProductionRecordsView: React.FC<ProductionRecordsViewProps> = ({ on
       <Modal
         isOpen={!!bulkDeleteOutcome}
         onClose={() => setBulkDeleteOutcome(null)}
-        title="نتيجة حذف السجلات المحددة"
+        title={language === 'ar' ? 'نتيجة حذف السجلات المحددة' : 'Delete Selected Records - Result'}
         maxWidth="md"
       >
         {bulkDeleteOutcome && (
           <div id="production-records-bulk-delete-summary" className="space-y-3 text-xs">
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
               <div className="rounded-xl px-3 py-2 bg-emerald-50 border border-emerald-200 text-emerald-800">
-                <p className="text-[10px] font-bold">تم الحذف بنجاح</p>
+                <p className="text-[10px] font-bold">{language === 'ar' ? 'تم الحذف بنجاح' : 'Successfully Deleted'}</p>
                 <p className="text-lg font-black">{bulkDeleteOutcome.successCount}</p>
               </div>
               <div className="rounded-xl px-3 py-2 bg-rose-50 border border-rose-200 text-rose-800">
-                <p className="text-[10px] font-bold">فشل</p>
+                <p className="text-[10px] font-bold">{language === 'ar' ? 'فشل' : 'Failed'}</p>
                 <p className="text-lg font-black">{bulkDeleteOutcome.failedCount}</p>
               </div>
               <div className="rounded-xl px-3 py-2 bg-amber-50 border border-amber-200 text-amber-800">
-                <p className="text-[10px] font-bold">تم تخطيه (محذوف مسبقًا)</p>
+                <p className="text-[10px] font-bold">{language === 'ar' ? 'تم تخطيه (محذوف مسبقًا)' : 'Skipped (already removed)'}</p>
                 <p className="text-lg font-black">{bulkDeleteOutcome.skippedCount}</p>
               </div>
               <div className="rounded-xl px-3 py-2 bg-slate-100 text-slate-800">
-                <p className="text-[10px] font-bold">المحدد</p>
+                <p className="text-[10px] font-bold">{language === 'ar' ? 'المحدد' : 'Selected'}</p>
                 <p className="text-lg font-black">{bulkDeleteOutcome.selectedCount}</p>
               </div>
             </div>
             {bulkDeleteOutcome.failed.length > 0 && (
               <div className="space-y-1">
                 <p className="font-bold text-rose-800">
-                  السجلات التي فشل حذفها ما زالت موجودة ومحددة في الجدول - يمكنك إعادة المحاولة:
+                  {language === 'ar' ? 'السجلات التي فشل حذفها ما زالت موجودة ومحددة في الجدول - يمكنك إعادة المحاولة:' : 'Records that failed to delete still exist and stay selected in the table - you can retry:'}
                 </p>
                 <ul className="max-h-40 overflow-y-auto space-y-0.5 font-mono text-[11px] text-slate-700">
                   {bulkDeleteOutcome.failed.map((f) => (
@@ -1011,7 +1027,7 @@ export const ProductionRecordsView: React.FC<ProductionRecordsViewProps> = ({ on
                 onClick={() => setBulkDeleteOutcome(null)}
                 className="px-4 py-2 font-bold text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-xl cursor-pointer"
               >
-                إغلاق
+                {language === 'ar' ? 'إغلاق' : 'Close'}
               </button>
             </div>
           </div>

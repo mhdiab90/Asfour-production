@@ -50,6 +50,23 @@ export const MASTER_DATA_COLLECTIONS: Record<MasterDataTab, string> = {
   // rather than a new collection name, so existing mill master records are
   // never orphaned by giving them a proper Master Data tab.
   mills: 'chineseMills',
+  // Existing collections, populated until now only by the Tube/Ball Mills
+  // Historical Import (TUBE_BALL_MILL_MASTER_COLLECTION / BUNKER_COLLECTION) -
+  // the same names, so no record is orphaned by giving them a Master Data tab.
+  tubeBallMills: 'tubeBallMills',
+  bunkers: 'bunkers',
+  // Rotary Kiln equipment master (Phase 1 Step 1D) - a new collection.
+  rotaryKilns: 'rotaryKilns',
+  // ASFOUR Job References and Batches (Phase 1 Step 1E) - new collections;
+  // document id = ASFOUR identity, business reference stored as a field.
+  jobReferences: 'jobReferences',
+  batches: 'batches',
+  // Bills of Materials (Phase 1 Step 2). Their versions are 'bomVersions'
+  // (bomPure.BOM_VERSION_COLLECTION), written through the same services.
+  boms: 'boms',
+  // Routings (Phase 1 Step 3). Their versions are 'routingVersions'
+  // (routingPure.ROUTING_VERSION_COLLECTION), written through the same services.
+  routings: 'routings',
   customers: 'customers',
   shifts: 'shifts',
   materials: 'materials',

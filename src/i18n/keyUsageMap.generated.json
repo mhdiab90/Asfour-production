@@ -1,0 +1,328 @@
+{
+  "loading": [
+    {
+      "file": "src/App.tsx",
+      "screen": "App"
+    },
+    {
+      "file": "src/components/users/UserManagementView.tsx",
+      "screen": "User Management View"
+    }
+  ],
+  "welcome": [
+    {
+      "file": "src/App.tsx",
+      "screen": "App"
+    }
+  ],
+  "search_placeholder": [
+    {
+      "file": "src/components/admin/LanguageCoverageModal.tsx",
+      "screen": "Language Coverage Modal"
+    }
+  ],
+  "close": [
+    {
+      "file": "src/components/admin/LanguageCoverageModal.tsx",
+      "screen": "Language Coverage Modal"
+    },
+    {
+      "file": "src/components/common/AboutModal.tsx",
+      "screen": "About Modal"
+    }
+  ],
+  "login_admin_tab": [
+    {
+      "file": "src/components/auth/LoginView.tsx",
+      "screen": "Login View"
+    }
+  ],
+  "login_operator_tab": [
+    {
+      "file": "src/components/auth/LoginView.tsx",
+      "screen": "Login View"
+    }
+  ],
+  "login_admin_subtitle": [
+    {
+      "file": "src/components/auth/LoginView.tsx",
+      "screen": "Login View"
+    }
+  ],
+  "login_operator_subtitle": [
+    {
+      "file": "src/components/auth/LoginView.tsx",
+      "screen": "Login View"
+    }
+  ],
+  "email_username": [
+    {
+      "file": "src/components/auth/LoginView.tsx",
+      "screen": "Login View"
+    },
+    {
+      "file": "src/components/users/UserManagementView.tsx",
+      "screen": "User Management View"
+    }
+  ],
+  "password_label": [
+    {
+      "file": "src/components/auth/LoginView.tsx",
+      "screen": "Login View"
+    },
+    {
+      "file": "src/components/users/UserManagementView.tsx",
+      "screen": "User Management View"
+    }
+  ],
+  "login_authenticating": [
+    {
+      "file": "src/components/auth/LoginView.tsx",
+      "screen": "Login View"
+    }
+  ],
+  "login_btn_admin": [
+    {
+      "file": "src/components/auth/LoginView.tsx",
+      "screen": "Login View"
+    }
+  ],
+  "login_btn_operator": [
+    {
+      "file": "src/components/auth/LoginView.tsx",
+      "screen": "Login View"
+    }
+  ],
+  "login_security_notice": [
+    {
+      "file": "src/components/auth/LoginView.tsx",
+      "screen": "Login View"
+    }
+  ],
+  "about_title": [
+    {
+      "file": "src/components/common/AboutModal.tsx",
+      "screen": "About Modal"
+    }
+  ],
+  "about_version": [
+    {
+      "file": "src/components/common/AboutModal.tsx",
+      "screen": "About Modal"
+    }
+  ],
+  "about_schema": [
+    {
+      "file": "src/components/common/AboutModal.tsx",
+      "screen": "About Modal"
+    }
+  ],
+  "about_firebase_project": [
+    {
+      "file": "src/components/common/AboutModal.tsx",
+      "screen": "About Modal"
+    }
+  ],
+  "about_cloudflare_site": [
+    {
+      "file": "src/components/common/AboutModal.tsx",
+      "screen": "About Modal"
+    }
+  ],
+  "about_developer_title": [
+    {
+      "file": "src/components/common/AboutModal.tsx",
+      "screen": "About Modal"
+    }
+  ],
+  "nav_dashboard": [
+    {
+      "file": "src/components/layout/Sidebar.tsx",
+      "screen": "Sidebar"
+    }
+  ],
+  "nav_production_entry": [
+    {
+      "file": "src/components/layout/Sidebar.tsx",
+      "screen": "Sidebar"
+    }
+  ],
+  "nav_production_records": [
+    {
+      "file": "src/components/layout/Sidebar.tsx",
+      "screen": "Sidebar"
+    }
+  ],
+  "nav_data_review": [
+    {
+      "file": "src/components/layout/Sidebar.tsx",
+      "screen": "Sidebar"
+    }
+  ],
+  "nav_ai_assistant": [
+    {
+      "file": "src/components/layout/Sidebar.tsx",
+      "screen": "Sidebar"
+    }
+  ],
+  "nav_raw_materials": [
+    {
+      "file": "src/components/layout/Sidebar.tsx",
+      "screen": "Sidebar"
+    }
+  ],
+  "nav_master_data": [
+    {
+      "file": "src/components/layout/Sidebar.tsx",
+      "screen": "Sidebar"
+    }
+  ],
+  "nav_historical_import": [
+    {
+      "file": "src/components/layout/Sidebar.tsx",
+      "screen": "Sidebar"
+    }
+  ],
+  "nav_user_management": [
+    {
+      "file": "src/components/layout/Sidebar.tsx",
+      "screen": "Sidebar"
+    },
+    {
+      "file": "src/components/users/UserManagementView.tsx",
+      "screen": "User Management View"
+    }
+  ],
+  "nav_reports": [
+    {
+      "file": "src/components/layout/Sidebar.tsx",
+      "screen": "Sidebar"
+    }
+  ],
+  "nav_branding": [
+    {
+      "file": "src/components/layout/Sidebar.tsx",
+      "screen": "Sidebar"
+    }
+  ],
+  "nav_backups": [
+    {
+      "file": "src/components/layout/Sidebar.tsx",
+      "screen": "Sidebar"
+    }
+  ],
+  "nav_restore": [
+    {
+      "file": "src/components/layout/Sidebar.tsx",
+      "screen": "Sidebar"
+    }
+  ],
+  "nav_system_health": [
+    {
+      "file": "src/components/layout/Sidebar.tsx",
+      "screen": "Sidebar"
+    }
+  ],
+  "nav_versions": [
+    {
+      "file": "src/components/layout/Sidebar.tsx",
+      "screen": "Sidebar"
+    }
+  ],
+  "nav_settings": [
+    {
+      "file": "src/components/layout/Sidebar.tsx",
+      "screen": "Sidebar"
+    }
+  ],
+  "nav_group_operations": [
+    {
+      "file": "src/components/layout/Sidebar.tsx",
+      "screen": "Sidebar"
+    }
+  ],
+  "nav_group_management": [
+    {
+      "file": "src/components/layout/Sidebar.tsx",
+      "screen": "Sidebar"
+    }
+  ],
+  "nav_group_system": [
+    {
+      "file": "src/components/layout/Sidebar.tsx",
+      "screen": "Sidebar"
+    }
+  ],
+  "developed_by_short": [
+    {
+      "file": "src/components/layout/Sidebar.tsx",
+      "screen": "Sidebar"
+    }
+  ],
+  "search": [
+    {
+      "file": "src/components/users/UserManagementView.tsx",
+      "screen": "User Management View"
+    }
+  ],
+  "active": [
+    {
+      "file": "src/components/users/UserManagementView.tsx",
+      "screen": "User Management View"
+    }
+  ],
+  "inactive": [
+    {
+      "file": "src/components/users/UserManagementView.tsx",
+      "screen": "User Management View"
+    }
+  ],
+  "delete": [
+    {
+      "file": "src/components/users/UserManagementView.tsx",
+      "screen": "User Management View"
+    }
+  ],
+  "create_user_title": [
+    {
+      "file": "src/components/users/UserManagementView.tsx",
+      "screen": "User Management View"
+    }
+  ],
+  "link_employee": [
+    {
+      "file": "src/components/users/UserManagementView.tsx",
+      "screen": "User Management View"
+    }
+  ],
+  "operator_station": [
+    {
+      "file": "src/components/users/UserManagementView.tsx",
+      "screen": "User Management View"
+    }
+  ],
+  "cancel": [
+    {
+      "file": "src/components/users/UserManagementView.tsx",
+      "screen": "User Management View"
+    }
+  ],
+  "edit_user_title": [
+    {
+      "file": "src/components/users/UserManagementView.tsx",
+      "screen": "User Management View"
+    }
+  ],
+  "save": [
+    {
+      "file": "src/components/users/UserManagementView.tsx",
+      "screen": "User Management View"
+    }
+  ],
+  "confirm": [
+    {
+      "file": "src/components/users/UserManagementView.tsx",
+      "screen": "User Management View"
+    }
+  ]
+}

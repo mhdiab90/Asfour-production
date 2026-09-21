@@ -62,13 +62,16 @@ const VIEW = 'src/components/masterData/MasterDataView.tsx';
 // records.
 // ==================================================
 
-test('A1. TEST 2 - the primary navigation is exactly the seven categories', () => {
+// Phase 1 Step 1C added the Operation Master as an eighth category, on purpose.
+test('A1. TEST 2 - the primary navigation is exactly the seven categories plus Operations and the Equipment and Jobs & Batches groups', () => {
   const ids = [...panels.PANEL_CATEGORY_IDS];
+  // Operations: Phase 1 Step 1C. Equipment (one group, not one entry per machine type): Step 1D.
+  // Jobs & Batches (one group): Step 1E.
   assert.deepEqual(
     ids.sort(),
-    ['customers', 'employees', 'financialAccounts', 'hierarchicalCostCenters', 'materials', 'products', 'shifts'],
+    ['customers', 'employees', 'equipment', 'financialAccounts', 'hierarchicalCostCenters', 'jobsAndBatches', 'materials', 'operations', 'products', 'shifts'],
   );
-  assert.equal(panels.panelCategories().length, 7);
+  assert.equal(panels.panelCategories().length, 10);
   // Every one resolves to a real registry entry with labels and a tab.
   for (const category of panels.panelCategories()) {
     assert.ok(category.labelAr && category.labelEn, `${category.id} must carry both labels`);

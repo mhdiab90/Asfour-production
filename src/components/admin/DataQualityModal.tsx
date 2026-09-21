@@ -76,40 +76,49 @@ export const DataQualityModal: React.FC<DataQualityModalProps> = ({ isOpen, onCl
     totalFurnaces: 0,
     totalCars: 0,
   });
+  /** §5/§6 - the full `production` history is never fetched as part of the
+   * default (auto-run-on-open) diagnostic; it's large enough (the entire
+   * historical import record) that bundling it into the same burst as
+   * `products` + 5 other collections is what previously triggered 429
+   * RESOURCE_EXHAUSTED. The production-records integrity check is opt-in via
+   * runProductionRecordsCheck() instead, isolated from everything else. */
+  const [productionCheckStatus, setProductionCheckStatus] = useState<'NOT_RUN_FOR_LARGE_DATASET' | 'RUNNING' | 'COMPLETED'>('NOT_RUN_FOR_LARGE_DATASET');
 
   const runQualityDiagnostic = async () => {
     setIsRunningCheck(true);
     setIssues([]);
+    setProductionCheckStatus('NOT_RUN_FOR_LARGE_DATASET');
 
     try {
+      // §1/§2 - small collections fetched together (cheap/bounded); `products`
+      // (thousands of records) is fetched separately and sequenced after,
+      // instead of joining an 8-way burst. `production` is not fetched here
+      // at all - see runProductionRecordsCheck (opt-in, §5).
       const [
-        products,
         productTypes,
         employees,
         presses,
         furnaces,
         furnaceCars,
         customers,
-        productionRecords,
       ] = await Promise.all([
-        fetchMasterData<Product>('products'),
         fetchProductTypes(),
         fetchMasterData<Employee>('employees'),
         fetchMasterData<Press>('presses'),
         fetchMasterData<Furnace>('furnaces'),
         fetchMasterData<FurnaceCar>('furnaceCars'),
         fetchMasterData<Customer>('customers'),
-        fetchProductionRecords(),
       ]);
+      const products = await fetchMasterData<Product>('products');
 
-      setStats({
+      setStats((prev) => ({
+        ...prev,
         totalProducts: products.length,
         totalEmployees: employees.length,
-        totalProductionRecords: productionRecords.length,
         totalPresses: presses.length,
         totalFurnaces: furnaces.length,
         totalCars: furnaceCars.length,
-      });
+      }));
 
       const foundIssues: QualityIssue[] = [];
       const prefixSet = new Set(productTypes.map((pt) => pt.prefixCode.toUpperCase()));
@@ -257,45 +266,63 @@ export const DataQualityModal: React.FC<DataQualityModalProps> = ({ isOpen, onCl
         }
       }
 
-      // 4. PRODUCTION RECORDS INTEGRITY AUDIT
-      for (const rec of productionRecords) {
-        const issuesInRecord: string[] = [];
-
-        if (!rec.shiftId && !rec.shiftName) issuesInRecord.push('الوردية');
-        if (!rec.pressId && !rec.pressName) issuesInRecord.push('المكبس');
-        if (!rec.productId && !rec.productName) issuesInRecord.push('المنتج');
-
-        if (issuesInRecord.length > 0) {
-          foundIssues.push({
-            id: `rec-missing-${rec.id}`,
-            category: 'PRODUCTION',
-            severity: 'HIGH',
-            title: 'سجل إنتاج يفتقر إلى معرفات أساسية',
-            description: `سجل الإنتاج بتاريخ (${rec.date || 'بدون تاريخ'}) يفتقر إلى بيانات: ${issuesInRecord.join('، ')}.`,
-            entityId: rec.id,
-            suggestedAction: 'مراجعة السجل من شاشة سجلات الإنتاج.',
-          });
-        }
-
-        // Check if employee relations are missing snapshots
-        if (rec.employeeIds && rec.employeeIds.length > 0 && (!rec.employeeNames || rec.employeeNames.length === 0)) {
-          foundIssues.push({
-            id: `rec-emp-snap-${rec.id}`,
-            category: 'PRODUCTION',
-            severity: 'INFO',
-            title: 'سجل إنتاج قديم بدون لقطة أسماء العمال (Missing Name Snapshot)',
-            description: `سجل الإنتاج بتاريخ (${rec.date}) يحتوي على معرفات العمال بدون لقطة الأسماء النصية المباشرة.`,
-            entityId: rec.id,
-            suggestedAction: 'النظام يدعم التوافقية العكسية تلقائياً.',
-          });
-        }
-      }
-
       setIssues(foundIssues);
     } catch (err: any) {
       console.error('Error running data quality diagnostic:', err);
     } finally {
       setIsRunningCheck(false);
+    }
+  };
+
+  /** §5 - pure, unit-testable in isolation: the actual PRODUCTION RECORDS INTEGRITY AUDIT logic, extracted so it can run against an isolated, opt-in fetch instead of the default burst. */
+  function detectProductionRecordIssues(productionRecords: ProductionRecord[]): QualityIssue[] {
+    const found: QualityIssue[] = [];
+    for (const rec of productionRecords) {
+      const issuesInRecord: string[] = [];
+
+      if (!rec.shiftId && !rec.shiftName) issuesInRecord.push('الوردية');
+      if (!rec.pressId && !rec.pressName) issuesInRecord.push('المكبس');
+      if (!rec.productId && !rec.productName) issuesInRecord.push('المنتج');
+
+      if (issuesInRecord.length > 0) {
+        found.push({
+          id: `rec-missing-${rec.id}`,
+          category: 'PRODUCTION',
+          severity: 'HIGH',
+          title: 'سجل إنتاج يفتقر إلى معرفات أساسية',
+          description: `سجل الإنتاج بتاريخ (${rec.date || 'بدون تاريخ'}) يفتقر إلى بيانات: ${issuesInRecord.join('، ')}.`,
+          entityId: rec.id,
+          suggestedAction: 'مراجعة السجل من شاشة سجلات الإنتاج.',
+        });
+      }
+
+      if (rec.employeeIds && rec.employeeIds.length > 0 && (!rec.employeeNames || rec.employeeNames.length === 0)) {
+        found.push({
+          id: `rec-emp-snap-${rec.id}`,
+          category: 'PRODUCTION',
+          severity: 'INFO',
+          title: 'سجل إنتاج قديم بدون لقطة أسماء العمال (Missing Name Snapshot)',
+          description: `سجل الإنتاج بتاريخ (${rec.date}) يحتوي على معرفات العمال بدون لقطة الأسماء النصية المباشرة.`,
+          entityId: rec.id,
+          suggestedAction: 'النظام يدعم التوافقية العكسية تلقائياً.',
+        });
+      }
+    }
+    return found;
+  }
+
+  /** §5 - explicit opt-in (never auto-run): the only place this modal reads the full `production` history, isolated from the default diagnostic's burst. */
+  const runProductionRecordsCheck = async () => {
+    setProductionCheckStatus('RUNNING');
+    try {
+      const productionRecords = await fetchProductionRecords();
+      setStats((prev) => ({ ...prev, totalProductionRecords: productionRecords.length }));
+      const productionIssues = detectProductionRecordIssues(productionRecords);
+      setIssues((prev) => [...prev.filter((i) => i.category !== 'PRODUCTION'), ...productionIssues]);
+      setProductionCheckStatus('COMPLETED');
+    } catch (err) {
+      console.error('Error running production records check:', err);
+      setProductionCheckStatus('NOT_RUN_FOR_LARGE_DATASET');
     }
   };
 
@@ -372,9 +399,31 @@ export const DataQualityModal: React.FC<DataQualityModalProps> = ({ isOpen, onCl
           </div>
           <div className="bg-slate-100/70 p-2 rounded-xl border border-slate-200">
             <span className="text-[10px] text-slate-500 block">سجلات الإنتاج</span>
-            <span className="text-sm font-black text-slate-900">{stats.totalProductionRecords}</span>
+            {productionCheckStatus === 'COMPLETED' ? (
+              <span className="text-sm font-black text-slate-900">{stats.totalProductionRecords}</span>
+            ) : (
+              <span className="text-[10px] font-bold text-amber-600">{productionCheckStatus === 'RUNNING' ? 'جاري الفحص...' : 'لم يُفحص'}</span>
+            )}
           </div>
         </div>
+
+        {/* §5 - the production-records integrity check (section 4) is opt-in and never auto-run: it's the one check that would otherwise require reading the entire historical production collection, which is what caused the previous 429 RESOURCE_EXHAUSTED incident. */}
+        {productionCheckStatus !== 'COMPLETED' && (
+          <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2">
+            <p className="text-[11px] text-amber-900 font-bold">
+              فحص سلامة سجلات الإنتاج (الوردية/المكبس/المنتج المفقودة) يتطلب قراءة كامل السجل التاريخي للإنتاج - لم يتم تشغيله تلقائيًا لتجنب حمل قراءة ضخم. يمكنك تشغيله يدويًا عند الحاجة.
+            </p>
+            <button
+              type="button"
+              onClick={runProductionRecordsCheck}
+              disabled={productionCheckStatus === 'RUNNING'}
+              className="shrink-0 flex items-center gap-1.5 px-3 py-1.5 bg-amber-600 hover:bg-amber-700 text-white font-bold text-[11px] rounded-lg cursor-pointer disabled:opacity-50"
+            >
+              <RefreshCw className={`w-3.5 h-3.5 ${productionCheckStatus === 'RUNNING' ? 'animate-spin' : ''}`} />
+              تشغيل فحص سجلات الإنتاج
+            </button>
+          </div>
+        )}
 
         {/* Severity Summary Filter Pills */}
         <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-200 pb-3">

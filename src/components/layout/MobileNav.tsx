@@ -35,7 +35,7 @@ export const MobileNav: React.FC<MobileNavProps> = ({ currentPage, onNavigate })
   const items = isProductionUser ? operatorItems : adminItems;
 
   return (
-    <div className="lg:hidden fixed bottom-0 left-0 right-0 z-40 bg-slate-900 border-t border-slate-800 px-2 py-1.5 flex items-center justify-around shadow-2xl">
+    <div className="no-print lg:hidden fixed bottom-0 left-0 right-0 z-40 bg-slate-900 border-t border-slate-800 px-2 py-1.5 flex items-center justify-around shadow-2xl">
       {items.map((item) => {
         const Icon = item.icon;
         const isActive = currentPage === item.id;

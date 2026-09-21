@@ -124,6 +124,23 @@ export interface MasterDataCategory {
    * Set only where the equipment master records genuinely carry that field.
    */
   equipmentHierarchy?: boolean;
+  /**
+   * A navigation GROUP rather than a store: the categories offered beneath it,
+   * in order. The group's own `tab` is the one opened first. Used only by the
+   * Equipment group, so equipment keeps one entry in the Master Data navigation
+   * instead of one per machine type.
+   *
+   * A real category may list sub-categories too (Products lists itself and
+   * Bills of Materials): it stays a real store, and its own tab is the first.
+   */
+  subCategoryIds?: string[];
+  /**
+   * Phase 1 Step 8C: the field a STAGE RECORD stores to name the machine of this
+   * equipment category (e.g. a rotary kiln record's `rotaryKilnId`). Distinct
+   * from `legacyProductionFields`, which are the pressing-record fields the
+   * Production Review filters by - a stage equipment field adds no filter.
+   */
+  stageEquipmentField?: string;
 }
 
 export const MASTER_DATA_CATEGORIES: MasterDataCategory[] = [
@@ -169,6 +186,8 @@ export const MASTER_DATA_CATEGORIES: MasterDataCategory[] = [
     // VERIFIED: production records carry productId and productCode.
     productionFilter: 'productId',
     legacyProductionFields: ['productId', 'productCode'],
+    // Bills of Materials (Phase 1 Step 2) and Routings (Step 3) sit beneath Products.
+    subCategoryIds: ['products', 'boms', 'routings'],
   },
   {
     id: 'customers',
@@ -254,6 +273,8 @@ export const MASTER_DATA_CATEGORIES: MasterDataCategory[] = [
   },
   {
     id: 'mills',
+    // Step 8C: the Chinese Mills form now names the mill from this master.
+    stageEquipmentField: 'millId',
     labelAr: 'الطواحين الصينية',
     labelEn: 'Chinese Mills',
     collection: 'chineseMills',
@@ -264,6 +285,170 @@ export const MASTER_DATA_CATEGORIES: MasterDataCategory[] = [
     supportsImport: true,
     supportsEdit: true,
     productionFilter: null,
+  },
+  {
+    id: 'furnaceCars',
+    labelAr: 'عربات الأفران',
+    labelEn: 'Furnace Cars',
+    collection: 'furnaceCars',
+    tab: 'furnaceCars',
+    codeField: 'code',
+    displayFields: ['carNumber', 'code'],
+    searchFields: ['code', 'carNumber'],
+    supportsImport: true,
+    supportsEdit: true,
+    // No production record stores a car id.
+    productionFilter: null,
+  },
+  {
+    id: 'tubeBallMills',
+    labelAr: 'طواحين الأنابيب والكرات',
+    labelEn: 'Tube & Ball Mills',
+    // The existing collection the Tube/Ball Mills Historical Import codes mills
+    // into. A distinct equipment type from Chinese Mills (`mills`).
+    collection: 'tubeBallMills',
+    tab: 'tubeBallMills',
+    // Step 8C: the Tube/Ball Mills form now names the mill from this master.
+    stageEquipmentField: 'tubeBallMillId',
+    codeField: 'code',
+    displayFields: ['name', 'code'],
+    searchFields: ['code', 'name'],
+    supportsImport: false,
+    supportsEdit: true,
+    // Imported stage records carry millTypeId, but the manual entry form writes
+    // only free-text millType, so the relationship does not exist across the
+    // record set - no production filter is claimed.
+    productionFilter: null,
+  },
+  {
+    id: 'bunkers',
+    labelAr: 'البناكر',
+    labelEn: 'Bunkers',
+    // The existing collection the Tube/Ball Mills Historical Import codes
+    // bunkers into. A bunker's own identity is its bunkerNumber; code is optional.
+    collection: 'bunkers',
+    tab: 'bunkers',
+    // Step 8C: the Tube/Ball Mills form now names the bunker from this master.
+    stageEquipmentField: 'bunkerId',
+    codeField: 'code',
+    displayFields: ['name', 'bunkerNumber', 'code'],
+    searchFields: ['code', 'bunkerNumber', 'name'],
+    supportsImport: false,
+    supportsEdit: true,
+    // storageBunker is free text; bunkerAllocations exist only on imported rows.
+    productionFilter: null,
+  },
+  {
+    id: 'rotaryKilns',
+    labelAr: 'الأفران الدوارة',
+    labelEn: 'Rotary Kilns',
+    // Rotary Kiln equipment master (Phase 1 Step 1D). Rotary Furnace records
+    // store free-text machineInfo only, so nothing filters on it.
+    collection: 'rotaryKilns',
+    tab: 'rotaryKilns',
+    // Step 8C: the Rotary Kiln form now names the kiln from this master.
+    stageEquipmentField: 'rotaryKilnId',
+    codeField: 'code',
+    displayFields: ['name', 'code'],
+    searchFields: ['code', 'name'],
+    supportsImport: false,
+    supportsEdit: true,
+    productionFilter: null,
+  },
+  {
+    id: 'equipment',
+    labelAr: 'المعدات',
+    labelEn: 'Equipment',
+    // A navigation group, not a store: the equipment categories stay their own
+    // collections and tabs. One entry keeps the navigation from listing every
+    // machine type as a competing primary source, while still letting users
+    // manage equipment - and its optional hierarchy link - from Master Data.
+    collection: null,
+    tab: 'presses',
+    codeField: 'code',
+    displayFields: ['name', 'code'],
+    searchFields: ['code', 'name'],
+    supportsImport: false,
+    supportsEdit: true,
+    productionFilter: null,
+    subCategoryIds: ['presses', 'furnaces', 'furnaceCars', 'mills', 'tubeBallMills', 'bunkers', 'rotaryKilns'],
+  },
+  {
+    id: 'jobReferences',
+    labelAr: 'أوامر الشغل',
+    labelEn: 'Job References',
+    // ASFOUR Job References (Phase 1 Step 1E) - rules in jobBatchPure.ts.
+    collection: 'jobReferences',
+    tab: 'jobReferences',
+    codeField: 'code',
+    displayFields: ['code'],
+    searchFields: ['code', 'notes'],
+    supportsImport: false,
+    supportsEdit: true,
+    // No production record stores a job reference yet.
+    productionFilter: null,
+  },
+  {
+    id: 'batches',
+    labelAr: 'الدفعات',
+    labelEn: 'Batches',
+    // Batches (Phase 1 Step 1E) - identity only; no genealogy or consumption.
+    collection: 'batches',
+    tab: 'batches',
+    codeField: 'batchNumber',
+    displayFields: ['batchNumber'],
+    searchFields: ['batchNumber', 'notes'],
+    supportsImport: false,
+    supportsEdit: true,
+    // Historical stage records carry a free-text batchNumber, not a batch id.
+    productionFilter: null,
+  },
+  {
+    id: 'boms',
+    labelAr: 'قوائم المواد (BOM)',
+    labelEn: 'Bills of Materials',
+    // Bills of Materials (Phase 1 Step 2) - headers here, versions in
+    // 'bomVersions'. Rules in bomPure.ts. Shown beneath Products.
+    collection: 'boms',
+    tab: 'boms',
+    codeField: 'code',
+    displayFields: ['name', 'code'],
+    searchFields: ['code', 'name', 'notes'],
+    supportsImport: false,
+    supportsEdit: true,
+    // No production record stores a BOM or version id.
+    productionFilter: null,
+  },
+  {
+    id: 'routings',
+    labelAr: 'مسارات التصنيع (Routing)',
+    labelEn: 'Routings',
+    // Routings (Phase 1 Step 3) - headers here, versions in 'routingVersions'.
+    // Rules in routingPure.ts. Shown beneath Products.
+    collection: 'routings',
+    tab: 'routings',
+    codeField: 'code',
+    displayFields: ['name', 'code'],
+    searchFields: ['code', 'name', 'notes'],
+    supportsImport: false,
+    supportsEdit: true,
+    // No production record stores a routing or version id.
+    productionFilter: null,
+  },
+  {
+    id: 'jobsAndBatches',
+    labelAr: 'أوامر الشغل والدفعات',
+    labelEn: 'Jobs & Batches',
+    // A navigation group like Equipment: one entry, two existing-engine tabs.
+    collection: null,
+    tab: 'jobReferences',
+    codeField: 'code',
+    displayFields: ['code'],
+    searchFields: ['code'],
+    supportsImport: false,
+    supportsEdit: true,
+    productionFilter: null,
+    subCategoryIds: ['jobReferences', 'batches'],
   },
   {
     id: 'shifts',
@@ -340,6 +525,25 @@ export const MASTER_DATA_CATEGORIES: MasterDataCategory[] = [
     // NOT a production filter: production records store no cost-centre link.
     productionFilter: null,
   },
+  {
+    id: 'operations',
+    labelAr: 'العمليات الإنتاجية',
+    labelEn: 'Operations',
+    // The Operation Master, stored in the already-registered `stages`
+    // collection (MASTER_DATA_COLLECTIONS.stages). A configuration layer beside
+    // the legacy stage architecture - it replaces nothing. Rules and the save
+    // shape: operationMasterPure.ts.
+    collection: 'stages',
+    tab: 'stages',
+    codeField: 'code',
+    displayFields: ['nameAr', 'code'],
+    searchFields: ['code', 'nameAr', 'nameEn'],
+    supportsImport: false,
+    supportsEdit: true,
+    // NOT a production filter: production records store their legacy stage
+    // (collection / stageType), not an operation id.
+    productionFilter: null,
+  },
 ];
 
 export function getCategory(id: string): MasterDataCategory | undefined {
@@ -389,13 +593,21 @@ export function supportsLegacyProductionFilter(id: string): boolean {
  */
 export const STAGE_EQUIPMENT_CATEGORIES: Record<string, string[]> = {
   pressing: ['presses', 'furnaces'],
-  rotary_furnace: [],
-  chinese_mills: [],
-  tube_ball_mills: [],
+  // Phase 1 Step 8C: these three stages now name their machine from the
+  // existing equipment masters; their free-text fields are kept untouched.
+  rotary_furnace: ['rotaryKilns'],
+  chinese_mills: ['mills'],
+  tube_ball_mills: ['tubeBallMills', 'bunkers'],
   mortar_concrete: [],
   mixing: [],
   lightweight_foam: [],
   sorting: [],
+  // Phase 1 Step 8C-5: the tunnel kiln names its kiln from the existing Furnaces
+  // master (the same furnaceId a pressing record carries). Thermal concrete and
+  // hand-made brick record no machine.
+  thermal_concrete: [],
+  tunnel_kiln: ['furnaces'],
+  handmade_brick: [],
 };
 
 /**
@@ -450,7 +662,29 @@ export function categoryTab(id: string): string | null {
 
 /** Reverse lookup, so an existing tab can highlight the right category. */
 export function categoryForTab(tab: string): MasterDataCategory | undefined {
-  return MASTER_DATA_CATEGORIES.find((c) => c.tab === tab);
+  // A pure navigation group never shadows the real category; a real store that
+  // also lists sub-categories (Products) is still its own tab's category.
+  return MASTER_DATA_CATEGORIES.find((c) => c.tab === tab && !c.subCategoryIds)
+    ?? MASTER_DATA_CATEGORIES.find((c) => c.tab === tab && c.collection != null);
+}
+
+/** The categories listed under a navigation group, in order. Empty for a plain category. */
+export function subCategories(id: string): MasterDataCategory[] {
+  return (getCategory(id)?.subCategoryIds ?? [])
+    .map((s) => getCategory(s))
+    .filter((c): c is MasterDataCategory => Boolean(c));
+}
+
+/**
+ * Which of the given navigation categories owns a tab: the one whose own tab it
+ * is, or the group listing a category with that tab. So a tab opened from
+ * elsewhere (e.g. the assistant) highlights the right navigation entry.
+ */
+export function navigationCategoryIdForTab(tab: string, navigation: readonly MasterDataCategory[]): string | null {
+  const direct = navigation.find((c) => c.tab === tab && !c.subCategoryIds);
+  if (direct) return direct.id;
+  const group = navigation.find((c) => subCategories(c.id).some((s) => s.tab === tab));
+  return group ? group.id : null;
 }
 
 // --- Selection model ---------------------------------------------------------

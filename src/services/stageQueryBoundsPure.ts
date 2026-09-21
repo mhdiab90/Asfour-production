@@ -28,6 +28,10 @@ export const STAGE_COLLECTION_NAMES: Record<ProductionStageType, string> = {
   mixing: 'stage_mixing',
   lightweight_foam: 'stage_lightweight_foam',
   sorting: 'stage_sorting',
+  // Phase 1 Step 8C-5: the remaining production areas, one new collection each.
+  thermal_concrete: 'stage_thermal_concrete',
+  tunnel_kiln: 'stage_tunnel_kiln',
+  handmade_brick: 'stage_handmade_brick',
 };
 
 /**

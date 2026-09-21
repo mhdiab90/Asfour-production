@@ -56,6 +56,19 @@ export const GENERIC_STAGE_DUPLICATE_IDENTITY: Partial<Record<ProductionStageTyp
     productLikeFields: ['productCode'],
     disambiguatorFields: ['customerOrderNumber'],
   },
+  // Phase 1 Step 8C-5 - same shape as mortar: product + batch / order number.
+  thermal_concrete: {
+    productLikeFields: ['productCode'],
+    disambiguatorFields: ['batchNumber', 'manufacturingOrderNumber'],
+  },
+  tunnel_kiln: {
+    productLikeFields: ['productCode'],
+    disambiguatorFields: ['batchNumber', 'manufacturingOrderNumber'],
+  },
+  handmade_brick: {
+    productLikeFields: ['productCode'],
+    disambiguatorFields: ['batchNumber', 'manufacturingOrderNumber'],
+  },
 };
 
 export function hasSafeDuplicateIdentity(stage: ProductionStageType): boolean {

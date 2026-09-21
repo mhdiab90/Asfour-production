@@ -37,7 +37,7 @@ const DEPLOYMENT_ID_INJECTED = typeof __BUILD_DEPLOYMENT_ID__ === 'string' ? __B
 
 export const CURRENT_APP_VERSION: AppVersionInfo = {
   /** Set by the automatic release planner from the classified change set - see releasePlannerPure.ts. */
-  version: '3.20.0',
+  version: '3.21.0',
   buildId: BUILD_ID_INJECTED,
   buildTimestamp: BUILD_TIMESTAMP_INJECTED,
   gitCommit: COMMIT_SHA_INJECTED,
@@ -46,6 +46,20 @@ export const CURRENT_APP_VERSION: AppVersionInfo = {
   environment: 'production',
   releaseDate: '2026-08-22',
   changelog: [
+    {
+      version: '3.21.0',
+      date: '2026-09-21',
+      highlights: [
+        'استيراد حزمة البيانات الأساسية (المنتجات، المواد الخام، قوائم المواد) من شاشة استيراد الكيانات مع مراجعة وموافقة قبل أي كتابة',
+        'وحدات قياس معتمدة جديدة: متر مربع (m²) ومتر - دون أي تحويل تلقائي للكميات',
+        'أسس البيانات الأساسية: تصنيف الأصناف، قوائم المواد وإصداراتها، المسارات، العمليات، المعدات، أوامر الشغل والدفعات',
+        'استيراد أودو التاريخي من ثلاثة ملفات (أوامر التصنيع، أوامر العمل، الهالك) مع مراجعة قبل الكتابة',
+        'تتبع الإنتاج: المراجع، الاستهلاك الفعلي، سلسلة المنتج، فروق الكميات، وجاهزية الوحدات، وتصحيح السجلات',
+        'مراحل إنتاج جديدة: الخرسانة الحرارية، الفرن النفقي، الطوب اليدوي، ونشاط التعبئة',
+        'إعداد التكاليف: الفترات وقواعد التوزيع (إعداد فقط - لا يتم أي احتساب)',
+        'التحقق من بصمة النسخ الاحتياطية (SHA-256) قبل الاستعادة، ومدير الترجمة والتدقيق اللغوي'
+      ]
+    },
     {
       version: '3.20.0',
       date: '2026-09-13',

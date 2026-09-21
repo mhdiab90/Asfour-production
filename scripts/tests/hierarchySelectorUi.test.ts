@@ -336,9 +336,15 @@ test('F1. the pressing stage offers its real equipment categories', () => {
 });
 
 test('F2. §45 / CRITICAL - a stage that records no equipment offers none', () => {
-  for (const stage of ['rotary_furnace', 'chinese_mills', 'tube_ball_mills', 'mixing', 'mortar_concrete', 'lightweight_foam', 'sorting']) {
+  // Phase 1 Step 8C: Rotary Kiln, Chinese Mills and Tube & Ball Mills now name their machine from
+  // their own existing masters, so they DO record equipment; the rest still record none.
+  for (const stage of ['mixing', 'mortar_concrete', 'lightweight_foam', 'sorting']) {
     assert.deepEqual(reg.equipmentCategoriesForStage(stage), []);
     assert.equal(reg.stageRecordsEquipment(stage), false);
+  }
+  for (const [stage, categories] of [['rotary_furnace', ['rotaryKilns']], ['chinese_mills', ['mills']], ['tube_ball_mills', ['tubeBallMills', 'bunkers']]] as const) {
+    assert.deepEqual(reg.equipmentCategoriesForStage(stage).map((c: any) => c.id), categories, stage);
+    assert.equal(reg.stageRecordsEquipment(stage), true, stage);
   }
 });
 

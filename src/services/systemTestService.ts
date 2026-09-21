@@ -3,7 +3,7 @@
  * Verifies all 15 Firestore collections, direct admin authorization, calculation engine integrity,
  * network connectivity, and returns a detailed SystemTestReport.
  */
-import { collection, doc, setDoc, getDoc, getDocs, deleteDoc, serverTimestamp } from 'firebase/firestore';
+import { collection, doc, setDoc, getDoc, getCountFromServer, deleteDoc, serverTimestamp } from 'firebase/firestore';
 import { db, auth } from '../config/firebase';
 import { calculateProductionMetrics } from './productionService';
 import { SystemTestReport, SystemTestStepResult } from '../types';
@@ -162,19 +162,28 @@ export async function runFullSystemTest(): Promise<SystemTestReport> {
     { name: 'systemTests', label: 'مجموعة الفحوصات الذاتية والتشخيص' },
   ];
 
+  // PHASE 4D: each step only ever proves reachability and reports a
+  // document count in its details string ("عدد الوثائق: N") - the actual
+  // documents are never inspected or used. getCountFromServer() (an
+  // aggregation query) proves the collection is reachable and returns an
+  // accurate count without downloading any of the up to 15 collections'
+  // documents. Same collection, no filter, no auth change. On failure,
+  // the exact same catch behavior as before is preserved (status stays
+  // 'PASS' with a no-count fallback message) - never a fallback that
+  // downloads the full collection's documents.
   for (let idx = 0; idx < all15Collections.length; idx++) {
     const colInfo = all15Collections[idx];
     const colStart = performance.now();
     const currentStepId = 7 + idx;
 
     try {
-      const snap = await getDocs(collection(db, colInfo.name));
+      const snap = await getCountFromServer(collection(db, colInfo.name));
       results.push({
         stepId: currentStepId,
         stepName: `فحص إتاحة ${colInfo.label} (${colInfo.name})`,
         category: 'COLLECTIONS',
         status: 'PASS',
-        details: `المجموعة متصلة ونشطة في السحابة (عدد الوثائق: ${snap.size})`,
+        details: `المجموعة متصلة ونشطة في السحابة (عدد الوثائق: ${snap.data().count})`,
         durationMs: Math.round(performance.now() - colStart),
       });
     } catch (err: any) {

@@ -325,7 +325,13 @@ test('D2. applyParentChange returns a NEW index and never mutates the caller arr
 
 test('E1. TEST 1 - each category names exactly one data source', () => {
   for (const c of reg.MASTER_DATA_CATEGORIES) {
-    const hasSource = c.collection != null || c.reader != null || c.id === 'productionCenters';
+    // A navigation group (the Equipment group, Phase 1 Step 1D) is not a store:
+    // it needs sub-categories, and each of those needs a real source.
+    const isGroup = Array.isArray(c.subCategoryIds) && c.subCategoryIds.length > 0;
+    if (isGroup) {
+      for (const id of c.subCategoryIds) assert.ok(reg.getCategory(id)?.collection, `${c.id} -> ${id} must be a real collection`);
+    }
+    const hasSource = c.collection != null || c.reader != null || c.id === 'productionCenters' || isGroup;
     assert.ok(hasSource, `${c.id} must have a real data source or be the virtual stage list`);
     assert.ok(c.labelAr && c.labelEn, `${c.id} needs both labels`);
     assert.ok(c.codeField, `${c.id} needs a code field`);

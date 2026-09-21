@@ -43,6 +43,7 @@ import {
   buildStageQueryCacheKey
 } from './stageQueryBoundsPure';
 import { runCacheFirstRead } from './localCacheStore';
+import { stageListQuantityUnit } from './uomReadinessPure';
 
 // Re-exported verbatim (defined in stageQueryBoundsPure.ts, which has zero
 // Firebase dependency and is directly unit-testable) so every existing
@@ -60,6 +61,9 @@ export const STAGE_DISPLAY_NAMES: Record<ProductionStageType, string> = {
   mixing: 'الخلط والتجهيز',
   lightweight_foam: 'الشاموت الخفيف / عزل الفوم',
   sorting: 'الفرز والمراقبة',
+  thermal_concrete: 'الخرسانة الحرارية',
+  tunnel_kiln: 'الفرن النفقي',
+  handmade_brick: 'الطوب اليدوي',
 };
 
 /**
@@ -301,7 +305,10 @@ async function fetchUniversalStageRecordsUncached(
         'mortar_concrete',
         'mixing',
         'lightweight_foam',
-        'sorting'
+        'sorting',
+        'thermal_concrete',
+        'tunnel_kiln',
+        'handmade_brick'
       ];
 
   const bounds = resolveStageQueryBounds(filters);
@@ -341,7 +348,8 @@ async function fetchUniversalStageRecordsUncached(
           pieceWeightKg = rawPieceWeight;
         }
 
-        if (st === 'pressing') {
+        // Phase 1 Step 8C-5: hand-made brick is measured like pressing (pieces x piece weight).
+        if (st === 'pressing' || st === 'handmade_brick') {
           prodCount = Number(d.productionQuantity ?? d.productionCount ?? 0);
           if (d.productionTons !== undefined && d.productionTons !== null && d.productionTons > 0) {
             prodTons = Number(d.productionTons);
@@ -392,7 +400,8 @@ async function fetchUniversalStageRecordsUncached(
           customerId: d.customerId || '',
           customerName: d.customerName || '',
           quantity: Number(d.productionQuantity ?? d.quantity ?? d.totalTons ?? d.totalCount ?? 0),
-          unit: st === 'sorting' || st === 'pressing' ? 'قطعة' : st === 'chinese_mills' ? 'شيكارة' : 'طن',
+          // Phase 1 Step 8A: the unit of the field `quantity` came from (label only - numbers unchanged).
+          unit: stageListQuantityUnit(st, d),
           productionTons: prodTons,
           goodTons: goodTons,
           wasteTons: wasteTons,

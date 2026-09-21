@@ -27,7 +27,7 @@ import {
   Check,
   Copy
 } from 'lucide-react';
-import { SystemBackup, RestorePreview, RestoreResult } from '../../types';
+import { SystemBackup, RestorePreview, RestoreResult, ChecksumStatus } from '../../types';
 import { 
   fetchBackups, 
   createDatabaseBackup, 
@@ -39,10 +39,11 @@ import {
   triggerBrowserFileDownload,
   retrySaveBackupMetadata
 } from '../../services/backupService';
-import { 
-  generateRestorePreview, 
-  executeSafeRestore, 
-  parseBackupFile 
+import {
+  generateRestorePreview,
+  executeSafeRestore,
+  parseBackupFile,
+  verifyBackupChecksum
 } from '../../services/restoreService';
 import { CURRENT_APP_VERSION, DATABASE_SCHEMA_VERSION } from '../../config/appVersion';
 import { useAuth } from '../../context/AuthContext';
@@ -84,6 +85,9 @@ export const BackupRestoreView: React.FC<BackupRestoreViewProps> = ({ initialTab
   const [showRestoreModal, setShowRestoreModal] = useState<boolean>(false);
   const [confirmationCode, setConfirmationCode] = useState<string>('');
   const [createSafetyCheckpoint, setCreateSafetyCheckpoint] = useState<boolean>(true);
+  const [checksumStatus, setChecksumStatus] = useState<ChecksumStatus | null>(null);
+  const [isCheckingChecksum, setIsCheckingChecksum] = useState<boolean>(false);
+  const [missingChecksumAck, setMissingChecksumAck] = useState<boolean>(false);
   const [isRestoring, setIsRestoring] = useState<boolean>(false);
   const [restoreProgressMsg, setRestoreProgressMsg] = useState<string>('');
   const [restorePercent, setRestorePercent] = useState<number>(0);
@@ -221,19 +225,22 @@ export const BackupRestoreView: React.FC<BackupRestoreViewProps> = ({ initialTab
     }
 
     setIsPreviewLoading(true);
+    setChecksumStatus(null);
+    setMissingChecksumAck(false);
     try {
       const parsed = await parseBackupFile(file);
       setUploadedBackupFile({ file, backup: parsed.backup });
       setSelectedBackupForRestore(parsed.backup);
-      
+      setChecksumStatus(parsed.checksumStatus);
+
       const preview = await generateRestorePreview(parsed.backup);
       setRestorePreview(preview);
       setShowRestoreModal(true);
       setConfirmationCode('');
       setRestoreResult(null);
       setFeedback({
-        type: 'info',
-        message: `تم فحص الملف (${file.name}) بنجاح! يحتوي على ${parsed.backup.totalRecords.toLocaleString()} سجل عبر ${parsed.backup.collections.length} مجموعة.`
+        type: parsed.checksumStatus === 'INVALID' ? 'error' : 'info',
+        message: `تم فحص الملف (${file.name})! يحتوي على ${parsed.backup.totalRecords.toLocaleString()} سجل عبر ${parsed.backup.collections.length} مجموعة. حالة البصمة: ${parsed.checksumStatus}.`
       });
     } catch (err: any) {
       setFeedback({ type: 'error', message: `فشل قراءة ملف النسخة: ${err.message}` });
@@ -249,6 +256,8 @@ export const BackupRestoreView: React.FC<BackupRestoreViewProps> = ({ initialTab
     setShowRestoreModal(true);
     setConfirmationCode('');
     setRestoreResult(null);
+    setChecksumStatus(null);
+    setMissingChecksumAck(false);
 
     try {
       const preview = await generateRestorePreview(backup);
@@ -257,6 +266,26 @@ export const BackupRestoreView: React.FC<BackupRestoreViewProps> = ({ initialTab
       setFeedback({ type: 'error', message: `فشل توليد معاينة الاستعادة: ${err.message}` });
     } finally {
       setIsPreviewLoading(false);
+    }
+
+    // Independently verify the checksum for display purposes as soon as the raw
+    // payload is available (session memory or already-attached dataPayload).
+    // The authoritative enforcement always happens again inside executeSafeRestore.
+    setIsCheckingChecksum(true);
+    try {
+      const rawPayload = backup.dataPayload || memoryBackupCache.get(backup.backupId);
+      if (rawPayload) {
+        const { status } = await verifyBackupChecksum(rawPayload, backup.checksum);
+        setChecksumStatus(status);
+      } else {
+        // No cached payload in this session - status can't be previewed until
+        // the operator uploads the JSON file or the backup is executed.
+        setChecksumStatus(null);
+      }
+    } catch {
+      setChecksumStatus(null);
+    } finally {
+      setIsCheckingChecksum(false);
     }
   };
 
@@ -267,6 +296,21 @@ export const BackupRestoreView: React.FC<BackupRestoreViewProps> = ({ initialTab
       setFeedback({ type: 'error', message: 'يرجى كتابة رمز التأكيد بدقة (RESTORE ASFOUR DATA) لتأكيد العملية.' });
       return;
     }
+    // Client-side guard mirroring the authoritative check inside executeSafeRestore.
+    if (checksumStatus === 'INVALID') {
+      setFeedback({
+        type: 'error',
+        message: 'تم إيقاف الاستعادة لأن بصمة الملف لا تطابق البصمة المسجلة. / Restore stopped because the file checksum does not match the recorded checksum.'
+      });
+      return;
+    }
+    if (checksumStatus === 'MISSING' && (!isSuperAdmin || !missingChecksumAck)) {
+      setFeedback({
+        type: 'error',
+        message: 'النسخة الاحتياطية لا تحتوي على بصمة SHA-256 ولا يمكن التحقق من سلامتها بالكامل. / This backup does not contain a SHA-256 checksum and cannot be fully verified.'
+      });
+      return;
+    }
 
     setIsRestoring(true);
     setRestorePercent(0);
@@ -275,6 +319,7 @@ export const BackupRestoreView: React.FC<BackupRestoreViewProps> = ({ initialTab
     try {
       const result = await executeSafeRestore(selectedBackupForRestore, {
         createCheckpointFirst: createSafetyCheckpoint,
+        allowMissingChecksum: checksumStatus === 'MISSING' ? missingChecksumAck : undefined,
         onProgress: (msg, percent) => {
           setRestoreProgressMsg(msg);
           setRestorePercent(percent);
@@ -1125,6 +1170,72 @@ export const BackupRestoreView: React.FC<BackupRestoreViewProps> = ({ initialTab
                     </div>
                   </div>
 
+                  {/* Checksum Verification Status */}
+                  <div className={`p-4 rounded-2xl border ${
+                    checksumStatus === 'VALID' ? 'bg-emerald-500/10 border-emerald-500/30' :
+                    checksumStatus === 'INVALID' ? 'bg-rose-500/10 border-rose-500/40' :
+                    checksumStatus === 'MISSING' ? 'bg-amber-500/10 border-amber-500/30' :
+                    'bg-slate-800/40 border-slate-700'
+                  }`}>
+                    <div className="flex items-center gap-2">
+                      {isCheckingChecksum ? (
+                        <RefreshCw className="w-4 h-4 animate-spin text-slate-400 shrink-0" />
+                      ) : checksumStatus === 'VALID' ? (
+                        <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+                      ) : checksumStatus === 'INVALID' ? (
+                        <XCircle className="w-4 h-4 text-rose-400 shrink-0" />
+                      ) : (
+                        <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0" />
+                      )}
+                      <span className="text-xs font-bold text-white">
+                        بصمة السلامة (SHA-256):{' '}
+                        <span className={
+                          checksumStatus === 'VALID' ? 'text-emerald-400' :
+                          checksumStatus === 'INVALID' ? 'text-rose-400' :
+                          checksumStatus === 'MISSING' ? 'text-amber-400' : 'text-slate-400'
+                        }>
+                          {isCheckingChecksum
+                            ? 'جاري التحقق...'
+                            : checksumStatus === 'VALID' ? 'سليم / Valid'
+                            : checksumStatus === 'INVALID' ? 'غير صالح / Invalid'
+                            : checksumStatus === 'MISSING' ? 'غير موجود / Missing'
+                            : 'سيتم التحقق عند بدء الاستعادة / Will be verified at restore time'}
+                        </span>
+                      </span>
+                    </div>
+
+                    {checksumStatus === 'INVALID' && (
+                      <p className="text-[11px] text-rose-300 mt-2 leading-relaxed">
+                        تم إيقاف الاستعادة لأن بصمة الملف لا تطابق البصمة المسجلة.<br />
+                        Restore stopped because the file checksum does not match the recorded checksum.
+                      </p>
+                    )}
+
+                    {checksumStatus === 'MISSING' && (
+                      <div className="mt-2 space-y-2">
+                        <p className="text-[11px] text-amber-300 leading-relaxed">
+                          النسخة الاحتياطية لا تحتوي على بصمة SHA-256 ولا يمكن التحقق من سلامتها بالكامل.<br />
+                          This backup does not contain a SHA-256 checksum and cannot be fully verified.
+                        </p>
+                        {isSuperAdmin ? (
+                          <label className="flex items-center gap-2 text-[11px] text-amber-200 cursor-pointer">
+                            <input
+                              type="checkbox"
+                              checked={missingChecksumAck}
+                              onChange={(e) => setMissingChecksumAck(e.target.checked)}
+                              className="w-4 h-4 accent-amber-500 rounded cursor-pointer"
+                            />
+                            <span>أؤكد كمدير عام (SUPER_ADMIN) المتابعة رغم عدم وجود بصمة سلامة / I confirm as SUPER_ADMIN to proceed without an integrity checksum</span>
+                          </label>
+                        ) : (
+                          <p className="text-[11px] text-amber-400 font-bold">
+                            هذه العملية تتطلب تأكيد مدير عام (SUPER_ADMIN) للمتابعة. / This action requires SUPER_ADMIN confirmation to proceed.
+                          </p>
+                        )}
+                      </div>
+                    )}
+                  </div>
+
                   {/* Checkpoint Safety Toggle */}
                   <div className="flex items-center justify-between bg-slate-800/60 p-4 rounded-2xl border border-slate-700">
                     <div>
@@ -1182,7 +1293,12 @@ export const BackupRestoreView: React.FC<BackupRestoreViewProps> = ({ initialTab
               </button>
               <button
                 onClick={handleExecuteRestore}
-                disabled={isRestoring || confirmationCode.trim().toUpperCase() !== 'RESTORE ASFOUR DATA'}
+                disabled={
+                  isRestoring ||
+                  confirmationCode.trim().toUpperCase() !== 'RESTORE ASFOUR DATA' ||
+                  checksumStatus === 'INVALID' ||
+                  (checksumStatus === 'MISSING' && (!isSuperAdmin || !missingChecksumAck))
+                }
                 className="px-5 py-2.5 rounded-xl bg-amber-500 hover:bg-amber-600 text-slate-950 text-xs font-bold transition flex items-center gap-2 disabled:opacity-40 disabled:cursor-not-allowed shadow-lg shadow-amber-500/10 cursor-pointer"
               >
                 <RotateCcw className="w-4 h-4" />

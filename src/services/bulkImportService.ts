@@ -34,8 +34,16 @@ export interface MasterDataSchemaField {
  * structure a flat column mapping cannot express. The registry says the same
  * thing (`supportsImport: false`); excluding the key here makes it true at the
  * type level too, so no caller can accidentally point this importer at it.
+ *
+ * The three equipment masters completed in Phase 1 Step 1D (tubeBallMills,
+ * bunkers, rotaryKilns) are excluded the same way: they are entered through the
+ * Master Data form (and, for the first two, the Tube/Ball Mills Historical
+ * Import), never through this column-mapped importer.
  */
-export const MASTER_DATA_SCHEMAS: Record<Exclude<MasterDataTab, 'costCenterHierarchy'>, { title: string; fields: MasterDataSchemaField[] }> = {
+// Job References and Batches (Phase 1 Step 1E) are also form-only.
+// Bills of Materials (Phase 1 Step 2) and Routings (Step 3) are form-only too.
+type FormOnlyEquipmentTab = 'tubeBallMills' | 'bunkers' | 'rotaryKilns' | 'jobReferences' | 'batches' | 'boms' | 'routings';
+export const MASTER_DATA_SCHEMAS: Record<Exclude<Exclude<MasterDataTab, 'costCenterHierarchy'>, FormOnlyEquipmentTab>, { title: string; fields: MasterDataSchemaField[] }> = {
   products: {
     title: 'المنتجات الحرارية (الاستيراد الذكي)',
     fields: [

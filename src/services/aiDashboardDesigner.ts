@@ -62,11 +62,14 @@ const STAGE_KEYWORDS: KeywordStage[] = [
   { stage: 'rotary_furnace', keywordsAr: ['فرن دوار', 'الفرن الدوار'], keywordsEn: ['rotary furnace', 'rotary'] },
   { stage: 'chinese_mills', keywordsAr: ['طاحونة', 'طواحين', 'الطواحين الصينية'], keywordsEn: ['mill', 'mills', 'chinese mill'] },
   { stage: 'tube_ball_mills', keywordsAr: ['أنابيب', 'كرات'], keywordsEn: ['tube mill', 'ball mill'] },
+  { stage: 'thermal_concrete', keywordsAr: ['خرسانة حرارية', 'الخرسانة الحرارية'], keywordsEn: ['thermal concrete', 'castable'] },
   { stage: 'mortar_concrete', keywordsAr: ['مونة', 'خرسانة'], keywordsEn: ['mortar', 'concrete'] },
   { stage: 'mixing', keywordsAr: ['خلط'], keywordsEn: ['mixing'] },
   { stage: 'lightweight_foam', keywordsAr: ['شاموت خفيف', 'فوم'], keywordsEn: ['lightweight', 'foam'] },
-  // "فرن نفقي" (tunnel furnace) has no dedicated stage in this schema - mapped to the closest real one (see file header note).
-  { stage: 'sorting', keywordsAr: ['فرز', 'فرن نفقي', 'نفقي'], keywordsEn: ['sorting', 'tunnel furnace', 'tunnel'] },
+  // Phase 1 Step 8C-5: the tunnel kiln now has its own stage.
+  { stage: 'tunnel_kiln', keywordsAr: ['فرن نفقي', 'نفقي'], keywordsEn: ['tunnel kiln', 'tunnel furnace', 'tunnel'] },
+  { stage: 'handmade_brick', keywordsAr: ['طوب يدوي', 'يدوي'], keywordsEn: ['hand-made', 'handmade'] },
+  { stage: 'sorting', keywordsAr: ['فرز'], keywordsEn: ['sorting'] },
 ];
 
 const BEST_WORD_AR = '(?:أفضل|افضل)';

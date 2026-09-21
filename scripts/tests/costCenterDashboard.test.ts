@@ -382,8 +382,12 @@ test('W8. the reconciliation utility is kept (unresolved conflicts remain)', () 
   assert.ok(/id="master-data-reconcile-btn"/.test(view));
 });
 
-test('W9. Master Data still has exactly the 7 categories', () => {
-  assert.equal(panels.PANEL_CATEGORY_IDS.length, 7);
+// Phase 1 Step 1C added Operations as the eighth category, on purpose.
+test('W9. Master Data has the 7 categories plus Operations and Equipment, and no transactions category', () => {
+  // Operations: Phase 1 Step 1C. The Equipment group: Step 1D. Jobs & Batches: Step 1E.
+  assert.equal(panels.PANEL_CATEGORY_IDS.length, 10);
+  assert.ok(panels.PANEL_CATEGORY_IDS.includes('operations'));
+  assert.ok(panels.PANEL_CATEGORY_IDS.includes('equipment'));
   assert.equal(panels.PANEL_CATEGORY_IDS.includes('financialTransactions'), false, 'transactions are not an eighth category');
 });
 

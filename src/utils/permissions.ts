@@ -17,14 +17,13 @@ export const DEFAULT_SUPER_ADMIN_PERMISSIONS: GranularPermissions = {
   permissionSchemaVersion: CURRENT_PERMISSION_SCHEMA_VERSION,
   dataScope: 'ALL',
   'production.scope': 'all',
-  allowedStages: ['pressing', 'rotary_furnace', 'chinese_mills', 'tube_ball_mills', 'mortar_concrete', 'mixing', 'lightweight_foam', 'sorting'],
+  allowedStages: ['pressing', 'rotary_furnace', 'chinese_mills', 'tube_ball_mills', 'mortar_concrete', 'mixing', 'lightweight_foam', 'sorting', 'thermal_concrete', 'tunnel_kiln', 'handmade_brick'],
   allowedDepartments: [],
   allowedUsers: [],
 
   // 1. Dashboard
   'dashboard.view': true,
   'dashboard.export_kpi': true,
-  'dashboard.manageCustomDashboards': true,
 
   // 2. Production Entry & Operations
   'production.view': true,
@@ -52,6 +51,9 @@ export const DEFAULT_SUPER_ADMIN_PERMISSIONS: GranularPermissions = {
   'stage.mixing': true,
   'stage.lightweight_foam': true,
   'stage.sorting': true,
+  'stage.thermal_concrete': true,
+  'stage.tunnel_kiln': true,
+  'stage.handmade_brick': true,
 
   // 5. Master Data & Inline Add
   'masterdata.view': true,
@@ -80,6 +82,10 @@ export const DEFAULT_SUPER_ADMIN_PERMISSIONS: GranularPermissions = {
   'furnaceCars.create': true,
   'furnaceCars.edit': true,
   'furnaceCars.delete': true,
+  'mills.view': true,
+  'mills.create': true,
+  'mills.edit': true,
+  'mills.delete': true,
   'shifts.view': true,
   'shifts.create': true,
   'shifts.edit': true,
@@ -140,25 +146,49 @@ export const DEFAULT_SUPER_ADMIN_PERMISSIONS: GranularPermissions = {
   'system.view': true,
   'system.health.view': true,
   'system.manage': true,
-  'system.version.manage': true,
-  'system.version.rollback': true,
-  'system.aiProvider.manage': true,
-  'mills.view': true,
-  'mills.create': true,
-  'mills.edit': true,
-  'mills.delete': true,
   'audit.view': true,
   'settings.view': true,
   'settings.edit': true,
   'branding.view': true,
   'branding.edit': true,
   'versions.view': true,
+  'system.version.manage': true,
+  'system.version.rollback': true,
+  'system.aiProvider.manage': true,
 
   // 13. Field Level Permissions
   'fields.view_cost': true,
   'fields.edit_downtime': true,
   'fields.view_consumption': true,
   'fields.view_tonnage': true,
+
+  // 14. Business Validation Warning Override
+  'validation.overrideWarnings': true,
+
+  // 15. Dashboard Builder
+  'dashboard.manageCustomDashboards': true,
+
+  // 16. Translation Governance
+  'translation.manage': true,
+};
+
+/**
+ * ADMIN role preset (§2 CRITICAL: "Only SUPER_ADMIN should have full
+ * rollback capability by default. Other administrators may be allowed to
+ * View... but NOT Rollback unless explicitly permitted.").
+ *
+ * Every OTHER permission stays identical to DEFAULT_SUPER_ADMIN_PERMISSIONS
+ * - this app's existing convention already treats ADMIN as fully trusted
+ * everywhere else (ROLE_PRESET_MAP.ADMIN historically pointed at the exact
+ * same SUPER_ADMIN preset object) - only 'system.version.rollback' is
+ * deliberately flipped to false here. A SUPER_ADMIN can still explicitly
+ * grant it to a specific ADMIN user via the existing Granular Permission
+ * Editor (which overrides this preset per-user), matching "unless
+ * explicitly permitted by the existing granular permission system."
+ */
+export const DEFAULT_ADMIN_PERMISSIONS: GranularPermissions = {
+  ...DEFAULT_SUPER_ADMIN_PERMISSIONS,
+  'system.version.rollback': false,
 };
 
 export const DEFAULT_PRODUCTION_OPERATOR_PERMISSIONS: GranularPermissions = {
@@ -171,7 +201,6 @@ export const DEFAULT_PRODUCTION_OPERATOR_PERMISSIONS: GranularPermissions = {
 
   'dashboard.view': false,
   'dashboard.export_kpi': false,
-  'dashboard.manageCustomDashboards': false,
   'production.view': true,
   'production.create': true,
   'production.edit': true,
@@ -195,6 +224,9 @@ export const DEFAULT_PRODUCTION_OPERATOR_PERMISSIONS: GranularPermissions = {
   'stage.mixing': true,
   'stage.lightweight_foam': true,
   'stage.sorting': true,
+  'stage.thermal_concrete': true,
+  'stage.tunnel_kiln': true,
+  'stage.handmade_brick': true,
 
   'masterdata.view': false,
   'masterData.inlineAdd': false,
@@ -222,6 +254,10 @@ export const DEFAULT_PRODUCTION_OPERATOR_PERMISSIONS: GranularPermissions = {
   'furnaceCars.create': false,
   'furnaceCars.edit': false,
   'furnaceCars.delete': false,
+  'mills.view': false,
+  'mills.create': false,
+  'mills.edit': false,
+  'mills.delete': false,
   'shifts.view': false,
   'shifts.create': false,
   'shifts.edit': false,
@@ -273,24 +309,24 @@ export const DEFAULT_PRODUCTION_OPERATOR_PERMISSIONS: GranularPermissions = {
   'system.view': false,
   'system.health.view': false,
   'system.manage': false,
-  'system.version.manage': false,
-  'system.version.rollback': false,
-  'system.aiProvider.manage': false,
-  'mills.view': false,
-  'mills.create': false,
-  'mills.edit': false,
-  'mills.delete': false,
   'audit.view': false,
   'settings.view': false,
   'settings.edit': false,
   'branding.view': false,
   'branding.edit': false,
   'versions.view': false,
+  'system.version.manage': false,
+  'system.version.rollback': false,
+  'system.aiProvider.manage': false,
 
   'fields.view_cost': false,
   'fields.edit_downtime': true,
   'fields.view_consumption': false,
   'fields.view_tonnage': true,
+
+  'validation.overrideWarnings': false,
+  'dashboard.manageCustomDashboards': false,
+  'translation.manage': false,
 };
 
 export const DEFAULT_PRODUCTION_SUPERVISOR_PERMISSIONS: GranularPermissions = {
@@ -299,7 +335,6 @@ export const DEFAULT_PRODUCTION_SUPERVISOR_PERMISSIONS: GranularPermissions = {
   'production.scope': 'shift',
   'dashboard.view': true,
   'dashboard.export_kpi': true,
-  'dashboard.manageCustomDashboards': true,
   'production.view': true,
   'production.create': true,
   'production.edit': true,
@@ -336,6 +371,10 @@ export const DEFAULT_PRODUCTION_SUPERVISOR_PERMISSIONS: GranularPermissions = {
   'fields.edit_downtime': true,
   'fields.view_consumption': true,
   'fields.view_tonnage': true,
+
+  // Supervisors may knowingly save/import a record despite a business warning.
+  'validation.overrideWarnings': true,
+  'dashboard.manageCustomDashboards': true,
 };
 
 export const DEFAULT_QUALITY_CONTROL_PERMISSIONS: GranularPermissions = {
@@ -343,7 +382,6 @@ export const DEFAULT_QUALITY_CONTROL_PERMISSIONS: GranularPermissions = {
   dataScope: 'ALL',
   'production.scope': 'all',
   'dashboard.view': true,
-  'dashboard.manageCustomDashboards': true,
   'production.view': true,
   'production.create': false,
   'production.edit': false,
@@ -362,6 +400,8 @@ export const DEFAULT_QUALITY_CONTROL_PERMISSIONS: GranularPermissions = {
   'reports.export': true,
   'excel.export': true,
   'ai.use': true,
+  'validation.overrideWarnings': true,
+  'dashboard.manageCustomDashboards': true,
 };
 
 export const DEFAULT_DATA_ENTRY_PERMISSIONS: GranularPermissions = {
@@ -454,7 +494,7 @@ export const DEFAULT_MAINTENANCE_PERMISSIONS: GranularPermissions = {
 
 export const ROLE_PRESET_MAP: Record<UserRole, GranularPermissions> = {
   SUPER_ADMIN: DEFAULT_SUPER_ADMIN_PERMISSIONS,
-  ADMIN: DEFAULT_SUPER_ADMIN_PERMISSIONS,
+  ADMIN: DEFAULT_ADMIN_PERMISSIONS,
   SUPERVISOR: DEFAULT_PRODUCTION_SUPERVISOR_PERMISSIONS,
   PRODUCTION_SUPERVISOR: DEFAULT_PRODUCTION_SUPERVISOR_PERMISSIONS,
   PRODUCTION_OPERATOR: DEFAULT_PRODUCTION_OPERATOR_PERMISSIONS,
@@ -639,6 +679,11 @@ export function canAccessPage(user: AdminUser | null | undefined, page: Navigati
       return perms['users.view'] || perms['permissions.view'];
     case 'reports':
       return perms['reports.view'];
+    case 'data-quality':
+      // Suggested Analytics screen - reuses the SAME permission Reports
+      // already requires (real ERP data, read-mostly), never a new broad
+      // access grant invented for this one screen.
+      return perms['reports.view'];
     case 'ai-assistant':
       return perms['ai.use'];
     case 'backups':
@@ -650,13 +695,16 @@ export function canAccessPage(user: AdminUser | null | undefined, page: Navigati
       return perms['system.view'] || perms['system.health.view'];
     case 'versions':
       return perms['versions.view'] || perms['system.view'];
-    case 'ai-provider-management':
-      return perms['system.aiProvider.manage'];
     case 'settings':
     case 'admin-panel':
       return perms['settings.view'] || perms['audit.view'];
     case 'branding':
       return perms['branding.view'] || perms['settings.view'] || user.role === 'ADMIN';
+    case 'translation-manager':
+    case 'language-audit':
+      return perms['translation.manage'];
+    case 'ai-provider-management':
+      return perms['system.aiProvider.manage'];
     default:
       return true;
   }
@@ -737,6 +785,9 @@ export const PERMISSION_CATEGORY_GROUPS: PermissionCategoryGroup[] = [
       { key: 'stage.mixing', nameAr: 'مرحلة 6: الخلط والتجهيز', nameEn: 'Stage 6: Mixing & Preparation', descriptionAr: 'تسجيل ومراجعة خلطات المواد الخام', descriptionEn: 'Raw material mixing & prep' },
       { key: 'stage.lightweight_foam', nameAr: 'مرحلة 7: الشاموت الخفيف / الفوم', nameEn: 'Stage 7: Lightweight Foam Chamotte', descriptionAr: 'تسجيل ومراجعة العزل والفوم', descriptionEn: 'Lightweight insulation foam' },
       { key: 'stage.sorting', nameAr: 'مرحلة 8: الفرز والمراقبة النهائية', nameEn: 'Stage 8: Sorting & Quality Inspection', descriptionAr: 'تسجيل وتدقيق عيوب الفرز والشطف والشروخ', descriptionEn: 'Defect inspection & sorting' },
+      { key: 'stage.thermal_concrete', nameAr: 'مرحلة 9: الخرسانة الحرارية', nameEn: 'Stage 9: Thermal Concrete', descriptionAr: 'تسجيل ومراجعة إنتاج الخرسانة الحرارية', descriptionEn: 'Thermal concrete (castable) production' },
+      { key: 'stage.tunnel_kiln', nameAr: 'مرحلة 10: الفرن النفقي', nameEn: 'Stage 10: Tunnel Kiln', descriptionAr: 'تسجيل ومراجعة حريق الفرن النفقي', descriptionEn: 'Tunnel kiln firing' },
+      { key: 'stage.handmade_brick', nameAr: 'مرحلة 11: الطوب اليدوي', nameEn: 'Stage 11: Hand-made Brick', descriptionAr: 'تسجيل ومراجعة تصنيع الطوب اليدوي', descriptionEn: 'Hand-made brick forming' },
     ],
   },
   {
@@ -771,6 +822,10 @@ export const PERMISSION_CATEGORY_GROUPS: PermissionCategoryGroup[] = [
       { key: 'furnaceCars.create', nameAr: 'إضافة عربة فرن جديدة', nameEn: 'Add Furnace Car', descriptionAr: 'تسجيل كود ورقم عربة جديد', descriptionEn: 'Register new car number' },
       { key: 'furnaceCars.edit', nameAr: 'تعديل عربات الأفران', nameEn: 'Edit Furnace Cars', descriptionAr: 'تعديل حالة وبيانات العربة', descriptionEn: 'Update car status' },
       { key: 'furnaceCars.delete', nameAr: 'حذف عربة فرن', nameEn: 'Delete Furnace Car', descriptionAr: 'حذف العربة من السجلات', descriptionEn: 'Remove car' },
+      { key: 'mills.view', nameAr: 'عرض الطواحين الصينية', nameEn: 'View Chinese Mills', descriptionAr: 'استعراض الطواحين الصينية وأكوادها', descriptionEn: 'View Chinese Mills and their codes' },
+      { key: 'mills.create', nameAr: 'إضافة طاحونة صينية جديدة', nameEn: 'Add Chinese Mill', descriptionAr: 'تسجيل طاحونة صينية جديدة', descriptionEn: 'Register new Chinese Mill' },
+      { key: 'mills.edit', nameAr: 'تعديل بيانات الطواحين الصينية', nameEn: 'Edit Chinese Mills', descriptionAr: 'تعديل حالة وموديل الطاحونة', descriptionEn: 'Update mill status & model' },
+      { key: 'mills.delete', nameAr: 'حذف طاحونة صينية', nameEn: 'Delete Chinese Mill', descriptionAr: 'حذف الطاحونة من المنظومة', descriptionEn: 'Remove Chinese Mill' },
       { key: 'shifts.view', nameAr: 'عرض الورديات', nameEn: 'View Shifts', descriptionAr: 'الاطلاع على مواعيد وورديات المصنع', descriptionEn: 'View shift timings' },
       { key: 'shifts.create', nameAr: 'إضافة وردية جديدة', nameEn: 'Add Shift', descriptionAr: 'تسجيل وردية جديدة', descriptionEn: 'Register new shift' },
       { key: 'shifts.edit', nameAr: 'تعديل الورديات', nameEn: 'Edit Shifts', descriptionAr: 'تعديل ساعات الوردية', descriptionEn: 'Update shift hours' },
@@ -865,15 +920,15 @@ export const PERMISSION_CATEGORY_GROUPS: PermissionCategoryGroup[] = [
       { key: 'system.view', nameAr: 'عرض حالة النظام والاتصال السحابي', nameEn: 'View System State', descriptionAr: 'مراقبة حالة الجلسات والاتصال', descriptionEn: 'Monitor session and connectivity' },
       { key: 'system.health.view', nameAr: 'عرض مؤشرات صحة النظام وزمن استجابة Firestore', nameEn: 'View System Health & Latency', descriptionAr: 'مراقبة زمن استجابة الاستعلامات وحالة السحابة', descriptionEn: 'Monitor query latency and cloud status' },
       { key: 'system.manage', nameAr: 'إدارة إعدادات النظام المتقدمة', nameEn: 'Manage Advanced Settings', descriptionAr: 'التحكم بالبروتوكولات ونسخ المخطط (Schema)', descriptionEn: 'Manage protocols & schema version' },
-      { key: 'system.version.manage', nameAr: 'إدارة إصدارات النظام وسجل التغييرات', nameEn: 'Manage System Versions & Change Registry', descriptionAr: 'إنشاء نقاط استعادة الإصدار وسجلات التغيير واعتماد نسخة كمستقرة - لا يشمل التراجع الفعلي', descriptionEn: 'Create release checkpoints, change records and mark a version Known Good - does not include executing a rollback' },
-      { key: 'system.version.rollback', nameAr: 'تنفيذ التراجع عن إصدار البرنامج (صلاحية حساسة)', nameEn: 'Execute Application Version Rollback (sensitive)', descriptionAr: 'تنفيذ إرجاع النظام لإصدار سابق - افتراضيًا لمدير النظام الأعلى (SUPER_ADMIN) فقط', descriptionEn: 'Roll the application back to a previous version - by default limited to SUPER_ADMIN only' },
-      { key: 'system.aiProvider.manage', nameAr: 'إدارة مزود الذكاء الاصطناعي النشط للمساعد الذكي', nameEn: 'Manage the Active AI Provider', descriptionAr: 'اختبار وتفعيل مزود الذكاء الاصطناعي للتطبيق بالكامل', descriptionEn: 'Test and activate which AI provider powers the assistant application-wide' },
       { key: 'audit.view', nameAr: 'عرض سجل التدقيق والأنشطة الأمنية (Audit Logs)', nameEn: 'View Security Audit Logs', descriptionAr: 'متابعة سجل حركات الدخول والتعديلات والحذف', descriptionEn: 'Review login, update, and delete audit trails' },
       { key: 'settings.view', nameAr: 'عرض شاشة الإعدادات العامة', nameEn: 'View Settings Page', descriptionAr: 'الاطلاع على بيانات المنظومة والنسخ', descriptionEn: 'View system configuration' },
       { key: 'settings.edit', nameAr: 'تعديل إعدادات وتفضيلات النظام', nameEn: 'Edit System Settings', descriptionAr: 'تحديث تفضيلات المنظومة', descriptionEn: 'Update system preferences' },
       { key: 'branding.view', nameAr: 'عرض إعدادات الشعار والهوية المؤسسية', nameEn: 'View Branding Settings', descriptionAr: 'استعراض شعار شركة عصفور وصورة المهندس المطور', descriptionEn: 'View company logo & developer asset' },
       { key: 'branding.edit', nameAr: 'تحديث وتثبيت شعار شركة عصفور', nameEn: 'Update Company Logo Asset', descriptionAr: 'رفع وتثبيت الشعار المؤسسي بدون تعديل اصطناعي', descriptionEn: 'Upload & persist original branding assets' },
       { key: 'versions.view', nameAr: 'عرض سجل إصدارات المنظومة وتاريخ التحديثات', nameEn: 'View System Version History', descriptionAr: 'استعراض أرقام الإصدارات وملاحظات النشر', descriptionEn: 'Review release notes & deployment history' },
+      { key: 'system.version.manage', nameAr: 'إدارة إصدارات النظام (نقاط استعادة، اعتماد نسخة مستقرة)', nameEn: 'Manage System Versions (checkpoints, mark Known Good)', descriptionAr: 'إنشاء نقاط استعادة الإصدار واعتماد نسخة كمستقرة - لا يشمل التراجع الفعلي', descriptionEn: 'Create release checkpoints and mark a version Known Good - does not include executing a rollback' },
+      { key: 'system.version.rollback', nameAr: 'تنفيذ التراجع عن إصدار البرنامج (صلاحية حساسة)', nameEn: 'Execute Application Version Rollback (sensitive)', descriptionAr: 'تنفيذ إرجاع النظام لإصدار سابق - افتراضيًا لمدير النظام الأعلى (SUPER_ADMIN) فقط', descriptionEn: 'Roll the application back to a previous version - by default limited to SUPER_ADMIN only' },
+      { key: 'system.aiProvider.manage', nameAr: 'إدارة مزود الذكاء الاصطناعي النشط للمساعد الذكي', nameEn: 'Manage the Active AI Provider', descriptionAr: 'اختبار وتفعيل مزود الذكاء الاصطناعي (Claude، Gemini، Cloudflare Workers AI، Mock) للتطبيق بالكامل', descriptionEn: 'Test and activate which AI provider (Claude, Gemini, Cloudflare Workers AI, Mock) powers the assistant application-wide' },
     ],
   },
   {
@@ -886,6 +941,15 @@ export const PERMISSION_CATEGORY_GROUPS: PermissionCategoryGroup[] = [
       { key: 'fields.view_cost', nameAr: 'عرض التكاليف وأسعار الخامات والمنتجات', nameEn: 'View Financial Costs & Pricing', descriptionAr: 'الاطلاع على التكاليف المالية للطن والخامات', descriptionEn: 'View financial numbers & material costs' },
       { key: 'fields.view_consumption', nameAr: 'عرض استهلاك الغاز والكهرباء لكل طن', nameEn: 'View Gas & Electricity Consumption', descriptionAr: 'متابعة استهلاك الطاقة للفرن الدوار', descriptionEn: 'Track energy consumption per ton' },
       { key: 'fields.edit_downtime', nameAr: 'تسجيل وتعديل دقائق وفئات الأعطال والتوقفات', nameEn: 'Record & Edit Fault Downtimes', descriptionAr: 'السماح بتعديل أوقات أعطال الميكانيكا والكهرباء والورشة', descriptionEn: 'Modify mechanical, electrical, and workshop fault minutes' },
+    ],
+  },
+  {
+    id: 'localization',
+    nameAr: 'إدارة الترجمة والتدقيق اللغوي',
+    nameEn: 'Translation & Localization',
+    icon: 'Languages',
+    permissions: [
+      { key: 'translation.manage', nameAr: 'إدارة الترجمات والتدقيق اللغوي للنظام', nameEn: 'Manage Translations & Language Audit', descriptionAr: 'تعديل نصوص الواجهة، استعادة الافتراضي، ومراجعة تقرير التدقيق اللغوي', descriptionEn: 'Edit interface text overrides, restore defaults, and review the language audit report' },
     ],
   },
 ];

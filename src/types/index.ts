@@ -86,6 +86,293 @@ export interface UpdateUserPayload {
   permissions?: Partial<GranularPermissions>;
 }
 
+/**
+ * A link from an ASFOUR record to the same record in an external system
+ * (Odoo, another ERP, a legacy source). ASFOUR keeps its own identity - the
+ * Firestore document id and its business code - and a reference only ever
+ * sits BESIDE that identity, never in place of it.
+ *
+ * Rules and helpers: services/externalReferencesPure.ts.
+ */
+export interface ExternalReference {
+  /** Lowercase system key, e.g. 'odoo' or 'legacy'. Never assumed to be Odoo. */
+  system: string;
+  /** The external model/table, e.g. 'product.product'. Optional. */
+  model?: string;
+  /** The external record id, as a string. With system + model it is the external identity. */
+  externalId?: string;
+  /** The external business code, e.g. an Odoo default_code. Informational - never ASFOUR's code. */
+  externalCode?: string;
+  /** ISO-8601 time of the last sync - the same string format as createdAt / updatedAt. */
+  syncedAt?: string;
+}
+
+/**
+ * Mixin for any ASFOUR entity that may carry external references. Optional:
+ * a record without it is valid, and no existing entity is required to have it.
+ */
+export interface WithExternalReferences {
+  externalRefs?: ExternalReference[];
+}
+
+/**
+ * Logical item (Phase 1 Step 2A) - collection 'logicalItems', document id =
+ * the logicalItemId (generated; never a product/material id, code or external
+ * id). An internal identity joining at most one product and one material that
+ * a user explicitly confirmed are the same item. Both records stay as they are;
+ * nothing is copied between them. Withdrawn = INACTIVE, never deleted. A future
+ * Odoo product links through `externalRefs`. Rules: services/logicalItemPure.ts.
+ */
+export interface LogicalItem extends WithExternalReferences {
+  id?: string;
+  productId?: string | null;
+  materialId?: string | null;
+  /** An explicit, reversible preference - null unless someone chooses; neither record "wins" by default. */
+  preferredSource?: 'products' | 'materials' | null;
+  status: 'ACTIVE' | 'INACTIVE';
+  /** The match type or note behind the decision. */
+  reason?: string;
+  createdBy?: string | null;
+  updatedBy?: string | null;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+/** An explicit "Keep Separate" review decision for one product/material pair (Phase 1 Step 2A) - collection 'itemPairDecisions'. */
+export interface ItemPairDecision {
+  id?: string;
+  productId: string;
+  materialId: string;
+  decision: 'KEEP_SEPARATE';
+  status: 'ACTIVE' | 'INACTIVE';
+  reason?: string;
+  createdBy?: string | null;
+  updatedBy?: string | null;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+/** Where a BOM item lives: the existing item collections (Phase 1 Step 2). */
+export type BomItemSource = 'products' | 'materials';
+
+/**
+ * Bill of Materials (Phase 1 Step 2) - collection 'boms'. WHAT items make one
+ * item; never operations, stages, cost centres or costs (that is Routing and
+ * Costing). The item it makes and every component are referenced by
+ * (itemSource, itemId) - a document id, never a code, a name or an external id.
+ * `customerId` makes a customer-specific variant; none = the standard BOM.
+ * Versions live in their own documents (BomVersion), never inside the Product.
+ * Rules: services/bomPure.ts.
+ */
+export interface Bom extends WithExternalReferences {
+  id?: string;
+  /** Business BOM code, unique among BOMs. A product may have many BOMs. */
+  code: string;
+  name: string;
+  itemSource: BomItemSource;
+  itemId: string;
+  customerId?: string | null;
+  /** The preferred BOM in its (item, customer) scope - at most one active default per scope. */
+  isDefault: boolean;
+  notes?: string;
+  active: boolean;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+/** One line of a BOM version. Quantity and unit are explicit; nothing is converted. No cost fields. */
+export interface BomComponent {
+  /** Stable within its version (L1, L2, ...), so audits can name the line that changed. */
+  lineId: string;
+  /**
+   * Phase 1 Step 7A: BASE (part of the 100% base formula) or ADDITIVE (applied on
+   * top, never in the 100%). Absent on lines saved before Step 7A = BASE.
+   */
+  componentType?: 'BASE' | 'ADDITIVE';
+  itemSource: BomItemSource;
+  itemId: string;
+  /** Null only on a percentage-only line; its quantity is derived from the basis for display. */
+  quantity: number | null;
+  /** One of the unit values the app already stores (see bomPure.BOM_UNITS). */
+  unit: string;
+  sequence: number;
+  percentage?: number | null;
+  notes?: string;
+}
+
+/**
+ * A revision of a BOM (Phase 1 Step 2) - collection 'bomVersions'.
+ * DRAFT -> ACTIVE -> RETIRED; components change only in DRAFT, nothing is
+ * deleted, so a version production may later reference stays as it was. A
+ * future Job Reference can point at a version id without changing this model.
+ */
+export interface BomVersion extends WithExternalReferences {
+  id?: string;
+  bomId: string;
+  /** Unique within its BOM, e.g. "V1". */
+  versionCode: string;
+  status: 'DRAFT' | 'ACTIVE' | 'RETIRED';
+  effectiveFrom?: string | null;
+  effectiveTo?: string | null;
+  /** Optional basis the quantities make, e.g. 1000 كجم - percentages are checked against it. */
+  basisQuantity?: number | null;
+  basisUnit?: string | null;
+  /** Optional planning figure for a future yield/loss model; no actual scrap is tracked. */
+  expectedYieldPercent?: number | null;
+  notes?: string;
+  components: BomComponent[];
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+/**
+ * Routing (Phase 1 Step 3) - collection 'routings'. WHICH operations one
+ * logical item goes through, in what order - configuration data only, never
+ * hard-coded. Belongs to a Step 2A logical item; `customerId` makes a
+ * customer-specific variant (none = the standard routing). Owns no BOM.
+ * Versions live in RoutingVersion documents. Rules: services/routingPure.ts.
+ */
+export interface Routing extends WithExternalReferences {
+  id?: string;
+  /** Business routing code, unique among routings. */
+  code: string;
+  name: string;
+  logicalItemId: string;
+  customerId?: string | null;
+  /** The preferred routing in its (logical item, customer) scope - at most one active default per scope. */
+  isDefault: boolean;
+  notes?: string;
+  active: boolean;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+/**
+ * One ordered step of a routing version. References the Operation Master by id
+ * - never a copied operation name or a ProductionStageType. The cost centre,
+ * equipment category and machine are optional overrides / selections.
+ */
+export interface RoutingStep {
+  /** Stable within its version (L1, L2, ...), so audits can name the step that changed. */
+  lineId: string;
+  /** Process order, unique within the version. The same operation may repeat. */
+  sequence: number;
+  operationId: string;
+  /** Optional costCenterHierarchy node overriding the operation's default. */
+  hierarchyNodeId?: string | null;
+  /** Optional registered equipment category (one the operation allows). */
+  equipmentCategoryId?: string | null;
+  /** Optional specific machine; must belong to equipmentCategoryId. */
+  equipmentId?: string | null;
+  /** Metadata for future production logic - no branching or execution. */
+  required: boolean;
+  notes?: string;
+}
+
+/**
+ * A revision of a routing (Phase 1 Step 3) - collection 'routingVersions'.
+ * DRAFT -> ACTIVE -> RETIRED; steps change only in DRAFT; nothing deleted.
+ * A future Job Reference can select a version id without changing this model.
+ */
+export interface RoutingVersion extends WithExternalReferences {
+  id?: string;
+  routingId: string;
+  /** Unique within its routing, e.g. "R1". */
+  versionCode: string;
+  status: 'DRAFT' | 'ACTIVE' | 'RETIRED';
+  effectiveFrom?: string | null;
+  effectiveTo?: string | null;
+  notes?: string;
+  steps: RoutingStep[];
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+/**
+ * ASFOUR Job Reference (Phase 1 Step 1E) - collection 'jobReferences'.
+ *
+ * The ASFOUR identity of a job: the document id, plus the business `code` the
+ * user enters (it may come from a customer, from Odoo or anyone else). Works
+ * the same with no external system; an Odoo Job Order is linked through
+ * `externalRefs` (system 'odoo', model 'mrp.production'), never as the id.
+ * A reference object - no routing, quantities, schedule or workflow.
+ * Not the legacy customerOrderNumber / manufacturingOrderNumber /
+ * customerRequestNumber, which stay free text on their records.
+ * Rules: services/jobBatchPure.ts.
+ */
+export interface JobReference extends WithExternalReferences {
+  id?: string;
+  /** Business job reference, unique among job references. */
+  code: string;
+  /**
+   * Phase 1 Step 8C: the MAIN job this one belongs to, making this record a
+   * SUB-JOB (a remaining quantity, a re-run, or any other business reason -
+   * the reason is the job's own notes, never inferred). A main job has none.
+   * Only one level: a sub-job cannot itself be a parent.
+   */
+  parentJobReferenceId?: string | null;
+  /** Optional Product document id - never the product code. */
+  productId?: string | null;
+  /** Optional Customer document id. */
+  customerId?: string | null;
+  status: 'DRAFT' | 'ACTIVE' | 'COMPLETED' | 'CANCELLED';
+  /** Where the job originated: 'asfour', or an external system key such as 'odoo'. */
+  sourceSystem: string;
+  notes?: string;
+  /*
+   * Execution setup (Phase 1 Step 4) - all optional, so every existing job stays
+   * valid. References only: never copied BOM components or routing steps, and a
+   * version retired later stays referenced. Rules: services/jobConfigurationPure.ts.
+   */
+  /** The logical item being produced (Step 2A) - the authoritative item identity. */
+  logicalItemId?: string | null;
+  /** The intended BOM version (an ACTIVE version when selected). */
+  bomVersionId?: string | null;
+  /** The intended routing version (an ACTIVE version when selected). */
+  routingVersionId?: string | null;
+  /** The associated batch / lot. */
+  batchId?: string | null;
+  active: boolean;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+/**
+ * Batch (Phase 1 Step 1E) - collection 'batches'. The identity of a production /
+ * stock lot: document id plus `batchNumber`. Not a production record (an event)
+ * and not a product (one product has many batches); the number is never part of
+ * a product code. Optional links to a product and a job reference. The
+ * free-text batchNumber on historical stage records is a different, untouched
+ * field. Rules and the duplicate scope: services/jobBatchPure.ts.
+ */
+export interface Batch extends WithExternalReferences {
+  id?: string;
+  batchNumber: string;
+  productId?: string | null;
+  jobReferenceId?: string | null;
+  notes?: string;
+  active: boolean;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+/**
+ * Optional links a FUTURE production write may carry (Phase 1 Step 1E). Not
+ * applied to any existing record type yet: historical records have neither, and
+ * no form writes them. A stage record type opts in when its form starts
+ * selecting a job reference or batch.
+ */
+export interface WithProductionReferences {
+  jobReferenceId?: string | null;
+  batchId?: string | null;
+  /** Phase 1 Step 5A: the job's logical item (never retyped on the record). */
+  logicalItemId?: string | null;
+  /** Phase 1 Step 5A: the Operation Master record the record's stage resolves to. */
+  operationId?: string | null;
+  /** Phase 1 Step 5A: optional explicit costCenterHierarchy node override. */
+  hierarchyNodeId?: string | null;
+}
+
 export interface Employee {
   id?: string;
   code: string;
@@ -139,12 +426,26 @@ export interface FinancialAccount {
   updatedAt?: string;
 }
 
+/**
+ * The business role of an item: what it IS in the flow of materials, not how
+ * it is labelled. Deliberately separate from product category, product type,
+ * cost centre, stage and customer - none of those fields is overloaded.
+ *
+ * One physical item can play several roles over time (green kaolin is bought
+ * raw, calcined into an intermediate, and may also be sold), so a kind is a
+ * classification of the RECORD, never proof that two records are different
+ * items. Rules and helpers: services/itemClassificationPure.ts.
+ */
+export type ItemKind = 'RAW_MATERIAL' | 'INTERMEDIATE' | 'FINISHED_PRODUCT' | 'OTHER';
+
 export interface ProductType {
   id?: string;
   prefixCode: string; // 3 uppercase characters (e.g. BAR, BHA, BSI)
   nameEn: string; // e.g. Bricks Acid Resistance
   nameAr: string; // e.g. طوب مقاوم للأحماض
   description?: string;
+  /** Default item kind for products of this type. Optional - unset means unclassified; a product's own itemKind wins. */
+  itemKind?: ItemKind;
   active: boolean;
   prefixCodeNormalized?: string;
   nameNormalized?: string;
@@ -174,7 +475,7 @@ export type CalculationMethod =
   | 'DIRECT_KG' 
   | 'NOT_CALCULATED';
 
-export interface Product {
+export interface Product extends WithExternalReferences {
   id?: string;
   code: string; // Product Code (e.g. BAR250102305, 123456789, or CUSTOM-BRICK-001)
   productCode?: string; // Alias for code compatibility
@@ -196,6 +497,14 @@ export interface Product {
   dimensions?: string;
   description?: string;
   isManualClassification?: boolean; // If legacy or custom override
+  /** Explicit item kind for THIS product. Optional - when unset, the product type's itemKind applies, else unclassified. */
+  itemKind?: ItemKind;
+  /**
+   * The role the reconciled master data package states for this item, e.g.
+   * EXISTING_PRODUCT, RAW_MATERIAL_PURCHASED, SCRAP_REJECT_OUTPUT. Kept as the
+   * source wrote it beside `itemKind` - it never replaces the ItemKind model.
+   */
+  businessRole?: string;
   smartParseStatus?: SmartParseStatus;
   productCodeNormalized?: string;
   nameNormalized?: string;
@@ -350,12 +659,20 @@ export interface Mill {
  * collection name rather than adding a MasterDataTab entry (out of scope for
  * this task - see the panel's own comments).
  */
-export interface TubeBallMill {
+export interface TubeBallMill extends WithExternalReferences {
   id?: string;
   code: string;
   name: string;
   model?: string;
   status?: 'active' | 'maintenance' | 'inactive';
+  /** Phase 1 Step 8C-5: TUBE or BALL; absent = not identified. */
+  millKind?: TubeBallMillKind | null;
+  /**
+   * The hierarchy node this mill belongs to (Phase 1 Step 1D) - optional, the
+   * same stable-node-id link Press/Furnace/Mill carry; see Press.hierarchyNodeId.
+   * Records created before this field existed simply have none.
+   */
+  hierarchyNodeId?: string | null;
   millCodeNormalized?: string;
   nameNormalized?: string;
   active: boolean;
@@ -373,7 +690,7 @@ export interface TubeBallMill {
  * ever required to create a review-time coding candidate; everything else
  * may be filled in later.
  */
-export interface Bunker {
+export interface Bunker extends WithExternalReferences {
   id?: string;
   code?: string;
   bunkerNumber: string;
@@ -381,6 +698,12 @@ export interface Bunker {
   center?: string;
   notes?: string;
   status?: 'active' | 'maintenance' | 'inactive';
+  /**
+   * Optional current / default hierarchy location (Phase 1 Step 1D). Chosen by
+   * the user - no hierarchy EQUIPMENT node represents a bunker, so it is never
+   * derived by code reconciliation. `center` above stays the original free text.
+   */
+  hierarchyNodeId?: string | null;
   bunkerCodeNormalized?: string;
   nameNormalized?: string;
   active: boolean;
@@ -388,6 +711,36 @@ export interface Bunker {
   updatedAt?: string;
 }
 
+/**
+ * Rotary Kiln equipment master (Phase 1 Step 1D) - collection 'rotaryKilns'.
+ *
+ * Mirrors Mill/TubeBallMill. Until now the rotary kiln existed only as free text
+ * on historical Rotary Furnace records (RotaryFurnaceRecord.machineInfo), which
+ * stays exactly as stored; this is the master new setup can reference. Kept out
+ * of `furnaces`, whose records are the tunnel kilns a pressing record selects.
+ * Like the other equipment masters it has a single `name` (no English name).
+ */
+export interface RotaryKiln extends WithExternalReferences {
+  id?: string;
+  code: string;
+  name: string;
+  model?: string;
+  description?: string;
+  status?: 'active' | 'maintenance' | 'inactive';
+  /** Optional current / default hierarchy node - see Press.hierarchyNodeId. */
+  hierarchyNodeId?: string | null;
+  kilnCodeNormalized?: string;
+  nameNormalized?: string;
+  active: boolean;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+/**
+ * Furnace cars carry no hierarchyNodeId by design (Phase 1 Step 1D): a car is a
+ * sub-resource of its furnace (furnaceId), and its cost location is the
+ * furnace's. See equipmentMasterPure.ts.
+ */
 export interface FurnaceCar {
   id?: string;
   code: string;
@@ -412,7 +765,59 @@ export interface ProductionFaults {
   otherFaults: number; // in minutes
 }
 
-export interface ProductionRecord extends ProductionFaults {
+/**
+ * Phase 1 Step 8C-5: the source document a production record came from, as the
+ * file named it - an Odoo manufacturing order reference ("كبس/MO/02492") and its
+ * free-text Source column ("PS03950", "ps04097/car65/car244"). Import provenance:
+ * never an id, never parsed into anything the file did not say.
+ */
+export interface WithSourceDocument {
+  manufacturingOrderNumber?: string;
+  sourceDocumentReference?: string;
+}
+
+/**
+ * Phase 1 Step 8C-5: packing is a SUB-ACTIVITY of the lines that pack their own
+ * output (sorting & packing, mortar / thermal concrete, rotary kiln, chinese and
+ * tube / ball mills) - never a mandatory standalone production record, and never
+ * on pressing, mixing, extrusion or the tunnel kiln. Optional: absent means no
+ * packing was recorded. Quantities stay in their own unit - never converted.
+ * Rules: services/packagingActivityPure.ts.
+ */
+export interface PackagingActivity {
+  /** The Operation Master record for packing (OP-PACK) - set only when it resolves. */
+  operationId?: string | null;
+  packedQuantity?: number | null;
+  packedUnit?: string | null;
+  /** Number of packages, e.g. bags (شكارة). */
+  packageCount?: number | null;
+  packageUnit?: string | null;
+  notes?: string;
+}
+
+export interface WithPackagingActivity {
+  packaging?: PackagingActivity | null;
+}
+
+/**
+ * Phase 1 Step 8C-5: how a pressing-stage record was formed. Extrusion is not a
+ * separate record family - it is forming done on an extruder (OP-EXTRUDER).
+ * Absent (every historical record) means pressing.
+ */
+export type FormingMethod = 'PRESSING' | 'EXTRUSION';
+
+/**
+ * Phase 1 Step 8C-5: Tube Mill and Ball Mill are distinct equipment types kept in
+ * one master. Absent means the type has not been identified - never guessed.
+ */
+export type TubeBallMillKind = 'TUBE' | 'BALL';
+
+/** Phase 1 Step 5A: new pressing records may carry WithProductionReferences; historical ones have none. */
+export interface ProductionRecord extends ProductionFaults, WithProductionReferences, WithProductionGenealogy, WithSourceDocument, WithExternalReferences {
+  /** Phase 1 Step 6: actual consumption (genealogy inputs) on new pressing entries; historical records have none. */
+  materials?: MaterialConsumptionItem[];
+  /** Phase 1 Step 8C-5: PRESSING or EXTRUSION; absent = pressing. */
+  formingMethod?: FormingMethod;
   id?: string;
   date: string; // YYYY-MM-DD
   
@@ -584,6 +989,18 @@ export type MasterDataTab =
   | 'furnaces'
   | 'furnaceCars'
   | 'mills'
+  /** Existing collections, managed from Master Data from Phase 1 Step 1D. */
+  | 'tubeBallMills'
+  | 'bunkers'
+  /** Rotary Kiln equipment master (Phase 1 Step 1D). */
+  | 'rotaryKilns'
+  /** ASFOUR Job References and Batches (Phase 1 Step 1E). */
+  | 'jobReferences'
+  | 'batches'
+  /** Bills of Materials (Phase 1 Step 2); versions are in 'bomVersions'. */
+  | 'boms'
+  /** Routings (Phase 1 Step 3); versions are in 'routingVersions'. */
+  | 'routings'
   | 'customers'
   | 'shifts'
   | 'materials'
@@ -635,8 +1052,16 @@ export type ProductionStageType =
   | 'mortar_concrete'     // 5. المونة والخرسانات
   | 'mixing'              // 6. الخلط والتجهيز
   | 'lightweight_foam'    // 7. الشاموت الخفيف / عزل الفوم
-  | 'sorting';            // 8. الفرز والمراقبة
+  | 'sorting'             // 8. الفرز والمراقبة
+  // Phase 1 Step 8C-5: the remaining production areas.
+  | 'thermal_concrete'    // 9. الخرسانة الحرارية
+  | 'tunnel_kiln'         // 10. الفرن النفقي
+  | 'handmade_brick';     // 11. الطوب اليدوي
 
+/**
+ * Draft metadata shape for the legacy stages - never read or written anywhere.
+ * The configurable Operation Master below is what the `stages` collection holds.
+ */
 export interface ProductionStage {
   id: ProductionStageType;
   code: string;
@@ -648,7 +1073,41 @@ export interface ProductionStage {
   active: boolean;
 }
 
-export interface Material {
+/**
+ * Operation Master - a configurable production operation (Rotary Kiln, Pressing,
+ * Packing, an extruder line...). Stored in the registered `stages` collection
+ * with a Firestore auto-id; `code` is its ASFOUR business code.
+ *
+ * It sits BESIDE the legacy stage architecture, never in place of it:
+ * ProductionStageType, STAGE_COLLECTION_NAMES and every stage collection stay
+ * authoritative for historical storage. `legacyStageKey` only records which
+ * legacy stage an operation corresponds to; an operation with no legacy stage
+ * (a new one) is equally valid.
+ *
+ * Operation, cost centre and equipment stay three separate things: what process
+ * runs, where its cost accumulates (`hierarchyNodeId`), and which equipment
+ * categories may perform it. Rules: services/operationMasterPure.ts.
+ */
+export interface Operation extends WithExternalReferences {
+  id?: string;
+  code: string;
+  nameAr: string;
+  nameEn?: string;
+  description?: string;
+  /** Default display/sequence metadata only - NOT a routing. */
+  defaultOrder?: number | null;
+  /** The legacy stage this operation corresponds to, if any. */
+  legacyStageKey?: ProductionStageType | null;
+  /** Default cost centre: a costCenterHierarchy document id, the same link convention equipment uses. */
+  hierarchyNodeId?: string | null;
+  /** Equipment Master Data category ids that may perform this operation. */
+  allowedEquipmentCategoryIds?: string[];
+  active: boolean;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+export interface Material extends WithExternalReferences {
   id?: string;
   code: string;
   name: string;
@@ -662,6 +1121,10 @@ export interface Material {
   notes?: string;
   /** Optional (Comprehensive Historical Import task, §13) - mirrors Product.aluminaPercentage's exact meaning for a raw material, e.g. detected from an embedded "جريت40%" pattern during import. Never guessed - only set when explicitly present in the source or already on the record. */
   aluminaPercentage?: number | null;
+  /** Explicit item kind for this material. Optional - unset means unclassified. Not implied by living in `materials`. */
+  itemKind?: ItemKind;
+  /** The role the reconciled master data package states, e.g. RAW_MATERIAL_PURCHASED - kept as written. */
+  businessRole?: string;
   materialCodeNormalized?: string;
   nameNormalized?: string;
   active: boolean;
@@ -684,11 +1147,67 @@ export interface Machine {
 }
 
 export interface MaterialConsumptionItem {
+  /** The consumed SOURCE record id - a material, or (new writes, itemSource 'products') a product. */
   materialId: string;
   materialCode: string;
   materialName: string;
   quantity: number;
   unit: string;
+  /*
+   * Actual consumption (Phase 1 Step 5B) - optional fields written by new
+   * entries only; historical lines have none of them and stay valid.
+   * Rules: services/actualConsumptionPure.ts.
+   */
+  /** Stable line id (L1, L2, ...). */
+  lineId?: string;
+  /** Display order 1..n - not an identity. */
+  sequence?: number;
+  /** Where materialId lives; absent (historical) means 'materials'. */
+  itemSource?: 'products' | 'materials';
+  /** Set only when the source already resolves to an active logical item - never created. */
+  logicalItemId?: string | null;
+  notes?: string;
+  /** Phase 1 Step 6: the input batch (lot) this line was drawn from - the genealogy input link. */
+  batchId?: string | null;
+  /**
+   * Phase 1 Step 7A: recorded as BASE formula or ADDITIVE consumption - chosen by
+   * the user, never inferred from the BOM. Absent on historical lines = BASE.
+   */
+  componentType?: 'BASE' | 'ADDITIVE';
+}
+
+/**
+ * One OUTPUT of a production record (Phase 1 Step 6) - what came out, of which
+ * batch, how much, of which kind. Inputs are the record's consumption lines;
+ * there is no separate input line. Rules: services/productionGenealogyPure.ts.
+ */
+export interface ProductionOutputLine {
+  lineId: string;
+  sequence: number;
+  /** The produced item's real record: a product or a material. */
+  itemSource: 'products' | 'materials';
+  itemId: string;
+  itemCode: string;
+  itemName: string;
+  /** Set only when the item already resolves to an active logical item - never created. */
+  logicalItemId?: string | null;
+  /** The output lot - required for PRIMARY and BYPRODUCT, optional for SCRAP. Selected, never generated. */
+  batchId?: string | null;
+  quantity: number;
+  unit: string;
+  outputType: 'PRIMARY' | 'BYPRODUCT' | 'SCRAP';
+  notes?: string;
+}
+
+/**
+ * Genealogy fields a NEW production record may carry (Phase 1 Step 6). The two
+ * id lists make "which records consumed / produced batch X" queryable with
+ * array-contains, since Firestore cannot query inside arrays of objects.
+ */
+export interface WithProductionGenealogy {
+  productionOutputs?: ProductionOutputLine[];
+  genealogyInputBatchIds?: string[];
+  genealogyOutputBatchIds?: string[];
 }
 
 export interface StageWorkerItem {
@@ -700,7 +1219,7 @@ export interface StageWorkerItem {
 }
 
 // Stage 2: Rotary Furnace Record
-export interface RotaryFurnaceRecord {
+export interface RotaryFurnaceRecord extends WithProductionReferences, WithProductionGenealogy, WithSourceDocument, WithPackagingActivity, WithExternalReferences {
   id?: string;
   date: string;
   operationPeriod?: string;
@@ -744,7 +1263,9 @@ export interface RotaryFurnaceRecord {
 }
 
 // Stage 3: Chinese Mills Record
-export interface ChineseMillsRecord {
+export interface ChineseMillsRecord extends WithProductionReferences, WithProductionGenealogy, WithSourceDocument, WithPackagingActivity, WithExternalReferences {
+  /** Phase 1 Step 6: actual consumption (genealogy inputs) on new entries; historical records have none. */
+  materials?: MaterialConsumptionItem[];
   id?: string;
   date: string;
   customerId?: string;
@@ -781,7 +1302,9 @@ export interface ChineseMillsRecord {
 }
 
 // Stage 4: Tube & Ball Mills Record
-export interface TubeBallMillsRecord {
+export interface TubeBallMillsRecord extends WithProductionReferences, WithProductionGenealogy, WithSourceDocument, WithPackagingActivity, WithExternalReferences {
+  /** Phase 1 Step 6: actual consumption (genealogy inputs) on new entries; historical records have none. */
+  materials?: MaterialConsumptionItem[];
   id?: string;
   date: string;
   millType: string;
@@ -812,7 +1335,7 @@ export interface TubeBallMillsRecord {
 }
 
 // Stage 5: Mortar & Concrete Record
-export interface MortarConcreteRecord {
+export interface MortarConcreteRecord extends WithProductionReferences, WithProductionGenealogy, WithSourceDocument, WithPackagingActivity, WithExternalReferences {
   id?: string;
   date: string;
   productId: string;
@@ -838,7 +1361,7 @@ export interface MortarConcreteRecord {
 }
 
 // Stage 6: Mixing Record
-export interface MixingRecord {
+export interface MixingRecord extends WithProductionReferences, WithProductionGenealogy, WithSourceDocument, WithExternalReferences {
   id?: string;
   date: string;
   mixProductName: string;
@@ -860,7 +1383,7 @@ export interface MixingRecord {
 }
 
 // Stage 7: Lightweight Foam Record
-export interface LightweightFoamRecord {
+export interface LightweightFoamRecord extends WithProductionReferences, WithProductionGenealogy, WithSourceDocument, WithExternalReferences {
   id?: string;
   date: string;
   productName: string;
@@ -882,7 +1405,9 @@ export interface LightweightFoamRecord {
 }
 
 // Stage 8: Sorting / Inspection Record
-export interface SortingRecord {
+export interface SortingRecord extends WithProductionReferences, WithProductionGenealogy, WithSourceDocument, WithPackagingActivity, WithExternalReferences {
+  /** Phase 1 Step 6: actual consumption (genealogy inputs) on new entries; historical records have none. */
+  materials?: MaterialConsumptionItem[];
   id?: string;
   date: string;
   dischargeDate?: string;
@@ -923,6 +1448,319 @@ export interface SortingRecord {
   notes?: string;
   createdBy: string;
   createdByName?: string;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+/*
+ * Phase 1 Step 8C-5 - the remaining production areas. Each record reuses the
+ * shape of the closest existing stage instead of inventing one:
+ *   thermal concrete  the Mortar & Concrete record (a castable is a composite mix)
+ *   tunnel kiln       firing: green bricks in, fired bricks out, on a furnace and
+ *                     its cars (the pressing record's furnace fields)
+ *   hand-made brick   forming by hand: pieces and piece weight (the pressing
+ *                     measure), no press
+ * Labour and energy stay optional; no meter is assumed.
+ */
+
+// Stage 9: Thermal Concrete Record
+export interface ThermalConcreteRecord extends WithProductionReferences, WithProductionGenealogy, WithSourceDocument, WithPackagingActivity, WithExternalReferences {
+  id?: string;
+  date: string;
+  productId: string;
+  productCode: string;
+  productName: string;
+  customerId?: string;
+  customerCode?: string;
+  customerName?: string;
+  batchNumber?: string;
+  customerRequestNumber?: string;
+  /** In tons (طن), as the mortar record. */
+  productionQuantity: number;
+  materials: MaterialConsumptionItem[];
+  operatingHours?: number;
+  workers?: StageWorkerItem[];
+
+  status: RecordStatus;
+  notes?: string;
+  createdBy: string;
+  createdByName?: string;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+// Stage 10: Tunnel Kiln Record
+export interface TunnelKilnRecord extends WithProductionReferences, WithProductionGenealogy, WithSourceDocument, WithExternalReferences {
+  id?: string;
+  date: string;
+  /** The fired product. */
+  productId: string;
+  productCode: string;
+  productName: string;
+  batchNumber?: string;
+  /** Fired output in tons (طن) - the unit the source records. */
+  productionQuantity: number;
+  wasteQuantity?: number | null;
+  /** The green bricks fired (and their batches) - actual consumption. */
+  materials: MaterialConsumptionItem[];
+  /** The kiln - the existing Furnaces master, as on a pressing record. */
+  furnaceId?: string;
+  furnaceCode?: string;
+  furnaceName?: string;
+  /** The cars fired - car numbers as the source gives them, as on a pressing record. */
+  furnaceCarIds?: string[];
+  furnaceCarNumbers?: string[];
+  operatingHours?: number;
+  workers?: StageWorkerItem[];
+
+  status: RecordStatus;
+  notes?: string;
+  createdBy: string;
+  createdByName?: string;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+// Stage 11: Hand-made Brick Record
+export interface HandmadeBrickRecord extends WithProductionReferences, WithProductionGenealogy, WithSourceDocument, WithExternalReferences {
+  id?: string;
+  date: string;
+  productId: string;
+  productCode: string;
+  productName: string;
+  batchNumber?: string;
+  /** Pieces formed (قطعة), as the pressing record. */
+  productionQuantity: number;
+  /** Optional kg per piece; tons are derived only when it is given. */
+  pieceWeightKg?: number | null;
+  wasteQuantity?: number | null;
+  materials: MaterialConsumptionItem[];
+  operatingHours?: number;
+  workers?: StageWorkerItem[];
+
+  status: RecordStatus;
+  notes?: string;
+  createdBy: string;
+  createdByName?: string;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+/*
+ * ===========================================================================
+ * Phase 1 Step 8D - the Odoo historical manufacturing import (three files).
+ *
+ * THREE SOURCES, NEVER MERGED BY HAND: mrp.production, mrp.workorder and
+ * stock.scrap are uploaded as they were exported, parsed separately, kept as
+ * raw rows, normalised, linked and only then - after review and approval -
+ * written into the existing ASFOUR collections.
+ *
+ * RAW STAYS RAW. Every staged row keeps the original Excel row, its file,
+ * sheet and row number, the normalised shape, any correction, and its
+ * validation outcome (services/odooImportSessionPure.ts).
+ * ===========================================================================
+ */
+
+/** The three Odoo reports this import reads. */
+export type OdooSourceType = 'MRP_PRODUCTION' | 'MRP_WORKORDER' | 'STOCK_SCRAP';
+
+/** Where one normalised value came from - kept on every staged row and on what is written. */
+export interface ImportProvenance {
+  importSessionId: string;
+  sourceFile: string;
+  sourceType: OdooSourceType;
+  sourceSheet: string;
+  /** The Excel row number (header = 1). */
+  sourceRow: number;
+  /** The external system the row came from, e.g. 'odoo'. */
+  sourceSystem: string;
+  /** The normalisation rule applied, when one was (e.g. a Work Center alias). */
+  normalizationRule?: string | null;
+}
+
+/** How a raw Odoo Work Center name resolved - raw text is never replaced. */
+export type WorkCenterResolutionStatus = 'RESOLVED' | 'UNMAPPED_CENTER' | 'NO_STAGE_MAPPING' | 'EMPTY';
+
+export interface WorkCenterResolution {
+  /** Exactly what the source said. */
+  raw: string;
+  /** The ASFOUR main production centre id, or null when the name is not in the registry. */
+  mainCenterId: string | null;
+  mainCenterNameAr: string | null;
+  /** The production record type this centre writes to, or null when it has none yet. */
+  stageType: ProductionStageType | null;
+  /** The specific machine named inside the raw text, when it names one. */
+  equipmentName: string | null;
+  /** TUBE or BALL when the raw text says so - never inferred otherwise. */
+  millKind?: TubeBallMillKind | null;
+  /** The alias that matched, and the rule that produced this result. */
+  matchedAlias: string | null;
+  rule: string;
+  status: WorkCenterResolutionStatus;
+}
+
+/**
+ * A work order (Odoo mrp.workorder) - collection 'workOrders'. Its own record:
+ * it carries the work centre, the equipment, the raw work-order text (NEVER
+ * globally read as a shift) and the employees the source listed. It never
+ * replaces a production record and never carries good production of its own.
+ */
+export interface WorkOrderRecord extends WithExternalReferences {
+  id?: string;
+  /** The MO reference exactly as the source wrote it. */
+  manufacturingOrderNumber: string;
+  /** The ASFOUR production record this work order produced, when one was written. */
+  productionRecordId?: string | null;
+  productionCollection?: string | null;
+  /** The raw work-order text ("1", "2", "فرز", ...). Never rewritten. */
+  rawWorkOrder: string;
+  /** Only set when the stage's own semantics say the work order is a shift. */
+  shiftNumber?: number | null;
+  workCenter: WorkCenterResolution;
+  stageType?: ProductionStageType | null;
+  productCode?: string | null;
+  productName?: string | null;
+  productId?: string | null;
+  bomCode?: string | null;
+  quantity?: number | null;
+  secondaryQuantity?: number | null;
+  unit?: string | null;
+  realDurationMinutes?: number | null;
+  expectedDurationMinutes?: number | null;
+  durationPerUnit?: number | null;
+  durationDeviation?: number | null;
+  state?: string | null;
+  date?: string | null;
+  startDate?: string | null;
+  endDate?: string | null;
+  /** The employees the source named on this work order (never invented, never counted for the user). */
+  employees?: StageWorkerItem[];
+  provenance: ImportProvenance;
+  status: RecordStatus;
+  createdBy?: string;
+  createdByName?: string;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+/**
+ * A scrap record (Odoo stock.scrap) - collection 'stockScrap'. stock.scrap is
+ * the ONLY source that creates one; scrap columns in the other two reports are
+ * cross-checks. Many scrap records per MO are normal. Scrap is never good
+ * production and is never subtracted from a production quantity here.
+ */
+export interface ScrapRecord extends WithExternalReferences {
+  id?: string;
+  date: string;
+  manufacturingOrderNumber?: string | null;
+  productionRecordId?: string | null;
+  productionCollection?: string | null;
+  workOrderId?: string | null;
+  rawWorkOrder?: string | null;
+  workCenter?: WorkCenterResolution | null;
+  stageType?: ProductionStageType | null;
+  productCode?: string | null;
+  productName?: string | null;
+  productId?: string | null;
+  quantity: number;
+  unit: string;
+  reference?: string | null;
+  scrapLocation?: string | null;
+  sourceLocation?: string | null;
+  state?: string | null;
+  provenance: ImportProvenance;
+  status: RecordStatus;
+  createdBy?: string;
+  createdByName?: string;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+/** A disagreement between two sources about the same logical record - never resolved by guessing. */
+export interface ImportSourceConflict {
+  /** The logical entity the two values describe, e.g. "MO/00386-003". */
+  logicalKey: string;
+  field: string;
+  sourceA: OdooSourceType;
+  valueA: unknown;
+  rowA: number;
+  fileA: string;
+  sourceB: OdooSourceType;
+  valueB: unknown;
+  rowB: number;
+  fileB: string;
+  severity: 'WARNING' | 'BLOCKING';
+  resolutionStatus: 'OPEN' | 'RESOLVED' | 'ACCEPTED';
+  resolvedValue?: unknown;
+  resolvedBy?: string | null;
+  resolvedAt?: string | null;
+  messageAr: string;
+  messageEn: string;
+}
+
+/** A row that belongs to nothing - reported, never attached to a neighbour and never discarded. */
+export type ImportOrphanKind =
+  | 'WORK_ORDER_WITHOUT_MO'
+  | 'SCRAP_WITHOUT_MO'
+  /** A manufacturing order with no work order: kept and reviewable, but no production centre is invented for it. */
+  | 'MO_WITHOUT_WORK_ORDER'
+  | 'UNRESOLVED_WORK_CENTER'
+  | 'UNRESOLVED_PRODUCT'
+  | 'UNRESOLVED_STAGE';
+
+/** One staged row of an Odoo import session - collection 'importStagingRows'. */
+export interface ImportStagingRow {
+  id?: string;
+  importSessionId: string;
+  rowId: string;
+  sourceType: OdooSourceType;
+  /** Exactly what the file said - written once, never rewritten. */
+  rawRow: Record<string, unknown>;
+  /** The ASFOUR shape derived from the raw row. */
+  normalizedRow: Record<string, unknown> | null;
+  /** Only the fields a reviewer changed. */
+  correctedRow: Record<string, unknown> | null;
+  status: string;
+  selection: string;
+  errors: Array<{ field: string; messageAr: string; messageEn: string }>;
+  warnings: Array<{ field: string; messageAr: string; messageEn: string }>;
+  orphanKinds?: ImportOrphanKind[];
+  /** The MO this row belongs to, once linked. */
+  linkedManufacturingOrder?: string | null;
+  linkedRowIds?: string[];
+  provenance: ImportProvenance;
+  importedId?: string | null;
+  importedCollection?: string | null;
+  failureMessage?: string | null;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+/** An Odoo import session - collection 'importSessions'. Survives a reload. */
+export interface ImportSessionRecord {
+  id?: string;
+  importSessionId: string;
+  status: 'DRAFT' | 'REVIEW' | 'PARTIALLY_IMPORTED' | 'COMPLETED' | 'CANCELLED';
+  files: Array<{ sourceType: OdooSourceType; fileName: string; sheetName: string; rowCount: number; uploadedAt: string }>;
+  counts: Record<string, number>;
+  conflicts: ImportSourceConflict[];
+  createdBy: string;
+  createdByName?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** A Work Center mapping a user approved - collection 'workCenters'. The code registry stays authoritative. */
+export interface WorkCenterMapping {
+  id?: string;
+  /** The raw Odoo work-centre text, normalised for comparison only. */
+  rawNormalized: string;
+  raw: string;
+  mainCenterId: string;
+  equipmentName?: string | null;
+  approvedBy?: string | null;
+  approvedAt?: string | null;
+  active: boolean;
   createdAt?: string;
   updatedAt?: string;
 }

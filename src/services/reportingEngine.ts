@@ -34,6 +34,9 @@ export const STAGE_DISPLAY_NAMES_EN: Record<ProductionStageType, string> = {
   mixing: 'Mixing',
   lightweight_foam: 'Lightweight Foam',
   sorting: 'Sorting',
+  thermal_concrete: 'Thermal Concrete',
+  tunnel_kiln: 'Tunnel Kiln',
+  handmade_brick: 'Hand-made Brick',
 };
 
 export function getStageDisplayName(stage: ProductionStageType, language: 'ar' | 'en'): string {

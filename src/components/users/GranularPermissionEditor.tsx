@@ -35,7 +35,8 @@ import {
   Building2,
   FileSpreadsheet,
   UploadCloud,
-  EyeOff
+  EyeOff,
+  Languages
 } from 'lucide-react';
 import { 
   GranularPermissions, 
@@ -134,7 +135,7 @@ export const GranularPermissionEditor: React.FC<GranularPermissionEditorProps> =
     if (select) {
       updated.dataScope = 'ALL';
       updated['production.scope'] = 'all';
-      updated.allowedStages = ['pressing', 'rotary_furnace', 'chinese_mills', 'tube_ball_mills', 'mortar_concrete', 'mixing', 'lightweight_foam', 'sorting'];
+      updated.allowedStages = ['pressing', 'rotary_furnace', 'chinese_mills', 'tube_ball_mills', 'mortar_concrete', 'mixing', 'lightweight_foam', 'sorting', 'thermal_concrete', 'tunnel_kiln', 'handmade_brick'];
     } else {
       updated.dataScope = 'OWN_RECORDS';
       updated['production.scope'] = 'own';
@@ -175,6 +176,7 @@ export const GranularPermissionEditor: React.FC<GranularPermissionEditorProps> =
       case 'backup_restore': return HardDrive;
       case 'system_admin': return ShieldCheck;
       case 'field_restrictions': return EyeOff;
+      case 'localization': return Languages;
       default: return ShieldCheck;
     }
   };
@@ -336,7 +338,7 @@ export const GranularPermissionEditor: React.FC<GranularPermissionEditorProps> =
             <span>{language === 'ar' ? 'صلاحيات الوصول لمراحل الإنتاج (8 مراحل):' : '8 Production Stages Access Matrix:'}</span>
           </label>
           <span className="text-[10px] text-amber-400 font-mono">
-            {Object.keys(STAGE_DISPLAY_NAMES).filter(s => Boolean(permissions[`stage.${s}` as PermissionKey])).length} / 8 {language === 'ar' ? 'مراحل مسموحة' : 'Allowed'}
+            {Object.keys(STAGE_DISPLAY_NAMES).filter(s => Boolean(permissions[`stage.${s}` as PermissionKey])).length} / {Object.keys(STAGE_DISPLAY_NAMES).length} {language === 'ar' ? 'مراحل مسموحة' : 'Allowed'}
           </span>
         </div>
 

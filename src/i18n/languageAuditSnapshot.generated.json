@@ -1,0 +1,4350 @@
+{
+  "scannedFiles": 65,
+  "totalSuspectLines": 1013,
+  "filesWithSuspectLines": 37,
+  "topOffenders": [
+    {
+      "file": "src\\components\\admin\\BackupRestoreView.tsx",
+      "count": 152
+    },
+    {
+      "file": "src\\i18n\\LanguageContext.tsx",
+      "count": 123
+    },
+    {
+      "file": "src\\components\\admin\\DataImportView.tsx",
+      "count": 122
+    },
+    {
+      "file": "src\\components\\production\\DataReviewView.tsx",
+      "count": 73
+    },
+    {
+      "file": "src\\components\\bulk\\BulkEntryView.tsx",
+      "count": 62
+    },
+    {
+      "file": "src\\components\\admin\\DataQualityModal.tsx",
+      "count": 59
+    },
+    {
+      "file": "src\\components\\admin\\SystemHealthView.tsx",
+      "count": 59
+    },
+    {
+      "file": "src\\components\\masterData\\MasterDataView.tsx",
+      "count": 43
+    },
+    {
+      "file": "src\\components\\common\\SmartEntitySelect.tsx",
+      "count": 40
+    },
+    {
+      "file": "src\\components\\admin\\InlineMasterDataAddModal.tsx",
+      "count": 34
+    },
+    {
+      "file": "src\\components\\users\\UserManagementView.tsx",
+      "count": 26
+    },
+    {
+      "file": "src\\components\\production\\ProductionStageSelector.tsx",
+      "count": 24
+    },
+    {
+      "file": "src\\components\\masterData\\MasterDataQualityReportModal.tsx",
+      "count": 20
+    },
+    {
+      "file": "src\\components\\common\\VersionModal.tsx",
+      "count": 17
+    },
+    {
+      "file": "src\\components\\dashboard\\ChartGalleryPicker.tsx",
+      "count": 17
+    }
+  ],
+  "dictionary": {
+    "ok": true,
+    "arKeyCount": 413,
+    "enKeyCount": 413,
+    "missingInEnglish": [],
+    "missingInArabic": []
+  },
+  "fileResults": [
+    {
+      "file": "src\\components\\admin\\BackupRestoreView.tsx",
+      "count": 152,
+      "hits": [
+        {
+          "line": 116,
+          "text": "message: `فشل في تحميل سجلات النسخ الاحتياطي: ${err.message}`"
+        },
+        {
+          "line": 147,
+          "text": "message: `✅ تم تسجيل وتوثيق البيانات الوصفية للنسخة الاحتياطية (${updated.backupId}) في Firestore بنجاح!`"
+        },
+        {
+          "line": 153,
+          "text": "message: `تعذر حفظ البيانات الوصفية: ${err.message}`"
+        },
+        {
+          "line": 163,
+          "text": "setFeedback({ type: 'error', message: 'عذراً، هذه العملية مقصورة على المشرفين العامين (SUPER_ADMIN) فقط.' });"
+        },
+        {
+          "line": 169,
+          "text": "setBackupProgressMsg('جاري بدء بروتوكول النسخ الاحتياطي...');"
+        },
+        {
+          "line": 185,
+          "text": "throw new Error('فشل التحقق من ملف النسخة الاحتياطية - حجم الملف 0 بايت.');"
+        },
+        {
+          "line": 195,
+          "text": "message: `✅ تم إنشاء النسخة الاحتياطية وتنزيل الملف (${newBackup.fileName || newBackup.backupId}) بنجاح! تم حفظ ${newBackup.totalRecords.toL"
+        },
+        {
+          "line": 200,
+          "text": "message: '⚠️ تم إنشاء ملف النسخ الاحتياطي وتنزيله محلياً، ولكن تعذر تسجيل بيانات النسخة في Firestore.',"
+        },
+        {
+          "line": 208,
+          "text": "const errorMsg = err.message || 'خطأ غير متوقع أثناء معالجة البيانات.';"
+        },
+        {
+          "line": 212,
+          "text": "message: 'فشل إنشاء النسخة الاحتياطية',"
+        },
+        {
+          "line": 223,
+          "text": "setFeedback({ type: 'error', message: 'يرجى اختيار ملف بصيغة JSON صحيح.' });"
+        },
+        {
+          "line": 243,
+          "text": "message: `تم فحص الملف (${file.name})! يحتوي على ${parsed.backup.totalRecords.toLocaleString()} سجل عبر ${parsed.backup.collections.length} "
+        },
+        {
+          "line": 246,
+          "text": "setFeedback({ type: 'error', message: `فشل قراءة ملف النسخة: ${err.message}` });"
+        },
+        {
+          "line": 266,
+          "text": "setFeedback({ type: 'error', message: `فشل توليد معاينة الاستعادة: ${err.message}` });"
+        },
+        {
+          "line": 296,
+          "text": "setFeedback({ type: 'error', message: 'يرجى كتابة رمز التأكيد بدقة (RESTORE ASFOUR DATA) لتأكيد العملية.' });"
+        },
+        {
+          "line": 303,
+          "text": "message: 'تم إيقاف الاستعادة لأن بصمة الملف لا تطابق البصمة المسجلة. / Restore stopped because the file checksum does not match the recorded"
+        },
+        {
+          "line": 310,
+          "text": "message: 'النسخة الاحتياطية لا تحتوي على بصمة SHA-256 ولا يمكن التحقق من سلامتها بالكامل. / This backup does not contain a SHA-256 checksum "
+        },
+        {
+          "line": 317,
+          "text": "setRestoreProgressMsg('جاري بدء بروتوكول الاستعادة الآمنة...');"
+        },
+        {
+          "line": 333,
+          "text": "message: `تمت استعادة ${result.totalRestored.toLocaleString()} سجل بنجاح عبر ${result.restoredCollections.length} مجموعة! ${result.safetyBac"
+        },
+        {
+          "line": 338,
+          "text": "message: `تمت الاستعادة جزئياً مع بعض التنبيهات. يرجى مراجعة التفاصيل.`"
+        },
+        {
+          "line": 343,
+          "text": "setFeedback({ type: 'error', message: `فشل تنفيذ الاستعادة: ${err.message}` });"
+        },
+        {
+          "line": 355,
+          "text": "message: `النسخة (${backup.backupId}) مسجلة كبيانات وصفية وتم تنزيل ملفها مسبقاً. لاستعادتها أو فحصها، يرجى رفع ملف JSON من جهازك.`"
+        },
+        {
+          "line": 360,
+          "text": "message: `جاري تنزيل ملف النسخة الاحتياطية (${backup.fileName || backup.backupId}).`"
+        },
+        {
+          "line": 370,
+          "text": "setFeedback({ type: 'success', message: `تم حذف سجل النسخة الاحتياطية (${backupToDelete.backupId}) بنجاح.` });"
+        },
+        {
+          "line": 374,
+          "text": "setFeedback({ type: 'error', message: `فشل حذف النسخة الاحتياطية: ${err.message}` });"
+        },
+        {
+          "line": 417,
+          "text": "عرض التفاصيل"
+        },
+        {
+          "line": 420,
+          "text": "<button onClick={() => setFeedback(null)} className=\"text-xs hover:underline opacity-80 px-2 py-1\">إغلاق</button>"
+        },
+        {
+          "line": 442,
+          "text": "? '✅ النسخة الاحتياطية جاهزة وموثقة'"
+        },
+        {
+          "line": 443,
+          "text": ": '⚠️ تم إنشاء ملف النسخ الاحتياطي، ولكن تعذر تسجيل بيانات النسخة في Firestore'}"
+        },
+        {
+          "line": 450,
+          "text": "{latestCreatedBackup.status === 'SUCCESS' ? 'سليم ومتحقق' : 'ملف جاهز - تنبيه توثيق سحابي'}"
+        },
+        {
+          "line": 454,
+          "text": "<span>الملف: <span className=\"font-mono text-amber-400 font-bold\">{latestCreatedBackup.fileName || latestCreatedBackup.backupId}</span></spa"
+        },
+        {
+          "line": 455,
+          "text": "<span>• الحجم: <span className=\"font-mono text-white font-bold\">{(latestCreatedBackup.sizeBytes / 1024).toFixed(1)} KB</span></span>"
+        },
+        {
+          "line": 456,
+          "text": "<span>• السجلات: <span className=\"font-mono text-emerald-400 font-bold\">{latestCreatedBackup.totalRecords.toLocaleString()}</span></span>"
+        },
+        {
+          "line": 457,
+          "text": "<span>• البصمة: <span className=\"font-mono text-slate-400 text-[11px]\" title={latestCreatedBackup.checksum}>{latestCreatedBackup.checksum.su"
+        },
+        {
+          "line": 468,
+          "text": "<span>تحميل النسخة الاحتياطية</span>"
+        },
+        {
+          "line": 474,
+          "text": "title=\"نسخ رقم النسخة\""
+        },
+        {
+          "line": 479,
+          "text": "<span className=\"text-emerald-400\">تم النسخ</span>"
+        },
+        {
+          "line": 484,
+          "text": "<span>نسخ رقم النسخة</span>"
+        },
+        {
+          "line": 496,
+          "text": "<span>{isRetryingMetadata ? 'جاري إعادة الحفظ...' : 'إعادة محاولة حفظ البيانات الوصفية'}</span>"
+        },
+        {
+          "line": 503,
+          "text": "title=\"إغلاق\""
+        },
+        {
+          "line": 520,
+          "text": "<span>مركز النسخ الاحتياطي والاستعادة الشامل</span>"
+        },
+        {
+          "line": 526,
+          "text": "حماية البيانات الكاملة، التصدير المحلي الفوري، وتأمين المنظومة من الكوارث"
+        },
+        {
+          "line": 537,
+          "text": "<span>إنشاء نسخة احتياطية وتنزيلها</span>"
+        },
+        {
+          "line": 543,
+          "text": "title=\"تحديث السجلات\""
+        },
+        {
+          "line": 558,
+          "text": "<span>حالة النسخ الاحتياطي</span>"
+        },
+        {
+          "line": 566,
+          "text": "{healthStats.healthState === 'GREEN' ? 'آمن ومطابق (سليم)' :"
+        },
+        {
+          "line": 567,
+          "text": "healthStats.healthState === 'YELLOW' ? 'تنبيه (مطلوب تحديث)' : 'حرج (لا توجد نسخ حديثة)'}"
+        },
+        {
+          "line": 576,
+          "text": "<span>آخر نسخة احتياطية</span>"
+        },
+        {
+          "line": 579,
+          "text": "{healthStats.lastBackupHoursAgo !== null ? `منذ ${healthStats.lastBackupHoursAgo} ساعة` : 'لا يوجد'}"
+        },
+        {
+          "line": 589,
+          "text": "<span>إجمالي النسخ المسجلة</span>"
+        },
+        {
+          "line": 592,
+          "text": "{healthStats.totalBackups} نسخة"
+        },
+        {
+          "line": 595,
+          "text": "{healthStats.latestChecksum ? `Checksum: ${healthStats.latestChecksum}` : 'جاهز للأرشفة'}"
+        },
+        {
+          "line": 602,
+          "text": "<span>إجمالي السجلات المحمية</span>"
+        },
+        {
+          "line": 605,
+          "text": "{healthStats.totalRecordsProtected.toLocaleString()} سجل"
+        },
+        {
+          "line": 607,
+          "text": "<p className=\"text-[11px] text-slate-400 mt-1\">عبر كافة مجموعات المصنع الـ 23</p>"
+        },
+        {
+          "line": 623,
+          "text": "<span>سجل النسخ الاحتياطية ({backups.length})</span>"
+        },
+        {
+          "line": 635,
+          "text": "<span>مركز الاستعادة والتحقق الآمن</span>"
+        },
+        {
+          "line": 647,
+          "text": "<span>النسخ الخادمي المدار (Cloud Export)</span>"
+        },
+        {
+          "line": 661,
+          "text": "placeholder=\"البحث برقم النسخة، اسم الملف، الملاحظات، أو النوع...\""
+        },
+        {
+          "line": 671,
+          "text": "<th className=\"py-3.5 px-4\">رقم النسخة (Backup ID)</th>"
+        },
+        {
+          "line": 672,
+          "text": "<th className=\"py-3.5 px-4\">التاريخ والوقت</th>"
+        },
+        {
+          "line": 673,
+          "text": "<th className=\"py-3.5 px-4\">النوع والمصدر</th>"
+        },
+        {
+          "line": 674,
+          "text": "<th className=\"py-3.5 px-4\">الإصدار والمخطط</th>"
+        },
+        {
+          "line": 675,
+          "text": "<th className=\"py-3.5 px-4\">السجلات</th>"
+        },
+        {
+          "line": 676,
+          "text": "<th className=\"py-3.5 px-4\">الحجم والبصمة</th>"
+        },
+        {
+          "line": 677,
+          "text": "<th className=\"py-3.5 px-4\">الحالة والتخزين</th>"
+        },
+        {
+          "line": 678,
+          "text": "<th className=\"py-3.5 px-4 text-center\">الإجراءات</th>"
+        },
+        {
+          "line": 686,
+          "text": "<span>جاري تحميل سجلات النسخ الاحتياطي...</span>"
+        },
+        {
+          "line": 693,
+          "text": "<span>لا توجد نسخ احتياطية مسجلة مطابقة للبحث</span>"
+        },
+        {
+          "line": 718,
+          "text": "{backup.type === 'MANUAL' ? 'يدوي' :"
+        },
+        {
+          "line": 719,
+          "text": "backup.type === 'PRE_IMPORT' ? 'قبل الاستيراد' :"
+        },
+        {
+          "line": 720,
+          "text": "backup.type === 'SAFETY_CHECKPOINT' ? 'نقطة أمان' : 'مجدول'}"
+        },
+        {
+          "line": 750,
+          "text": "{backup.status === 'SUCCESS' ? 'ناجح ومحقق' :"
+        },
+        {
+          "line": 751,
+          "text": "backup.status === 'FILE_READY_METADATA_FAILED' ? 'ملف جاهز (تنبيه توثيق)' : 'فشل'}"
+        },
+        {
+          "line": 754,
+          "text": "{backup.storageLocation === 'LOCAL_JSON' ? 'ملف محلي (JSON)' : 'سحابي'}"
+        },
+        {
+          "line": 763,
+          "text": "title=\"تحميل النسخة الاحتياطية\""
+        },
+        {
+          "line": 771,
+          "text": "title=\"فحص تفاصيل النسخة\""
+        },
+        {
+          "line": 779,
+          "text": "title=\"معاينة واستعادة النسخة\""
+        },
+        {
+          "line": 787,
+          "text": "title=\"حذف سجل النسخة\""
+        },
+        {
+          "line": 823,
+          "text": "<h3 className=\"text-lg font-bold text-white mb-1\">رفع ملف نسخة احتياطية (JSON) للاستعادة الآمنة</h3>"
+        },
+        {
+          "line": 825,
+          "text": "قم بسحب وإفلات ملف <span className=\"font-mono text-amber-400\">ASFOUR_Backup_*.json</span> هنا أو اضغط للاختيار من جهازك"
+        },
+        {
+          "line": 833,
+          "text": "<span>اختيار ملف النسخة من الجهاز</span>"
+        },
+        {
+          "line": 840,
+          "text": "<span>إجراءات الأمان واستعادة البيانات من نقطة زمنية محددة</span>"
+        },
+        {
+          "line": 843,
+          "text": "تتيح لك هذه الواجهة استعادة بيانات النظام بأعلى معايير الأمان المعتمدة مع إنشاء نقطة أمان وقائية تلقائياً:"
+        },
+        {
+          "line": 851,
+          "text": "<h4 className=\"font-bold text-sm text-white mb-1\">المعاينة وحساب الفروق</h4>"
+        },
+        {
+          "line": 853,
+          "text": "مقارنة فورية بين أعداد السجلات الحالية في Firestore وأعداد السجلات في النسخة الاحتياطية قبل أي تعديل."
+        },
+        {
+          "line": 861,
+          "text": "<h4 className=\"font-bold text-sm text-white mb-1\">نقطة الأمان التلقائية</h4>"
+        },
+        {
+          "line": 863,
+          "text": "إنشاء نسخة احتياطية وقائية (Safety Checkpoint) لقاعدة البيانات الحالية قبل إجراء الاستبدال لحمايتها من أي خطأ."
+        },
+        {
+          "line": 871,
+          "text": "<h4 className=\"font-bold text-sm text-white mb-1\">الكتابة على دفعات موثقة</h4>"
+        },
+        {
+          "line": 873,
+          "text": "تنفيذ الاستعادة على دفعات مجزأة (Batches of 400) وتوثيق كامل العملية في سجل التدقيق التاريخي (Audit Logs)."
+        },
+        {
+          "line": 880,
+          "text": "<h4 className=\"text-sm font-bold text-white mb-4\">أو اختر نسخة مسجلة من الجلسة الحالية:</h4>"
+        },
+        {
+          "line": 890,
+          "text": "{new Date(backup.createdAt).toLocaleString('ar-EG')} • {backup.totalRecords.toLocaleString()} سجل"
+        },
+        {
+          "line": 898,
+          "text": "<span>معاينة واستعادة</span>"
+        },
+        {
+          "line": 916,
+          "text": "<h3 className=\"text-base font-bold text-white\">النسخ الخادمي المدار لقواعد البيانات الكبيرة (Cloud Managed Export)</h3>"
+        },
+        {
+          "line": 918,
+          "text": "تصدير وإدارة قواعد البيانات الضخمة مباشرة على مستوى Cloud Firestore و Cloud Storage"
+        },
+        {
+          "line": 926,
+          "text": "<h4 className=\"font-bold text-sm mb-1 text-white\">متطلبات النسخ الخادمي المباشر:</h4>"
+        },
+        {
+          "line": 928,
+          "text": "النسخ الخادمي المدار المباشر عبر Google Cloud Firestore يتطلب تفعيل خطة <span className=\"font-bold text-white\">Billing / Blaze</span> وإنشاء"
+        },
+        {
+          "line": 934,
+          "text": "<h4 className=\"text-xs font-bold text-white\">أمر التصدير الخادمي عبر Google Cloud CLI:</h4>"
+        },
+        {
+          "line": 939,
+          "text": "يقوم هذا الأمر بتصدير كافة المجموعات مباشرة من خوادم Google دون المرور بذاكرة المتصفح."
+        },
+        {
+          "line": 944,
+          "text": "<h4 className=\"text-xs font-bold text-white\">الفرق بين النسخ المحلي والنسخ الخادمي:</h4>"
+        },
+        {
+          "line": 948,
+          "text": "<span><strong>النسخ المحلي (JSON Backup):</strong> مناسب لقواعد البيانات الحالية ويتم تنزيله فورياً على جهاز المشرف دون تكلفة إضافية.</span>"
+        },
+        {
+          "line": 952,
+          "text": "<span><strong>النسخ الخادمي (Cloud Export):</strong> موصى به عند تجاوز البيانات 500,000 سجل أو 100 ميجابايت.</span>"
+        },
+        {
+          "line": 968,
+          "text": "<h3 className=\"font-bold text-lg\">إنشاء نسخة احتياطية وتنزيلها</h3>"
+        },
+        {
+          "line": 969,
+          "text": "<p className=\"text-xs text-slate-400\">سيتم تجميع كافة مجموعات المصنع وتنزيل ملف JSON فوراً</p>"
+        },
+        {
+          "line": 975,
+          "text": "<label className=\"block text-xs text-slate-400 mb-1.5\">ملاحظات النسخة (اختياري)</label>"
+        },
+        {
+          "line": 980,
+          "text": "placeholder=\"مثال: نسخة احتياطية شاملة معتمدة...\""
+        },
+        {
+          "line": 987,
+          "text": "<span>المجموعات المشمولة:</span>"
+        },
+        {
+          "line": 988,
+          "text": "<span className=\"font-bold text-amber-400\">23 مجموعة رئيسية</span>"
+        },
+        {
+          "line": 991,
+          "text": "<span>إصدار المخطط:</span>"
+        },
+        {
+          "line": 995,
+          "text": "<span>معمارية التخزين:</span>"
+        },
+        {
+          "line": 996,
+          "text": "<span className=\"text-blue-300\">ملف JSON محلي + بيانات وصفية مشفرة</span>"
+        },
+        {
+          "line": 1022,
+          "text": "إلغاء"
+        },
+        {
+          "line": 1030,
+          "text": "<span>{isCreatingBackup ? 'جاري التنفيذ...' : 'بدء النسخ والتنزيل'}</span>"
+        },
+        {
+          "line": 1046,
+          "text": "<h3 className=\"font-bold text-lg text-white\">تفاصيل الخطأ التقني</h3>"
+        },
+        {
+          "line": 1047,
+          "text": "<p className=\"text-xs text-slate-400\">سجل الخطأ المسترجع من المنظومة</p>"
+        },
+        {
+          "line": 1052,
+          "text": "<p>{backupErrorDetails || 'لم يتم تسجيل تفاصيل إضافية.'}</p>"
+        },
+        {
+          "line": 1060,
+          "text": "إغلاق"
+        },
+        {
+          "line": 1076,
+          "text": "<h3 className=\"font-bold text-lg\">فحص البيانات الوصفية للنسخة</h3>"
+        },
+        {
+          "line": 1083,
+          "text": "<span className=\"text-slate-400\">اسم الملف:</span>"
+        },
+        {
+          "line": 1087,
+          "text": "<span className=\"text-slate-400\">إجمالي السجلات:</span>"
+        },
+        {
+          "line": 1088,
+          "text": "<span className=\"font-bold text-white\">{verifiedBackup.totalRecords.toLocaleString()} سجل</span>"
+        },
+        {
+          "line": 1091,
+          "text": "<span className=\"text-slate-400\">الحجم:</span>"
+        },
+        {
+          "line": 1095,
+          "text": "<span className=\"text-slate-400\">البصمة الرقمية (Checksum):</span>"
+        },
+        {
+          "line": 1099,
+          "text": "<span className=\"text-slate-400\">موقع التخزين:</span>"
+        },
+        {
+          "line": 1109,
+          "text": "إغلاق"
+        },
+        {
+          "line": 1126,
+          "text": "<h3 className=\"font-bold text-lg text-white\">معاينة واستعادة النسخة الاحتياطية</h3>"
+        },
+        {
+          "line": 1143,
+          "text": "<span>جاري فحص ومقارنة أعداد السجلات في Firestore...</span>"
+        },
+        {
+          "line": 1150,
+          "text": "<h4 className=\"font-bold text-sm mb-1 text-white\">تحذير أمان عالي: استعادة البيانات</h4>"
+        },
+        {
+          "line": 1152,
+          "text": "سيتم دمج وتحديث السجلات الحالية ببيانات هذه النسخة الاحتياطية. لضمان الأمان التام، سيقوم النظام تلقائياً بإنشاء نقطة أمان قبل البدء."
+        },
+        {
+          "line": 1159,
+          "text": "<h4 className=\"text-xs font-bold text-slate-300 mb-3\">مقارنة أعداد السجلات بين الحالي والنسخة:</h4>"
+        },
+        {
+          "line": 1165,
+          "text": "<span className=\"text-slate-400\">الحالي: {diff.currentCount}</span>"
+        },
+        {
+          "line": 1166,
+          "text": "<span className=\"text-amber-400 font-bold\">النسخة: {diff.backupCount}</span>"
+        },
+        {
+          "line": 1191,
+          "text": "بصمة السلامة (SHA-256):{' '}"
+        },
+        {
+          "line": 1198,
+          "text": "? 'جاري التحقق...'"
+        },
+        {
+          "line": 1199,
+          "text": ": checksumStatus === 'VALID' ? 'سليم / Valid'"
+        },
+        {
+          "line": 1200,
+          "text": ": checksumStatus === 'INVALID' ? 'غير صالح / Invalid'"
+        },
+        {
+          "line": 1201,
+          "text": ": checksumStatus === 'MISSING' ? 'غير موجود / Missing'"
+        },
+        {
+          "line": 1202,
+          "text": ": 'سيتم التحقق عند بدء الاستعادة / Will be verified at restore time'}"
+        },
+        {
+          "line": 1209,
+          "text": "تم إيقاف الاستعادة لأن بصمة الملف لا تطابق البصمة المسجلة.<br />"
+        },
+        {
+          "line": 1217,
+          "text": "النسخة الاحتياطية لا تحتوي على بصمة SHA-256 ولا يمكن التحقق من سلامتها بالكامل.<br />"
+        },
+        {
+          "line": 1228,
+          "text": "<span>أؤكد كمدير عام (SUPER_ADMIN) المتابعة رغم عدم وجود بصمة سلامة / I confirm as SUPER_ADMIN to proceed without an integrity checksum</spa"
+        },
+        {
+          "line": 1232,
+          "text": "هذه العملية تتطلب تأكيد مدير عام (SUPER_ADMIN) للمتابعة. / This action requires SUPER_ADMIN confirmation to proceed."
+        },
+        {
+          "line": 1242,
+          "text": "<div className=\"text-xs font-bold text-white\">إنشاء نقطة أمان احتياطية تلقائياً قبل الاستعادة</div>"
+        },
+        {
+          "line": 1243,
+          "text": "<div className=\"text-[11px] text-slate-400\">يوفر إمكانية التراجع الفوري إذا دعت الحاجة</div>"
+        },
+        {
+          "line": 1256,
+          "text": "لتأكيد الاستعادة، يرجى كتابة العبارة التالية بدقة: <span className=\"font-mono text-white underline\">RESTORE ASFOUR DATA</span>"
+        },
+        {
+          "line": 1262,
+          "text": "placeholder=\"اكتب RESTORE ASFOUR DATA هنا...\""
+        },
+        {
+          "line": 1292,
+          "text": "إلغاء"
+        },
+        {
+          "line": 1305,
+          "text": "<span>تنفيذ الاستعادة الآن</span>"
+        },
+        {
+          "line": 1321,
+          "text": "<h3 className=\"font-bold text-lg text-white\">حذف سجل النسخة الاحتياطية</h3>"
+        },
+        {
+          "line": 1327,
+          "text": "هل أنت متأكد من رغبتك في حذف سجل هذه النسخة الاحتياطية من قاعدة البيانات؟ لن يحذف هذا الملفات المنزلة على جهازك."
+        },
+        {
+          "line": 1335,
+          "text": "إلغاء"
+        },
+        {
+          "line": 1342,
+          "text": "<span>تأكيد الحذف</span>"
+        }
+      ]
+    },
+    {
+      "file": "src\\i18n\\LanguageContext.tsx",
+      "count": 123,
+      "hits": [
+        {
+          "line": 22,
+          "text": "'التاريخ': 'Date',"
+        },
+        {
+          "line": 23,
+          "text": "'اسم العامل': 'Worker Name',"
+        },
+        {
+          "line": 24,
+          "text": "'رقم السجل': 'Employee Code',"
+        },
+        {
+          "line": 25,
+          "text": "'كود العامل': 'Employee Code',"
+        },
+        {
+          "line": 26,
+          "text": "'اسم المكبس': 'Press Name',"
+        },
+        {
+          "line": 27,
+          "text": "'رقم الوردية': 'Shift Number',"
+        },
+        {
+          "line": 28,
+          "text": "'الوردية': 'Shift',"
+        },
+        {
+          "line": 29,
+          "text": "'كود الصنف': 'Product Code',"
+        },
+        {
+          "line": 30,
+          "text": "'كود المنتج': 'Product Code',"
+        },
+        {
+          "line": 31,
+          "text": "'اسم الصنف': 'Product Name',"
+        },
+        {
+          "line": 32,
+          "text": "'اسم المنتج': 'Product Name',"
+        },
+        {
+          "line": 33,
+          "text": "'نسبة الألومينا': 'Alumina Percentage',"
+        },
+        {
+          "line": 34,
+          "text": "'نسبة الألومينا (%)': 'Alumina Percentage (%)',"
+        },
+        {
+          "line": 35,
+          "text": "'وزن القطعة': 'Piece Weight',"
+        },
+        {
+          "line": 36,
+          "text": "'وزن القطعة (كجم)': 'Piece Weight (kg)',"
+        },
+        {
+          "line": 37,
+          "text": "'الإنتاج بالعدد': 'Production Count',"
+        },
+        {
+          "line": 38,
+          "text": "'الكمية المنتجة': 'Production Quantity',"
+        },
+        {
+          "line": 39,
+          "text": "'الهالك بالعدد': 'Waste Count',"
+        },
+        {
+          "line": 40,
+          "text": "'كمية الهالك': 'Waste Quantity',"
+        },
+        {
+          "line": 41,
+          "text": "'الإنتاج السليم': 'Good Production',"
+        },
+        {
+          "line": 42,
+          "text": "'أعطال ميكانيكا': 'Mechanical Faults',"
+        },
+        {
+          "line": 43,
+          "text": "'أعطال كهرباء': 'Electrical Faults',"
+        },
+        {
+          "line": 44,
+          "text": "'أعطال ورشة': 'Workshop Faults',"
+        },
+        {
+          "line": 45,
+          "text": "'أعطال خامات': 'Raw Material Faults',"
+        },
+        {
+          "line": 46,
+          "text": "'أعطال فرن': 'Furnace Faults',"
+        },
+        {
+          "line": 47,
+          "text": "'أعطال مكبس': 'Press Faults',"
+        },
+        {
+          "line": 48,
+          "text": "'أعطال أخرى': 'Other Faults',"
+        },
+        {
+          "line": 49,
+          "text": "'إجمالي الأعطال': 'Total Downtime',"
+        },
+        {
+          "line": 50,
+          "text": "'ساعات التشغيل': 'Operating Hours',"
+        },
+        {
+          "line": 51,
+          "text": "'ساعات الأعطال': 'Downtime Hours',"
+        },
+        {
+          "line": 52,
+          "text": "'نوع العطل': 'Fault Type',"
+        },
+        {
+          "line": 53,
+          "text": "'كمية الإنتاج': 'Production Quantity',"
+        },
+        {
+          "line": 54,
+          "text": "'الخامات المستخدمة': 'Materials Used',"
+        },
+        {
+          "line": 55,
+          "text": "'العميل': 'Customer',"
+        },
+        {
+          "line": 56,
+          "text": "'العميل / الطلبية': 'Customer / Order',"
+        },
+        {
+          "line": 57,
+          "text": "'عربات الفرن': 'Furnace Cars',"
+        },
+        {
+          "line": 58,
+          "text": "'استهلاك الغاز': 'Gas Consumption',"
+        },
+        {
+          "line": 59,
+          "text": "'استهلاك الكهرباء': 'Electricity Consumption',"
+        },
+        {
+          "line": 60,
+          "text": "'استهلاك الخامات': 'Material Consumption',"
+        },
+        {
+          "line": 63,
+          "text": "'التشكيل والمكابس': 'Pressing',"
+        },
+        {
+          "line": 64,
+          "text": "'الفرن الدوار': 'Rotary Furnace',"
+        },
+        {
+          "line": 65,
+          "text": "'الطواحين الصينية': 'Chinese Mills',"
+        },
+        {
+          "line": 66,
+          "text": "'طواحين الأنابيب والكرات': 'Tube & Ball Mills',"
+        },
+        {
+          "line": 67,
+          "text": "'المونة والخرسانات': 'Mortar & Concrete',"
+        },
+        {
+          "line": 68,
+          "text": "'الخلط وتجهيز الخامات': 'Mixing & Material Preparation',"
+        },
+        {
+          "line": 69,
+          "text": "'الخلط والتجهيز': 'Mixing & Material Preparation',"
+        },
+        {
+          "line": 70,
+          "text": "'الشاموت الخفيف وعزل الفوم': 'Lightweight & Foam',"
+        },
+        {
+          "line": 71,
+          "text": "'الشاموت الخفيف / الفوم': 'Lightweight & Foam',"
+        },
+        {
+          "line": 72,
+          "text": "'الفرز والمراقبة النهائية': 'Sorting & Final Quality Control',"
+        },
+        {
+          "line": 73,
+          "text": "'الفرز والمراقبة': 'Sorting & Final Quality Control',"
+        },
+        {
+          "line": 76,
+          "text": "'إجمالي الإنتاج': 'Total Production',"
+        },
+        {
+          "line": 77,
+          "text": "'الإنتاج الجيد': 'Good Production',"
+        },
+        {
+          "line": 78,
+          "text": "'الهالك': 'Waste',"
+        },
+        {
+          "line": 79,
+          "text": "'نسبة الهالك': 'Waste %',"
+        },
+        {
+          "line": 80,
+          "text": "'معدل الإنتاج': 'Production Rate',"
+        },
+        {
+          "line": 81,
+          "text": "'إنتاج طن/ساعة': 'Tons per Hour',"
+        },
+        {
+          "line": 82,
+          "text": "'إنتاج طن / ساعة': 'Tons per Hour',"
+        },
+        {
+          "line": 83,
+          "text": "'الطن/ساعة': 'Tons/Hour',"
+        },
+        {
+          "line": 84,
+          "text": "'إنتاج حسب المرحلة': 'Production by Stage',"
+        },
+        {
+          "line": 85,
+          "text": "'إنتاج حسب المنتج': 'Production by Product',"
+        },
+        {
+          "line": 86,
+          "text": "'إنتاج حسب العامل': 'Production by Employee',"
+        },
+        {
+          "line": 87,
+          "text": "'إنتاج حسب الوردية': 'Production by Shift',"
+        },
+        {
+          "line": 88,
+          "text": "'الإنتاج بالطن': 'Production Tons',"
+        },
+        {
+          "line": 89,
+          "text": "'الإنتاج (طن)': 'Production (Tons)',"
+        },
+        {
+          "line": 90,
+          "text": "'الهالك بالطن': 'Waste Tons',"
+        },
+        {
+          "line": 91,
+          "text": "'الهالك (طن)': 'Waste (Tons)',"
+        },
+        {
+          "line": 92,
+          "text": "'الخامة': 'Material',"
+        },
+        {
+          "line": 93,
+          "text": "'الكمية المستخدمة': 'Quantity Used',"
+        },
+        {
+          "line": 94,
+          "text": "'المرحلة': 'Stage',"
+        },
+        {
+          "line": 95,
+          "text": "'المنتج': 'Product',"
+        },
+        {
+          "line": 96,
+          "text": "'العامل': 'Employee',"
+        },
+        {
+          "line": 99,
+          "text": "'حفظ': 'Save',"
+        },
+        {
+          "line": 100,
+          "text": "'إلغاء': 'Cancel',"
+        },
+        {
+          "line": 101,
+          "text": "'تعديل': 'Edit',"
+        },
+        {
+          "line": 102,
+          "text": "'حذف': 'Delete',"
+        },
+        {
+          "line": 103,
+          "text": "'بحث...': 'Search...',"
+        },
+        {
+          "line": 104,
+          "text": "'تصفية': 'Filter',"
+        },
+        {
+          "line": 105,
+          "text": "'الكل': 'All',"
+        },
+        {
+          "line": 106,
+          "text": "'عرض': 'View',"
+        },
+        {
+          "line": 107,
+          "text": "'إضافة': 'Create',"
+        },
+        {
+          "line": 108,
+          "text": "'اعتماد': 'Approve',"
+        },
+        {
+          "line": 109,
+          "text": "'رفض': 'Reject',"
+        },
+        {
+          "line": 110,
+          "text": "'استيراد': 'Import',"
+        },
+        {
+          "line": 111,
+          "text": "'تصدير': 'Export',"
+        },
+        {
+          "line": 112,
+          "text": "'إدارة المستخدمين': 'User Management',"
+        },
+        {
+          "line": 113,
+          "text": "'إدارة الصلاحيات': 'Permission Management',"
+        },
+        {
+          "line": 114,
+          "text": "'النسخ الاحتياطي': 'Backup',"
+        },
+        {
+          "line": 115,
+          "text": "'الاستعادة': 'Restore',"
+        },
+        {
+          "line": 116,
+          "text": "'مركز النسخ الاحتياطي': 'Backup Center',"
+        },
+        {
+          "line": 117,
+          "text": "'مركز الاستعادة': 'Restore Center',"
+        },
+        {
+          "line": 118,
+          "text": "'إنشاء نسخة احتياطية الآن': 'Create Backup Now',"
+        },
+        {
+          "line": 119,
+          "text": "'تحميل النسخة الاحتياطية': 'Download Backup',"
+        },
+        {
+          "line": 120,
+          "text": "'آخر نسخة ناجحة': 'Last Successful Backup',"
+        },
+        {
+          "line": 121,
+          "text": "'عدد السجلات': 'Record Count',"
+        },
+        {
+          "line": 122,
+          "text": "'حجم الملف': 'File Size',"
+        },
+        {
+          "line": 123,
+          "text": "'حالة النسخة': 'Backup Status',"
+        },
+        {
+          "line": 124,
+          "text": "'حالة النظام': 'System Health',"
+        },
+        {
+          "line": 125,
+          "text": "'اتصال Firebase': 'Firebase Connection',"
+        },
+        {
+          "line": 126,
+          "text": "'اتصال Firestore': 'Firestore Connection',"
+        },
+        {
+          "line": 127,
+          "text": "'زمن الاستجابة': 'Response Time',"
+        },
+        {
+          "line": 128,
+          "text": "'إصدار التطبيق': 'Application Version',"
+        },
+        {
+          "line": 129,
+          "text": "'إصدار قاعدة البيانات': 'Database Version',"
+        },
+        {
+          "line": 130,
+          "text": "'آخر نسخة احتياطية': 'Last Backup',"
+        },
+        {
+          "line": 131,
+          "text": "'اسأل المساعد الذكي...': 'Ask AI Assistant...',"
+        },
+        {
+          "line": 132,
+          "text": "'إرسال': 'Send',"
+        },
+        {
+          "line": 133,
+          "text": "'مسح': 'Clear',"
+        },
+        {
+          "line": 134,
+          "text": "'اقتراحات': 'Suggestions',"
+        },
+        {
+          "line": 135,
+          "text": "'تحليل': 'Analysis',"
+        },
+        {
+          "line": 136,
+          "text": "'توصيات': 'Recommendations',"
+        },
+        {
+          "line": 137,
+          "text": "'ملخص': 'Summary',"
+        },
+        {
+          "line": 138,
+          "text": "'مصدر البيانات': 'Data Source',"
+        },
+        {
+          "line": 139,
+          "text": "'الفلاتر': 'Filters',"
+        },
+        {
+          "line": 140,
+          "text": "'تم الحفظ بنجاح': 'Saved successfully',"
+        },
+        {
+          "line": 141,
+          "text": "'حدث خطأ أثناء الحفظ': 'An error occurred while saving',"
+        },
+        {
+          "line": 142,
+          "text": "'لا توجد بيانات': 'No data available',"
+        },
+        {
+          "line": 143,
+          "text": "'جارٍ التحميل...': 'Loading...',"
+        },
+        {
+          "line": 144,
+          "text": "'جارٍ التحميل': 'Loading...',"
+        },
+        {
+          "line": 145,
+          "text": "'جاري التحميل': 'Loading...',"
+        },
+        {
+          "line": 146,
+          "text": "'جارٍ حفظ البيانات...': 'Saving data...',"
+        },
+        {
+          "line": 147,
+          "text": "'جاري حفظ البيانات': 'Saving data...',"
+        },
+        {
+          "line": 148,
+          "text": "'لا توجد نتائج': 'No results found',"
+        },
+        {
+          "line": 149,
+          "text": "'توجد نسخة جديدة': 'New version available',"
+        },
+        {
+          "line": 150,
+          "text": "'هل تريد التحديث الآن؟': 'Would you like to update now?',"
+        }
+      ]
+    },
+    {
+      "file": "src\\components\\admin\\DataImportView.tsx",
+      "count": 122,
+      "hits": [
+        {
+          "line": 104,
+          "text": "furnaceCar: { ar: 'عربات الأفران', en: 'Furnace Cars', arButton: 'إضافة جميع العربات', enButton: 'Add All Furnace Cars' },"
+        },
+        {
+          "line": 105,
+          "text": "employee: { ar: 'العمال', en: 'Employees', arButton: 'إضافة جميع العمال', enButton: 'Add All Employees' },"
+        },
+        {
+          "line": 106,
+          "text": "press: { ar: 'المكابس', en: 'Presses', arButton: 'إضافة جميع المكابس', enButton: 'Add All Presses' },"
+        },
+        {
+          "line": 107,
+          "text": "product: { ar: 'الأصناف', en: 'Products', arButton: 'إضافة جميع الأصناف', enButton: 'Add All Products' },"
+        },
+        {
+          "line": 167,
+          "text": "{ keyword: 'تاريخ', ar: 'التاريخ', en: 'Date' },"
+        },
+        {
+          "line": 168,
+          "text": "{ keyword: 'عامل 1', ar: 'عامل 1', en: 'Worker 1' },"
+        },
+        {
+          "line": 169,
+          "text": "{ keyword: 'المكبس', ar: 'المكبس', en: 'Press' },"
+        },
+        {
+          "line": 170,
+          "text": "{ keyword: 'الوردية', ar: 'الوردية', en: 'Shift' },"
+        },
+        {
+          "line": 171,
+          "text": "{ keyword: 'الصنف', ar: 'الصنف / المنتج', en: 'Product' },"
+        },
+        {
+          "line": 172,
+          "text": "{ keyword: 'المنتج', ar: 'الصنف / المنتج', en: 'Product' },"
+        },
+        {
+          "line": 173,
+          "text": "{ keyword: 'كمية الإنتاج', ar: 'كمية الإنتاج', en: 'Production Quantity' },"
+        },
+        {
+          "line": 174,
+          "text": "{ keyword: 'الهالك', ar: 'كمية الهالك', en: 'Waste Quantity' },"
+        },
+        {
+          "line": 175,
+          "text": "{ keyword: 'عربة', ar: 'عربات الأفران', en: 'Furnace Cars' },"
+        },
+        {
+          "line": 176,
+          "text": "{ keyword: 'عامل 2', ar: 'عامل 2 (اختياري، لكن القيمة المُدخلة غير مطابقة)', en: 'Worker 2 (optional, but the entered value did not resolve)"
+        },
+        {
+          "line": 225,
+          "text": "date: { ar: 'التاريخ', en: 'Date' },"
+        },
+        {
+          "line": 226,
+          "text": "worker1Name: { ar: 'عامل 1', en: 'Worker 1' },"
+        },
+        {
+          "line": 227,
+          "text": "worker2Name: { ar: 'عامل 2', en: 'Worker 2' },"
+        },
+        {
+          "line": 228,
+          "text": "pressRaw: { ar: 'المكبس', en: 'Press' },"
+        },
+        {
+          "line": 229,
+          "text": "productNameRaw: { ar: 'الصنف', en: 'Product' },"
+        },
+        {
+          "line": 230,
+          "text": "productCodeRaw: { ar: 'كود الصنف', en: 'Product Code' },"
+        },
+        {
+          "line": 231,
+          "text": "furnaceCarsRaw: { ar: 'عربات الأفران وعدد الطوب', en: 'Furnace Cars & Brick Count' },"
+        },
+        {
+          "line": 232,
+          "text": "customerOrder: { ar: 'طلب العميل', en: 'Customer Order' },"
+        },
+        {
+          "line": 233,
+          "text": "shiftRaw: { ar: 'الوردية', en: 'Shift' },"
+        },
+        {
+          "line": 234,
+          "text": "aluminaPercentage: { ar: 'الألومينا %', en: 'Alumina %' },"
+        },
+        {
+          "line": 235,
+          "text": "pieceWeight: { ar: 'وزن القطعة', en: 'Piece Weight' },"
+        },
+        {
+          "line": 236,
+          "text": "productionQuantity: { ar: 'كمية الإنتاج', en: 'Production Quantity' },"
+        },
+        {
+          "line": 237,
+          "text": "wasteQuantity: { ar: 'كمية الهالك', en: 'Waste Quantity' },"
+        },
+        {
+          "line": 238,
+          "text": "mechanicalFaults: { ar: 'أعطال ميكانيكا', en: 'Mechanical Faults' },"
+        },
+        {
+          "line": 239,
+          "text": "electricalFaults: { ar: 'أعطال كهرباء', en: 'Electrical Faults' },"
+        },
+        {
+          "line": 240,
+          "text": "workshopFaults: { ar: 'أعطال ورشة', en: 'Workshop Faults' },"
+        },
+        {
+          "line": 241,
+          "text": "rawMaterialFaults: { ar: 'أعطال خامات', en: 'Raw Material Faults' },"
+        },
+        {
+          "line": 242,
+          "text": "otherFaults: { ar: 'أعطال أخرى', en: 'Other Faults' },"
+        },
+        {
+          "line": 268,
+          "text": "const FIELD_ERROR_KEYWORDS = ['تاريخ', 'عامل 1', 'عامل 2', 'المكبس', 'الوردية', 'الصنف', 'المنتج', 'عربة', 'كمية الإنتاج'];"
+        },
+        {
+          "line": 276,
+          "text": "const BUSINESS_WARNING_KEYWORDS = ['كمية الهالك أكبر من كمية الإنتاج', 'نسبة الهالك مرتفعة', 'مدة التوقف مرتفعة'];"
+        },
+        {
+          "line": 282,
+          "text": "if (!row.date) newErrors.push('يرجى تحديد تاريخ عملية الإنتاج.');"
+        },
+        {
+          "line": 283,
+          "text": "if (!row.resolvedWorker1) newErrors.push('لم يتم اختيار عامل 1 (حقل إلزامي).');"
+        },
+        {
+          "line": 284,
+          "text": "if ((row.worker2Name || row.worker2Code) && !row.resolvedWorker2) newErrors.push('عامل 2 المحدد غير موجود ببيانات الموظفين.');"
+        },
+        {
+          "line": 285,
+          "text": "if (!row.resolvedPress) newErrors.push('لم يتم اختيار المكبس (حقل إلزامي).');"
+        },
+        {
+          "line": 287,
+          "text": "if (!row.resolvedProduct) newErrors.push('لم يتم اختيار الصنف (حقل إلزامي).');"
+        },
+        {
+          "line": 288,
+          "text": "if (!row.productionQuantity || isNaN(row.productionQuantity) || row.productionQuantity <= 0) newErrors.push('إجمالي كمية الإنتاج يجب أن تكون"
+        },
+        {
+          "line": 289,
+          "text": "if (isNaN(row.wasteQuantity) || row.wasteQuantity < 0) newErrors.push('كمية الهالك غير صالحة.');"
+        },
+        {
+          "line": 300,
+          "text": "if (seenCarIds.has(c.id)) newErrors.push(`العربة ${c.carNumber} مكررة بأكثر من إدخال في نفس الصف.`);"
+        },
+        {
+          "line": 303,
+          "text": "if (c.brickCount == null || c.brickCount < 0 || !Number.isInteger(c.brickCount)) newErrors.push(`عدد الطوب للعربة ${c.carNumber} غير صالح.`)"
+        },
+        {
+          "line": 580,
+          "text": "`نسخة أمان وقائية قبل استيراد الإنتاج التاريخي لمرحلة ${STAGE_DISPLAY_NAMES[selectedStage]}`,"
+        },
+        {
+          "line": 661,
+          "text": "updatedRow.errors = updatedRow.errors.filter(e => !e.includes('عامل 1'));"
+        },
+        {
+          "line": 674,
+          "text": "updatedRow.errors = updatedRow.errors.filter(e => !e.includes('عامل 2'));"
+        },
+        {
+          "line": 685,
+          "text": "updatedRow.errors = updatedRow.errors.filter(e => !e.includes('المكبس') && !e.includes('مكبس'));"
+        },
+        {
+          "line": 705,
+          "text": "updatedRow.errors = updatedRow.errors.filter(e => !e.includes('الصنف') && !e.includes('كود الصنف'));"
+        },
+        {
+          "line": 742,
+          "text": "if (e.includes(`العربة ${importedVal}`) || e.includes(`\"${importedVal}\"`) || e.includes(importedVal)) return false;"
+        },
+        {
+          "line": 744,
+          "text": "if (remainingTokens.length === 0 && (e.includes('عربة') || e.includes('عربات'))) {"
+        },
+        {
+          "line": 799,
+          "text": "`إضافة بيان أساسي جديد (${domain}): \"${importedVal}\" -> \"${createdItem.name || createdItem.code}\" (${createdItem.id}) - عدد السجلات المتأثرة"
+        },
+        {
+          "line": 839,
+          "text": "suggestedName: `عربة فرن رقم ${token.trim()}`,"
+        },
+        {
+          "line": 860,
+          "text": "extraProps: { jobTitle: 'مشغل مكبس', departmentName: 'قسم التشكيل والمكابس' },"
+        },
+        {
+          "line": 1063,
+          "text": "if (e.includes(`العربة ${token}`) || e.includes(`\"${token}\"`) || e.includes(token)) return false;"
+        },
+        {
+          "line": 1065,
+          "text": "if (remainingUnresolved.length === 0 && (e.includes('عربة') || e.includes('عربات'))) {"
+        },
+        {
+          "line": 1096,
+          "text": "updatedRow.errors = updatedRow.errors.filter(e => !e.includes('عامل 1'));"
+        },
+        {
+          "line": 1105,
+          "text": "updatedRow.errors = updatedRow.errors.filter(e => !e.includes('المكبس') && !e.includes('مكبس'));"
+        },
+        {
+          "line": 1115,
+          "text": "updatedRow.errors = updatedRow.errors.filter(e => !e.includes('الصنف') && !e.includes('كود الصنف'));"
+        },
+        {
+          "line": 1147,
+          "text": "`إضافة جماعية لبيانات أساسية مفقودة (${createdItems.length} عنصر) - عدد السجلات المتأثرة: ${affectedRowCount}`"
+        },
+        {
+          "line": 1192,
+          "text": "updatedRow.errors = updatedRow.errors.filter(e => !e.includes('عامل 1'));"
+        },
+        {
+          "line": 1196,
+          "text": "updatedRow.errors = updatedRow.errors.filter(e => !e.includes('عامل 2'));"
+        },
+        {
+          "line": 1199,
+          "text": "updatedRow.errors = updatedRow.errors.filter(e => !e.includes('المكبس') && !e.includes('مكبس'));"
+        },
+        {
+          "line": 1203,
+          "text": "updatedRow.errors = updatedRow.errors.filter(e => !e.includes('الصنف') && !e.includes('كود الصنف'));"
+        },
+        {
+          "line": 1228,
+          "text": "if (e.includes(`العربة ${matchedValue}`) || e.includes(`\"${matchedValue}\"`) || e.includes(matchedValue)) return false;"
+        },
+        {
+          "line": 1230,
+          "text": "if (remainingTokens.length === 0 && (e.includes('عربة') || e.includes('عربات'))) {"
+        },
+        {
+          "line": 1323,
+          "text": "`اعتماد مطابقة مقترحة (${fieldDomain}): \"${prop.importedValue}\" -> \"${candidateToUse.name || candidateToUse.code}\" (${candidateToUse.id}) - "
+        },
+        {
+          "line": 1394,
+          "text": "updatedRow.errors = updatedRow.errors.filter(e => !e.includes('عامل 2'));"
+        },
+        {
+          "line": 1462,
+          "text": "updatedRow.errors = updatedRow.errors.filter(e => !e.includes('عامل 1'));"
+        },
+        {
+          "line": 1469,
+          "text": "updatedRow.errors = updatedRow.errors.filter(e => !e.includes('المكبس') && !e.includes('مكبس'));"
+        },
+        {
+          "line": 1478,
+          "text": "updatedRow.errors = updatedRow.errors.filter(e => !e.includes('الصنف') && !e.includes('كود الصنف'));"
+        },
+        {
+          "line": 1498,
+          "text": "if (e.includes(`العربة ${matchedToken}`) || e.includes(`\"${matchedToken}\"`) || e.includes(matchedToken)) return false;"
+        },
+        {
+          "line": 1500,
+          "text": "if (remaining.length === 0 && (e.includes('عربة') || e.includes('عربات'))) return false;"
+        },
+        {
+          "line": 1526,
+          "text": "? `تم تصحيح القيمة يدوياً إلى \"${trimmedEdited}\" ثم اختيار بيان أساسي موجود.`"
+        },
+        {
+          "line": 1527,
+          "text": ": 'تم الاختيار يدوياً من قائمة البيانات الأساسية الموجودة.',"
+        },
+        {
+          "line": 1570,
+          "text": "? `تعديل يدوي واختيار (${fieldDomain}): \"${importedValue}\" -> تصحيح: \"${trimmedEdited}\" -> \"${candidateToUse.name}\" (${candidateToUse.id}) -"
+        },
+        {
+          "line": 1571,
+          "text": ": `اختيار يدوي (${fieldDomain}): \"${importedValue}\" -> \"${candidateToUse.name}\" (${candidateToUse.id}) - عدد السجلات المتأثرة: ${affectedRow"
+        },
+        {
+          "line": 1602,
+          "text": "updatedRow.errors = updatedRow.errors.filter(e => !e.includes('عامل 1'));"
+        },
+        {
+          "line": 1606,
+          "text": "updatedRow.errors = updatedRow.errors.filter(e => !e.includes('عامل 2'));"
+        },
+        {
+          "line": 1609,
+          "text": "updatedRow.errors = updatedRow.errors.filter(e => !e.includes('المكبس') && !e.includes('مكبس'));"
+        },
+        {
+          "line": 1613,
+          "text": "updatedRow.errors = updatedRow.errors.filter(e => !e.includes('الصنف') && !e.includes('كود الصنف'));"
+        },
+        {
+          "line": 1618,
+          "text": "updatedRow.errors = updatedRow.errors.filter(e => !e.includes('عربة') && !e.includes('عربات'));"
+        },
+        {
+          "line": 1654,
+          "text": "const actorName = adminUser?.fullName || adminUser?.username || adminUser?.email || 'مستخدم';"
+        },
+        {
+          "line": 1714,
+          "text": "const actionLabel = selection === 'INCLUDED' ? 'إعادة إدراج' : reason === 'SKIPPED_ROW' ? 'تخطي' : reason === 'EXCLUDED_ROW' ? 'استبعاد' : '"
+        },
+        {
+          "line": 1725,
+          "text": "`${actionLabel} الصف ${rowIndex}`"
+        },
+        {
+          "line": 1735,
+          "text": "? `إعادة إدراج الصف ${rowIndex} في الاستيراد`"
+        },
+        {
+          "line": 1736,
+          "text": ": `${reason === 'SKIPPED_ROW' ? 'تخطي' : reason === 'EXCLUDED_ROW' ? 'استبعاد' : 'إلغاء تحديد'} الصف ${rowIndex}`"
+        },
+        {
+          "line": 1755,
+          "text": "? pushHistory({ ...r, rowSelection: 'INCLUDED' as const, exclusionReason: undefined, excludedBy: undefined, excludedAt: undefined, originalE"
+        },
+        {
+          "line": 1761,
+          "text": "logAuditAction('UPDATE', 'historicalImportSession', rowIndexes.join(','), `إعادة إدراج جماعية لـ ${rowIndexes.length} صف مستبعد`).catch(() ="
+        },
+        {
+          "line": 1814,
+          "text": "`حذف نهائي لـ ${rowIndexes.length} صف من جلسة الاستيراد الحالية (لم يتم رفعهم إلى Firestore ولم يتأثر الملف الأصلي أو أي استيراد سابق)`"
+        },
+        {
+          "line": 1907,
+          "text": "furnaceCarErrors.push(`العربة ${carNumber} مكررة بأكثر من إدخال في نفس الصف.`);"
+        },
+        {
+          "line": 1913,
+          "text": "furnaceCarErrors.push(`عدد الطوب للعربة ${carNumber} غير صالح.`);"
+        },
+        {
+          "line": 1973,
+          "text": "const FIELD_ERROR_KEYWORDS = ['تاريخ', 'عامل 1', 'عامل 2', 'المكبس', 'الوردية', 'الصنف', 'المنتج', 'عربة', 'كمية الإنتاج'];"
+        },
+        {
+          "line": 1977,
+          "text": "const BUSINESS_WARNING_KEYWORDS = ['كمية الهالك أكبر من كمية الإنتاج', 'نسبة الهالك مرتفعة', 'مدة التوقف مرتفعة'];"
+        },
+        {
+          "line": 1983,
+          "text": "if (!updatedRow.date) newErrors.push('يرجى تحديد تاريخ عملية الإنتاج.');"
+        },
+        {
+          "line": 1984,
+          "text": "if (!matchedWorker1) newErrors.push('لم يتم اختيار عامل 1 (حقل إلزامي).');"
+        },
+        {
+          "line": 1985,
+          "text": "if (editRowDraft.worker2Id && !matchedWorker2) newErrors.push('عامل 2 المحدد غير موجود ببيانات الموظفين.');"
+        },
+        {
+          "line": 1986,
+          "text": "if (!matchedPress) newErrors.push('لم يتم اختيار المكبس (حقل إلزامي).');"
+        },
+        {
+          "line": 1988,
+          "text": "if (!matchedProduct) newErrors.push('لم يتم اختيار الصنف (حقل إلزامي).');"
+        },
+        {
+          "line": 1989,
+          "text": "if (!productionQuantity || isNaN(productionQuantity) || productionQuantity <= 0) newErrors.push('إجمالي كمية الإنتاج يجب أن تكون أكبر من الص"
+        },
+        {
+          "line": 1990,
+          "text": "if (isNaN(wasteQuantity) || wasteQuantity < 0) newErrors.push('كمية الهالك غير صالحة.');"
+        },
+        {
+          "line": 2056,
+          "text": "`تعديل السجل بالكامل للصف ${editRowState.rowIndex} - الحالة الجديدة: ${updatedRow.errors.length === 0 ? 'جاهز للاستيراد' : 'لا يزال به أخطاء"
+        },
+        {
+          "line": 2065,
+          "text": "`إعادة إدراج الصف ${editRowState.rowIndex} بعد التعديل والتصحيح`"
+        },
+        {
+          "line": 2084,
+          "text": "`تعديل السجل بالكامل للصف ${editRowState.rowIndex} - الحالة الجديدة: ${editedRow.errors.length === 0 ? 'جاهز' : 'لا يزال به أخطاء مانعة'}`"
+        },
+        {
+          "line": 2128,
+          "text": "`إعادة فحص الصف ${rowIndex} - الحالة: ${errors.length === 0 ? 'جاهز للاستيراد' : 'لا يزال به أخطاء مانعة'}`"
+        },
+        {
+          "line": 2166,
+          "text": "logAuditAction('UPDATE', 'historicalImportSession', String(rowIndex), `تراجع (Revert) عن تعديل الصف ${rowIndex}`).catch(() => {});"
+        },
+        {
+          "line": 2197,
+          "text": "reasonAr = `تصحيح جماعي: تعيين الوردية = ${patched.resolvedShift.name}`;"
+        },
+        {
+          "line": 2204,
+          "text": "reasonAr = `تصحيح جماعي: تعيين المكبس = ${press.name}`;"
+        },
+        {
+          "line": 2213,
+          "text": "reasonAr = `تصحيح جماعي: تعيين عامل 1 = ${emp.name}`;"
+        },
+        {
+          "line": 2222,
+          "text": "reasonAr = `تصحيح جماعي: تعيين الصنف = ${prod.name}`;"
+        },
+        {
+          "line": 2248,
+          "text": "logAuditAction('UPDATE', 'historicalImportSession', rowIndexes.join(','), `تصحيح جماعي (${field}) لـ ${rowIndexes.length} صف`).catch(() => {"
+        },
+        {
+          "line": 2267,
+          "text": "return pushHistory(updated, 'OVERRIDE_WARNING', `تسجيل رغم التحذير للصف ${rowIndex}: ${r.warnings.join(' | ')}`);"
+        },
+        {
+          "line": 2286,
+          "text": "return pushHistory(updated, 'OVERRIDE_WARNING', `اعتماد التحذيرات جماعيًا للصف ${r.rowIndex}: ${r.warnings.join(' | ')}`);"
+        },
+        {
+          "line": 2289,
+          "text": "logAuditAction('UPDATE', 'historicalImportSession', rowIndexes.join(','), `[OVERRIDE_WARNING] اعتماد جماعي للتحذيرات - importId=${importSess"
+        },
+        {
+          "line": 2392,
+          "text": "`استيراد جزئي: ${result.importedCount} سجل مستورد، ${result.failedCount} فشل، ${pressingSummary.totalRows - toImport.length} غير محدد/مستبعد"
+        },
+        {
+          "line": 3441,
+          "text": "{/* 1. [Approve] / [اعتماد] */}"
+        },
+        {
+          "line": 3452,
+          "text": "{/* 2. [Add] / [إضافة] */}"
+        },
+        {
+          "line": 3485,
+          "text": "{/* 3. [Skip] / [تخطي] */}"
+        },
+        {
+          "line": 3684,
+          "text": "{/* Furnace Cars: العربة | عدد الطوب | الحالة pairs (NOT flat individual tokens) + Original value */}"
+        },
+        {
+          "line": 4177,
+          "text": "<span>الملف: <strong className=\"text-slate-700\">{entry.fileName}</strong></span>"
+        },
+        {
+          "line": 4178,
+          "text": "<span>بواسطة: <strong className=\"text-slate-700\">{entry.performedByName || entry.performedBy}</strong></span>"
+        },
+        {
+          "line": 4179,
+          "text": "<span>التاريخ: <strong className=\"text-slate-700\">{entry.performedAt ? formatDateTime(entry.performedAt) : '-'}</strong></span>"
+        },
+        {
+          "line": 4182,
+          "text": "تم استيراد {entry.importedCount} سجل | {entry.approvedMappingsCount || 0} مطابقة ذكية معتمدة"
+        }
+      ]
+    },
+    {
+      "file": "src\\components\\production\\DataReviewView.tsx",
+      "count": 73,
+      "hits": [
+        {
+          "line": 147,
+          "text": "message: `تم تحديث حالة السجل بنجاح إلى: ${newStatus === 'APPROVED' ? 'معتمد' : 'مرفوض'}.`"
+        },
+        {
+          "line": 152,
+          "text": "setModalFeedback({ type: 'error', message: err.message || 'فشل تحديث الحالة.' });"
+        },
+        {
+          "line": 161,
+          "text": "setModalFeedback({ type: 'error', message: 'يرجى كتابة سبب التعديل لتوثيق سجل التغييرات.' });"
+        },
+        {
+          "line": 170,
+          "text": "message: 'تم حفظ التعديلات وتوثيقها في سجل التغييرات بنجاح.'"
+        },
+        {
+          "line": 179,
+          "text": "setModalFeedback({ type: 'error', message: err.message || 'فشل حفظ التعديلات.' });"
+        },
+        {
+          "line": 187,
+          "text": "'كود السجل': r.id,"
+        },
+        {
+          "line": 188,
+          "text": "'المرحلة': r.stageNameAr,"
+        },
+        {
+          "line": 189,
+          "text": "'التاريخ': r.date,"
+        },
+        {
+          "line": 190,
+          "text": "'كود المنتج': r.productCode || '-',"
+        },
+        {
+          "line": 191,
+          "text": "'اسم المنتج': r.productName || '-',"
+        },
+        {
+          "line": 192,
+          "text": "'العميل': r.customerName || '-',"
+        },
+        {
+          "line": 193,
+          "text": "'الكمية المنتجة': r.quantity,"
+        },
+        {
+          "line": 194,
+          "text": "'الوحدة': r.unit,"
+        },
+        {
+          "line": 195,
+          "text": "'الهالك': r.wasteQuantity || 0,"
+        },
+        {
+          "line": 196,
+          "text": "'الصالح': r.goodQuantity || 0,"
+        },
+        {
+          "line": 197,
+          "text": "'التوقفات (دقيقة)': r.totalDowntimeMinutes || 0,"
+        },
+        {
+          "line": 198,
+          "text": "'الحالة': r.status,"
+        },
+        {
+          "line": 199,
+          "text": "'المسجل': r.createdByName || '-',"
+        },
+        {
+          "line": 200,
+          "text": "'تاريخ الإدخال': r.createdAt?.split('T')[0] || '-',"
+        },
+        {
+          "line": 205,
+          "text": "XLSX.utils.book_append_sheet(wb, ws, 'سجلات_الإنتاج');"
+        },
+        {
+          "line": 212,
+          "text": "return <span className=\"inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-bold bg-emerald-50 text-emerald-700 border bo"
+        },
+        {
+          "line": 214,
+          "text": "return <span className=\"inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-bold bg-rose-50 text-rose-700 border border-r"
+        },
+        {
+          "line": 216,
+          "text": "return <span className=\"inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-bold bg-amber-50 text-amber-700 border border"
+        },
+        {
+          "line": 218,
+          "text": "return <span className=\"inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-bold bg-blue-50 text-blue-700 border border-b"
+        },
+        {
+          "line": 220,
+          "text": "return <span className=\"inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-bold bg-slate-100 text-slate-700 border borde"
+        },
+        {
+          "line": 222,
+          "text": "return <span className=\"inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-bold bg-purple-50 text-purple-700 border bord"
+        },
+        {
+          "line": 233,
+          "text": "مركز مراجعة وتدقيق سجلات الإنتاج (Data Review & Audit)"
+        },
+        {
+          "line": 236,
+          "text": "مراجعة كافة سجلات المراحل الثمانية، اعتماد السجلات، تعديل البيانات وحفظ سجل التاريخ المعتمد"
+        },
+        {
+          "line": 247,
+          "text": "تصدير إلى Excel"
+        },
+        {
+          "line": 260,
+          "text": "placeholder=\"بحث بالمنتج أو العميل...\""
+        },
+        {
+          "line": 273,
+          "text": "<option value=\"all\">جميع مراحل الإنتاج (All Stages)</option>"
+        },
+        {
+          "line": 287,
+          "text": "<option value=\"all\">جميع الحالات (All Statuses)</option>"
+        },
+        {
+          "line": 288,
+          "text": "<option value=\"SUBMITTED\">مقدم (Submitted)</option>"
+        },
+        {
+          "line": 289,
+          "text": "<option value=\"APPROVED\">معتمد (Approved)</option>"
+        },
+        {
+          "line": 290,
+          "text": "<option value=\"REJECTED\">مرفوض (Rejected)</option>"
+        },
+        {
+          "line": 291,
+          "text": "<option value=\"CORRECTED\">معدل (Corrected)</option>"
+        },
+        {
+          "line": 292,
+          "text": "<option value=\"DRAFT\">مسودة (Draft)</option>"
+        },
+        {
+          "line": 303,
+          "text": "placeholder=\"من تاريخ\""
+        },
+        {
+          "line": 314,
+          "text": "placeholder=\"إلى تاريخ\""
+        },
+        {
+          "line": 324,
+          "text": "<span>جاري تحميل سجلات الإنتاج للتدقيق والمراجعة...</span>"
+        },
+        {
+          "line": 328,
+          "text": "لا توجد سجلات تطابق الفلاتر المحددة حالياً."
+        },
+        {
+          "line": 335,
+          "text": "<th className=\"px-4 py-3.5\">التاريخ</th>"
+        },
+        {
+          "line": 336,
+          "text": "<th className=\"px-4 py-3.5\">المرحلة الإنتاجية</th>"
+        },
+        {
+          "line": 337,
+          "text": "<th className=\"px-4 py-3.5\">المنتج / الصنف</th>"
+        },
+        {
+          "line": 338,
+          "text": "<th className=\"px-4 py-3.5\">الكمية</th>"
+        },
+        {
+          "line": 339,
+          "text": "<th className=\"px-4 py-3.5\">الهالك</th>"
+        },
+        {
+          "line": 340,
+          "text": "<th className=\"px-4 py-3.5\">العميل / الأمر</th>"
+        },
+        {
+          "line": 341,
+          "text": "<th className=\"px-4 py-3.5\">الحالة</th>"
+        },
+        {
+          "line": 342,
+          "text": "<th className=\"px-4 py-3.5 text-center\">إجراءات التدقيق</th>"
+        },
+        {
+          "line": 356,
+          "text": "<span className=\"font-bold text-slate-900\">{rec.productName || 'غير محدد'}</span>"
+        },
+        {
+          "line": 379,
+          "text": "فحص وتدقيق"
+        },
+        {
+          "line": 402,
+          "text": "تدقيق سجل: {selectedRecord.stageNameAr}"
+        },
+        {
+          "line": 406,
+          "text": "ID: {selectedRecord.id} &bull; التاريخ: {selectedRecord.date}"
+        },
+        {
+          "line": 433,
+          "text": "<span className=\"text-slate-500 font-bold block mb-1\">المنتج / الصنف:</span>"
+        },
+        {
+          "line": 437,
+          "text": "<span className=\"text-slate-500 font-bold block mb-1\">العميل:</span>"
+        },
+        {
+          "line": 441,
+          "text": "<span className=\"text-slate-500 font-bold block mb-1\">الكمية المسجلة:</span>"
+        },
+        {
+          "line": 445,
+          "text": "<span className=\"text-slate-500 font-bold block mb-1\">الهالك المسجل:</span>"
+        },
+        {
+          "line": 455,
+          "text": "تعديل بيانات السجل (مع توثيق سبب التغيير)"
+        },
+        {
+          "line": 460,
+          "text": "<label className=\"block font-bold text-slate-700 mb-1\">الكمية المنتجة</label>"
+        },
+        {
+          "line": 470,
+          "text": "<label className=\"block font-bold text-slate-700 mb-1\">كمية الهالك</label>"
+        },
+        {
+          "line": 483,
+          "text": "سبب التعديل والتوثيق <span className=\"text-red-500\">*</span>"
+        },
+        {
+          "line": 490,
+          "text": "placeholder=\"مثال: تصحيح قراءة العداد / مراجعة كشف الفرز اليدوي...\""
+        },
+        {
+          "line": 501,
+          "text": "إلغاء التعديل"
+        },
+        {
+          "line": 510,
+          "text": "حفظ التعديل الموثق"
+        },
+        {
+          "line": 522,
+          "text": "تعديل وتصحيح بيانات هذا السجل"
+        },
+        {
+          "line": 531,
+          "text": "سجل التعديلات والتدقيق المعتمد ({auditLogs.length})"
+        },
+        {
+          "line": 535,
+          "text": "<div className=\"p-4 text-center text-slate-400\">جاري تحميل سجل التغييرات...</div>"
+        },
+        {
+          "line": 538,
+          "text": "لا توجد تعديلات سابقة لهذا السجل (النسخة الأصلية)."
+        },
+        {
+          "line": 553,
+          "text": "السبب: <span className=\"font-semibold text-slate-800\">{log.reason}</span>"
+        },
+        {
+          "line": 570,
+          "text": "placeholder=\"ملاحظات الاعتماد أو الرفض...\""
+        },
+        {
+          "line": 585,
+          "text": "رفض السجل"
+        },
+        {
+          "line": 594,
+          "text": "اعتماد السجل"
+        },
+        {
+          "line": 603,
+          "text": "إغلاق"
+        }
+      ]
+    },
+    {
+      "file": "src\\components\\bulk\\BulkEntryView.tsx",
+      "count": 62,
+      "hits": [
+        {
+          "line": 139,
+          "text": "throw new Error('الملف فارغ أو لا يحتوي على صفوف صالحة.');"
+        },
+        {
+          "line": 147,
+          "text": "alert(err.message || 'حدث خطأ أثناء معالجة البيانات.');"
+        },
+        {
+          "line": 170,
+          "text": "setCreateTypeError('بادئة الكود يجب أن تتكون من 3 أحرف لاتينية بالضبط (مثال: BAR, BHA).');"
+        },
+        {
+          "line": 174,
+          "text": "setCreateTypeError('الاسم بالإنجليزية (Name EN) مطلوب.');"
+        },
+        {
+          "line": 205,
+          "text": "setCreateTypeError(err.message || 'فشل حفظ نوع المنتج في قاعدة البيانات.');"
+        },
+        {
+          "line": 214,
+          "text": "alert('لا توجد صفوف صالحة للاستيراد. يرجى مراجعة الأخطاء في الجدول.');"
+        },
+        {
+          "line": 234,
+          "text": "alert(err.message || 'حدث خطأ أثناء حفظ البيانات في Firestore.');"
+        },
+        {
+          "line": 265,
+          "text": "1. اختر جدول البيانات الأساسية المستهدفة:"
+        },
+        {
+          "line": 302,
+          "text": "<span>تحميل قالب Excel</span>"
+        },
+        {
+          "line": 321,
+          "text": "الاستيراد الذكي للمنتجات الحرارية (Smart Product Derivation):"
+        },
+        {
+          "line": 324,
+          "text": "يتطلب القالب عمودين فقط: <code className=\"font-mono bg-indigo-100/80 px-1 py-0.5 rounded text-indigo-900 font-bold\">productCode</code> و <co"
+        },
+        {
+          "line": 325,
+          "text": "يتم استخراج البادئة، تصنيف نوع المنتج، نسبة الألومينا (الخانتان 4 و 5)، ورقم المعرف التسلسلي تلقائياً بدون أي بيانات مصطنعة."
+        },
+        {
+          "line": 336,
+          "text": "<span>2. إدخال أو تحميل بيانات: {currentSchema.title}</span>"
+        },
+        {
+          "line": 348,
+          "text": "<span>رفع ملف (Excel / CSV)</span>"
+        },
+        {
+          "line": 358,
+          "text": "<span>نسخ ولصق من Sheets/Excel</span>"
+        },
+        {
+          "line": 379,
+          "text": "{uploadedFile ? uploadedFile.name : 'انقر لاختيار ملف أو اسحب الملف هنا'}"
+        },
+        {
+          "line": 382,
+          "text": "يدعم صيغ Excel (.xlsx, .xls) وصيغ CSV مع مطابقة الأعمدة تلقائياً"
+        },
+        {
+          "line": 396,
+          "text": "placeholder={`انسخ صف العناوين والبيانات من Excel أو Google Sheets والصقها هنا...\\nمثال:\\nproductCode\\tproductName\\nBAR250102305\\tطوب مقاوم "
+        },
+        {
+          "line": 407,
+          "text": "<span>معالجة والتحقق من البيانات</span>"
+        },
+        {
+          "line": 420,
+          "text": "تم إكمال الاستيراد المجمع بنجاح!"
+        },
+        {
+          "line": 423,
+          "text": "تم حفظ <strong className=\"font-mono\">{toWesternDigits(importResult.importedRows)}</strong> سجل جديد في قاعدة البيانات السحابية Firestore وتد"
+        },
+        {
+          "line": 427,
+          "text": "تم تجاوز {toWesternDigits(importResult.duplicateRows)} سجل مكرر مسبقاً لحماية البيانات."
+        },
+        {
+          "line": 438,
+          "text": "<span>جارٍ فحص الأعمدة، استخراج تصنيفات الأكواد الذكية، والتحقق من التكرار السحابي...</span>"
+        },
+        {
+          "line": 449,
+          "text": "<span className=\"text-[11px] font-bold text-slate-500\">إجمالي الصفوف</span>"
+        },
+        {
+          "line": 455,
+          "text": "<span className=\"text-[11px] font-bold text-emerald-700\">سجلات جديدة صالحة</span>"
+        },
+        {
+          "line": 461,
+          "text": "<span className=\"text-[11px] font-bold text-amber-700\">مكرر بقاعدة البيانات</span>"
+        },
+        {
+          "line": 467,
+          "text": "<span className=\"text-[11px] font-bold text-amber-700\">مكرر بالملف المرفوع</span>"
+        },
+        {
+          "line": 473,
+          "text": "<span className=\"text-[11px] font-bold text-purple-700\">بادئات غير مسجلة</span>"
+        },
+        {
+          "line": 479,
+          "text": "<span className=\"text-[11px] font-bold text-rose-700\">أخطاء وهيكل غير صالح</span>"
+        },
+        {
+          "line": 490,
+          "text": "يوجد <strong>{toWesternDigits(unknownTypeCount)}</strong> منتج يحتوي على بادئة غير مسجلة في قائمة <code>productTypes</code>. يمكنك تسجيل الب"
+        },
+        {
+          "line": 502,
+          "text": "+ إنشاء نوع منتج جديد"
+        },
+        {
+          "line": 511,
+          "text": "<span className=\"font-bold text-slate-600\">تصفية العرض:</span>"
+        },
+        {
+          "line": 517,
+          "text": "<option value=\"all\">جميع الصفوف ({toWesternDigits(totalCount)})</option>"
+        },
+        {
+          "line": 518,
+          "text": "<option value=\"NEW\">الصالحة للاستيراد فقط ({toWesternDigits(newValidCount)})</option>"
+        },
+        {
+          "line": 519,
+          "text": "<option value=\"DUPLICATE\">المكررة ({toWesternDigits(duplicateInDbCount + duplicateInFileCount)})</option>"
+        },
+        {
+          "line": 520,
+          "text": "<option value=\"UNKNOWN_PRODUCT_TYPE\">بادئة غير مسجلة ({toWesternDigits(unknownTypeCount)})</option>"
+        },
+        {
+          "line": 521,
+          "text": "<option value=\"INVALID\">الأخطاء ({toWesternDigits(invalidCount)})</option>"
+        },
+        {
+          "line": 536,
+          "text": "<span>جارٍ الاستيراد ({progress.current}/{progress.total})...</span>"
+        },
+        {
+          "line": 541,
+          "text": "<span>تأكيد استيراد {toWesternDigits(newValidCount)} منتج جديد</span>"
+        },
+        {
+          "line": 553,
+          "text": "<th className=\"p-3\">الحالة (Status)</th>"
+        },
+        {
+          "line": 554,
+          "text": "<th className=\"p-3\">كود المنتج (Code)</th>"
+        },
+        {
+          "line": 555,
+          "text": "<th className=\"p-3\">اسم المنتج (Name)</th>"
+        },
+        {
+          "line": 558,
+          "text": "<th className=\"p-3\">البادئة (Prefix)</th>"
+        },
+        {
+          "line": 559,
+          "text": "<th className=\"p-3\">نوع المنتج (Product Type)</th>"
+        },
+        {
+          "line": 560,
+          "text": "<th className=\"p-3\">نسبة الألومينا</th>"
+        },
+        {
+          "line": 561,
+          "text": "<th className=\"p-3\">المعرف التسلسلي</th>"
+        },
+        {
+          "line": 566,
+          "text": "<th className=\"p-3\">الملاحظات / الأخطاء</th>"
+        },
+        {
+          "line": 649,
+          "text": "<span className=\"text-purple-600 text-[11px] font-bold\">غير معرف</span>"
+        },
+        {
+          "line": 696,
+          "text": "<span>إضافة النوع ({row.derivedData.prefix})</span>"
+        },
+        {
+          "line": 703,
+          "text": "<span>جاهز للاستيراد</span>"
+        },
+        {
+          "line": 722,
+          "text": "title=\"إنشاء تصنيف نوع منتج جديد (Product Type)\""
+        },
+        {
+          "line": 723,
+          "text": "subtitle=\"سيتم حفظ التصنيف في Firestore وإعادة تصنيف المنتجات المعلقة فوراً\""
+        },
+        {
+          "line": 737,
+          "text": "بادئة الكود (Prefix Code - 3 أحرف لاتينية) *"
+        },
+        {
+          "line": 745,
+          "text": "placeholder=\"مثال: BAR\""
+        },
+        {
+          "line": 753,
+          "text": "اسم نوع المنتج بالإنجليزية (Name EN) *"
+        },
+        {
+          "line": 768,
+          "text": "اسم نوع المنتج بالعربية (Name AR)"
+        },
+        {
+          "line": 774,
+          "text": "placeholder=\"مثال: طوب مقاوم للأحماض\""
+        },
+        {
+          "line": 782,
+          "text": "الوصف / البيان"
+        },
+        {
+          "line": 788,
+          "text": "placeholder=\"وصف وتطبيقات تصنيف المنتج...\""
+        },
+        {
+          "line": 799,
+          "text": "إلغاء"
+        },
+        {
+          "line": 809,
+          "text": "<span>جارٍ الحفظ وإعادة التصنيف...</span>"
+        },
+        {
+          "line": 812,
+          "text": "<span>حفظ وإعادة تصنيف الصفوف</span>"
+        }
+      ]
+    },
+    {
+      "file": "src\\components\\admin\\DataQualityModal.tsx",
+      "count": 59,
+      "hits": [
+        {
+          "line": 129,
+          "text": "title: 'منتج بدون اسم أو توصيف',"
+        },
+        {
+          "line": 130,
+          "text": "description: `المنتج ذو الكود (${code || 'بدون كود'}) مسجل بدون اسم عربي أو توصيف.`,"
+        },
+        {
+          "line": 133,
+          "text": "suggestedAction: 'أضف اسماً واضحاً للمنتج من شاشة المنتجات.',"
+        },
+        {
+          "line": 145,
+          "text": "title: 'تكرار كود المنتج (Duplicate Product Code)',"
+        },
+        {
+          "line": 146,
+          "text": "description: `الكود \"${code}\" مكرر لأكثر من منتج (${name}).`,"
+        },
+        {
+          "line": 150,
+          "text": "suggestedAction: 'تعديل الكود لمنع الالتباس أثناء تسجيل الإنتاج.',"
+        },
+        {
+          "line": 164,
+          "text": "title: 'كود رقمي مصنف خطأ كـ كود ذكي (Numeric Code marked as Smart)',"
+        },
+        {
+          "line": 165,
+          "text": "description: `المنتج \"${code} - ${name}\" يبدأ برقم لكنه مصنف كـ SMART_CODE. حسب القواعد المعيارية الأكواد الرقمية يجب أن تكون MANUAL_PRODUCT"
+        },
+        {
+          "line": 169,
+          "text": "suggestedAction: 'استخدم أداة \"إعادة تحليل الأكواد\" لتصحيح التصنيف إلى يدوي.',"
+        },
+        {
+          "line": 182,
+          "text": "title: 'بادئة منتج غير مسجلة (Unknown Prefix)',"
+        },
+        {
+          "line": 183,
+          "text": "description: `المنتج \"${code}\" يحمل البادئة \"${prefix}\" وهي غير مسجلة في جدول تصنيفات المنتجات (Product Types).`,"
+        },
+        {
+          "line": 187,
+          "text": "suggestedAction: `إضافة البادئة \"${prefix}\" في تبويب \"تصنيفات المنتجات (Prefixes)\" للاستفادة من التعرف التلقائي.`,"
+        },
+        {
+          "line": 204,
+          "text": "title: 'موظف/عامل بدون كود تشغيل',"
+        },
+        {
+          "line": 205,
+          "text": "description: `العامل \"${name || 'بدون اسم'}\" مسجل بدون كود تعريف (Code).`,"
+        },
+        {
+          "line": 208,
+          "text": "suggestedAction: 'أدخل كود وظيفي (مثال E010) لتمكين البحث السريع.',"
+        },
+        {
+          "line": 217,
+          "text": "title: 'تكرار كود الموظف (Duplicate Employee Code)',"
+        },
+        {
+          "line": 218,
+          "text": "description: `الكود \"${code}\" مكرر لأكثر من عامل (${name}).`,"
+        },
+        {
+          "line": 222,
+          "text": "suggestedAction: 'تعيين كود فريد لكل عامل.',"
+        },
+        {
+          "line": 234,
+          "text": "title: 'سجل موظف بدون اسم',"
+        },
+        {
+          "line": 235,
+          "text": "description: `الموظف ذو الكود (${code}) مسجل بدون اسم.`,"
+        },
+        {
+          "line": 238,
+          "text": "suggestedAction: 'أدخل اسم العامل.',"
+        },
+        {
+          "line": 251,
+          "text": "title: 'عربة فرن مرتبطة بفرن غير موجود (Orphaned Car)',"
+        },
+        {
+          "line": 252,
+          "text": "description: `العربة رقم #${car.carNumber || car.code} تشير إلى فرن غير مسجل في النظام.`,"
+        },
+        {
+          "line": 255,
+          "text": "suggestedAction: 'تعديل بيانات العربة وإعادة ربطها بفرن قائم أو جعلها عربة عامة.',"
+        },
+        {
+          "line": 264,
+          "text": "if (!rec.shiftId && !rec.shiftName) issuesInRecord.push('الوردية');"
+        },
+        {
+          "line": 265,
+          "text": "if (!rec.pressId && !rec.pressName) issuesInRecord.push('المكبس');"
+        },
+        {
+          "line": 266,
+          "text": "if (!rec.productId && !rec.productName) issuesInRecord.push('المنتج');"
+        },
+        {
+          "line": 273,
+          "text": "title: 'سجل إنتاج يفتقر إلى معرفات أساسية',"
+        },
+        {
+          "line": 274,
+          "text": "description: `سجل الإنتاج بتاريخ (${rec.date || 'بدون تاريخ'}) يفتقر إلى بيانات: ${issuesInRecord.join('، ')}.`,"
+        },
+        {
+          "line": 276,
+          "text": "suggestedAction: 'مراجعة السجل من شاشة سجلات الإنتاج.',"
+        },
+        {
+          "line": 286,
+          "text": "title: 'سجل إنتاج قديم بدون لقطة أسماء العمال (Missing Name Snapshot)',"
+        },
+        {
+          "line": 287,
+          "text": "description: `سجل الإنتاج بتاريخ (${rec.date}) يحتوي على معرفات العمال بدون لقطة الأسماء النصية المباشرة.`,"
+        },
+        {
+          "line": 289,
+          "text": "suggestedAction: 'النظام يدعم التوافقية العكسية تلقائياً.',"
+        },
+        {
+          "line": 323,
+          "text": "title=\"أداة فحص جودة وسلامة البيانات (Data Quality & Integrity Check)\""
+        },
+        {
+          "line": 332,
+          "text": "فحص شامل لتناسق قواعد البيانات والعلاقات والأكواد المعيارية"
+        },
+        {
+          "line": 335,
+          "text": "يقوم هذا الفحص باكتشاف الأكواد المكررة، العلاقات المفقودة، وتصنيفات الأكواد الرقمية دون أي تعديل أو مساس بالبيانات الحالية."
+        },
+        {
+          "line": 347,
+          "text": "<span>إعادة الفحص الآن</span>"
+        },
+        {
+          "line": 354,
+          "text": "<span className=\"text-[10px] text-slate-500 block\">المنتجات</span>"
+        },
+        {
+          "line": 358,
+          "text": "<span className=\"text-[10px] text-slate-500 block\">العمال</span>"
+        },
+        {
+          "line": 362,
+          "text": "<span className=\"text-[10px] text-slate-500 block\">المكابس</span>"
+        },
+        {
+          "line": 366,
+          "text": "<span className=\"text-[10px] text-slate-500 block\">الأفران</span>"
+        },
+        {
+          "line": 370,
+          "text": "<span className=\"text-[10px] text-slate-500 block\">عربات الأفران</span>"
+        },
+        {
+          "line": 374,
+          "text": "<span className=\"text-[10px] text-slate-500 block\">سجلات الإنتاج</span>"
+        },
+        {
+          "line": 389,
+          "text": "جميع الملاحظات ({issues.length})"
+        },
+        {
+          "line": 398,
+          "text": "حرجة ({highCount})"
+        },
+        {
+          "line": 407,
+          "text": "متوسطة ({mediumCount})"
+        },
+        {
+          "line": 416,
+          "text": "منخفضة ({lowCount})"
+        },
+        {
+          "line": 425,
+          "text": "تنبيهات ({infoCount})"
+        },
+        {
+          "line": 435,
+          "text": "<option value=\"ALL\">جميع الأقسام</option>"
+        },
+        {
+          "line": 436,
+          "text": "<option value=\"PRODUCT\">المنتجات (Products)</option>"
+        },
+        {
+          "line": 437,
+          "text": "<option value=\"EMPLOYEE\">العمال والموظفون</option>"
+        },
+        {
+          "line": 438,
+          "text": "<option value=\"RELATIONSHIP\">العلاقات والربط</option>"
+        },
+        {
+          "line": 439,
+          "text": "<option value=\"PRODUCTION\">سجلات الإنتاج</option>"
+        },
+        {
+          "line": 448,
+          "text": "<p className=\"text-xs font-bold\">جاري تشغيل الفحص التشخيصي الشامل لقاعدة البيانات...</p>"
+        },
+        {
+          "line": 453,
+          "text": "<h4 className=\"text-sm font-black\">جودة البيانات ممتازة 100%!</h4>"
+        },
+        {
+          "line": 455,
+          "text": "لم يتم العثور على أي مشاكل أو أكواد مكررة أو علاقات مفقودة في السجلات المحددة."
+        },
+        {
+          "line": 504,
+          "text": "<span className=\"font-bold text-slate-800\">الإجراء المقترح:</span>"
+        },
+        {
+          "line": 518,
+          "text": "إجمالي المشاكل المكتشفة: <strong className=\"text-slate-800\">{issues.length}</strong>"
+        },
+        {
+          "line": 525,
+          "text": "إغلاق التقرير"
+        }
+      ]
+    },
+    {
+      "file": "src\\components\\admin\\SystemHealthView.tsx",
+      "count": 59,
+      "hits": [
+        {
+          "line": 87,
+          "text": "<span>صحة النظام والإصدارات والتعافي من الكوارث</span>"
+        },
+        {
+          "line": 93,
+          "text": "تشخيص لحظي لحالة الاتصال، سرعة الاستجابة، سلامة قواعد البيانات، وإجراءات التعافي (Disaster Recovery)"
+        },
+        {
+          "line": 105,
+          "text": "<span>إعادة الفحص والتشخيص</span>"
+        },
+        {
+          "line": 113,
+          "text": "<span>معلومات الإصدار</span>"
+        },
+        {
+          "line": 128,
+          "text": "{dbStatus === 'CONNECTED' ? 'متصل ونشط' : 'خطأ في الاتصال'}"
+        },
+        {
+          "line": 132,
+          "text": "{dbLatencyMs ? `زمن الاستجابة: ${dbLatencyMs} ms` : 'جاري القياس...'}"
+        },
+        {
+          "line": 139,
+          "text": "<span>شبكة النشر السحابية</span>"
+        },
+        {
+          "line": 151,
+          "text": "{auth.currentUser ? 'جلسة مصادقة نشطة' : 'غير مسجل'}"
+        },
+        {
+          "line": 161,
+          "text": "<span>حماية النسخ الاحتياطية</span>"
+        },
+        {
+          "line": 164,
+          "text": "{backupCount} نسخة مسجلة"
+        },
+        {
+          "line": 167,
+          "text": "{lastBackupTime ? `آخر نسخة: ${new Date(lastBackupTime).toLocaleDateString('ar-EG')}` : 'لا توجد نسخ'}"
+        },
+        {
+          "line": 184,
+          "text": "<span>التشخيص والمؤشرات الفنية</span>"
+        },
+        {
+          "line": 196,
+          "text": "<span>دليل التعافي من الكوارث (DR Protocols)</span>"
+        },
+        {
+          "line": 208,
+          "text": "<span>سجل الإصدارات والترقيات</span>"
+        },
+        {
+          "line": 218,
+          "text": "<span>مواصفات حزمة الإنتاج والواجهة</span>"
+        },
+        {
+          "line": 223,
+          "text": "<span className=\"text-slate-400\">إصدار التطبيق (Application Version):</span>"
+        },
+        {
+          "line": 230,
+          "text": "<span className=\"text-slate-400\">رقم البناء (Build ID):</span>"
+        },
+        {
+          "line": 235,
+          "text": "<span className=\"text-slate-400\">إصدار مخطط قاعدة البيانات (Schema Version):</span>"
+        },
+        {
+          "line": 240,
+          "text": "<span className=\"text-slate-400\">الفرع المعتمد (Git Branch):</span>"
+        },
+        {
+          "line": 245,
+          "text": "<span className=\"text-slate-400\">تحديث الـ Service Worker:</span>"
+        },
+        {
+          "line": 253,
+          "text": "<span className=\"text-slate-400\">حالة التحديثات:</span>"
+        },
+        {
+          "line": 255,
+          "text": "{hasUpdate ? `تحديث متوفر: v${remoteVersion?.version}` : 'النظام محدث بالكامل'}"
+        },
+        {
+          "line": 264,
+          "text": "<span>فحص جودة واستقرار الشبكة وقواعد البيانات</span>"
+        },
+        {
+          "line": 269,
+          "text": "<span className=\"text-slate-400\">مشروع Firebase Firestore:</span>"
+        },
+        {
+          "line": 274,
+          "text": "<span className=\"text-slate-400\">قاعدة البيانات:</span>"
+        },
+        {
+          "line": 279,
+          "text": "<span className=\"text-slate-400\">زمن استجابة الاستعلام (Latency):</span>"
+        },
+        {
+          "line": 281,
+          "text": "{dbLatencyMs !== null ? `${dbLatencyMs} ms` : 'قيد القياس...'}"
+        },
+        {
+          "line": 286,
+          "text": "<span className=\"text-slate-400\">توجيه الصفحات الأحادية (SPA Fallback):</span>"
+        },
+        {
+          "line": 294,
+          "text": "<span className=\"text-slate-400\">تأمين الجلسات (No Clear Session on Update):</span>"
+        },
+        {
+          "line": 311,
+          "text": "<span>بروتوكولات وخطط التعافي من الكوارث وحالات الطوارئ (Disaster Recovery Protocols)</span>"
+        },
+        {
+          "line": 314,
+          "text": "دليل الإجراءات المعتمد للتعامل الفوري مع أي أعطال أو أخطاء برمجية أو فقدان في البيانات دون التأثير على خطوط إنتاج المصنع."
+        },
+        {
+          "line": 323,
+          "text": "<h4>التراجع عن نشر واجهة الويب (Cloudflare Rollback)</h4>"
+        },
+        {
+          "line": 326,
+          "text": "في حال وجود خطأ في الواجهة بعد نشر إصدار جديد على Cloudflare Pages:"
+        },
+        {
+          "line": 329,
+          "text": "<li>لا تقم بحذف أو استعادة قاعدة البيانات نهائياً لأن بيانات الإنتاج سليمة في Firestore.</li>"
+        },
+        {
+          "line": 330,
+          "text": "<li>توجه إلى لوحة تحكم Cloudflare Pages للمشروع <span className=\"text-white font-mono\">asfour-production</span>.</li>"
+        },
+        {
+          "line": 331,
+          "text": "<li>انتقل إلى تبويب <span className=\"text-white font-bold\">Deployments</span> واختر آخر نشر ناجح مستقر.</li>"
+        },
+        {
+          "line": 332,
+          "text": "<li>اضغط على <span className=\"text-amber-400 font-bold\">Rollback to this deployment</span> ليتم فوراً إعادة توجيه المستخدمين.</li>"
+        },
+        {
+          "line": 340,
+          "text": "<h4>استعادة البيانات من نقطة زمنية (Point-in-Time Restore)</h4>"
+        },
+        {
+          "line": 343,
+          "text": "في حال حدوث خطأ بشري أو تعديل غير مقصود في بيانات الإنتاج أو الخامات:"
+        },
+        {
+          "line": 346,
+          "text": "<li>انتقل إلى تبويب <span className=\"text-white font-bold\">مركز النسخ الاحتياطي والاستعادة</span>.</li>"
+        },
+        {
+          "line": 347,
+          "text": "<li>حدد النسخة الاحتياطية المطلوبة واضغط على <span className=\"text-amber-400 font-bold\">معاينة واستعادة</span>.</li>"
+        },
+        {
+          "line": 348,
+          "text": "<li>راجع مقارنة أعداد السجلات في شاشة المعاينة للتأكد من حجم البيانات.</li>"
+        },
+        {
+          "line": 349,
+          "text": "<li>يقوم النظام تلقائياً بإنشاء نقطة أمان قبل الاستعادة لتفادي أي فقدان غير مقصود.</li>"
+        },
+        {
+          "line": 357,
+          "text": "<h4>الحماية قبل الاستيراد المجمع والعمليات الكبرى</h4>"
+        },
+        {
+          "line": 360,
+          "text": "قبل استيراد ملفات Excel ضخمة للمنتجات أو سجلات الإنتاج التاريخية:"
+        },
+        {
+          "line": 363,
+          "text": "<li>اضغط على <span className=\"text-white font-bold\">إنشاء نسخة احتياطية الآن</span> قبل تشغيل الاستيراد.</li>"
+        },
+        {
+          "line": 364,
+          "text": "<li>يقوم النظام بوسم النسخة كـ <span className=\"text-purple-400 font-mono\">PRE_IMPORT</span>.</li>"
+        },
+        {
+          "line": 365,
+          "text": "<li>في حال اكتشاف أي تكرارات خاطئة في الملف المستورد، يمكن التراجع الفوري إلى نقطة ما قبل الاستيراد.</li>"
+        },
+        {
+          "line": 373,
+          "text": "<h4>التعامل مع انقطاع الإنترنت وحفظ المسودات</h4>"
+        },
+        {
+          "line": 376,
+          "text": "في حال انقطاع شبكة المصنع أثناء تسجيل وردية أو وزن طوب:"
+        },
+        {
+          "line": 379,
+          "text": "<li>يعمل تطبيق الويب التقدمي (PWA) ويحفظ المدخلات محلياً كمسودة (Draft).</li>"
+        },
+        {
+          "line": 380,
+          "text": "<li>محرك التحديث التلقائي يمنع إعادة تحميل الصفحة في حال وجود مدخلات غير محفوظة ويعرض تحذيراً صريحاً.</li>"
+        },
+        {
+          "line": 381,
+          "text": "<li>بمجرد عودة الاتصال، يتم ترحيل السجل واعتماده وحفظه في Firestore.</li>"
+        },
+        {
+          "line": 400,
+          "text": "الإصدار الحالي: <span className=\"font-mono text-amber-400 font-bold\">v{CURRENT_APP_VERSION.version}</span>"
+        },
+        {
+          "line": 407,
+          "text": "{hasUpdate ? 'توجد نسخة جديدة متاحة' : 'أنت تستخدم أحدث إصدار'}"
+        },
+        {
+          "line": 423,
+          "text": "<span>{isChecking ? 'جاري الفحص...' : 'فحص التحديثات الآن'}</span>"
+        },
+        {
+          "line": 431,
+          "text": "<span>سجل الإصدارات والتطور التاريخي لمنظومة عصفور</span>"
+        },
+        {
+          "line": 440,
+          "text": "الإصدار v{release.version}"
+        },
+        {
+          "line": 444,
+          "text": "الإصدار الحالي في الإنتاج"
+        }
+      ]
+    },
+    {
+      "file": "src\\components\\masterData\\MasterDataView.tsx",
+      "count": 43,
+      "hits": [
+        {
+          "line": 296,
+          "text": "unit: 'قطعة',"
+        },
+        {
+          "line": 297,
+          "text": "dimensions: '230x114x65 مم',"
+        },
+        {
+          "line": 696,
+          "text": "`تم تطبيق التحديث الذكي وتوليد الحقول المشتقة وتطبيع الفهارس لعدد (${updatable.length}) منتج بنجاح`"
+        },
+        {
+          "line": 699,
+          "text": "setAnalysisAppliedMessage(`تم تحديث وتطبيع بيانات (${updatable.length}) منتج بالمعلومات المشتقة بنجاح مع الحفاظ على الأكواد الرقمية والمدخلا"
+        },
+        {
+          "line": 707,
+          "text": "alert('حدث خطأ أثناء تطبيق التحديث: ' + (err.message || 'خطأ غير معروف'));"
+        },
+        {
+          "line": 718,
+          "text": "`بيانات_${currentTabObj?.label || activeTab}.xlsx`"
+        },
+        {
+          "line": 1247,
+          "text": "placeholder=\"ملاحظات ومواصفات نوع المنتج...\""
+        },
+        {
+          "line": 1294,
+          "text": "<span className=\"text-emerald-800\">SMART CODE DETECTED (كود ذكي معتمد)</span>"
+        },
+        {
+          "line": 1299,
+          "text": "<span className=\"text-amber-800\">UNKNOWN PRODUCT PREFIX (بادئة غير مسجلة)</span>"
+        },
+        {
+          "line": 1309,
+          "text": "<span className=\"text-slate-700\">MANUAL CODE (كود يدوي / يبدأ برقم)</span>"
+        },
+        {
+          "line": 1330,
+          "text": "<span className=\"block text-[10px] text-slate-500 font-sans\">1. البادئة (Prefix)</span>"
+        },
+        {
+          "line": 1335,
+          "text": "<span className=\"block text-[10px] text-slate-500 font-sans\">2. نوع المنتج (Type)</span>"
+        },
+        {
+          "line": 1338,
+          "text": "<span className=\"text-amber-700 font-sans\">غير مسجل (يدوي)</span>"
+        },
+        {
+          "line": 1344,
+          "text": "<span className=\"block text-[10px] text-slate-500 font-sans\">3. نسبة الألومينا</span>"
+        },
+        {
+          "line": 1351,
+          "text": "<span className=\"block text-[10px] text-slate-500 font-sans\">4. المعرف الداخلي</span>"
+        },
+        {
+          "line": 1360,
+          "text": "البادئة <span className=\"font-mono font-bold\">\"{liveProductParseResult.prefix}\"</span> غير مسجلة في جدول التصنيفات. يمكنك إضافتها الآن أو ال"
+        },
+        {
+          "line": 1368,
+          "text": "<span>إضافة تصنيف {liveProductParseResult.prefix} الآن +</span>"
+        },
+        {
+          "line": 1376,
+          "text": "? 'كود يبدأ برقم: يُعامل كـ MANUAL_CODE بدون اشتقاق آلي لنسبة الألومينا. يمكنك إدخال نوع المنتج ونسبة الألومينا يدوياً.'"
+        },
+        {
+          "line": 1377,
+          "text": ": 'كود ذو تنسيق مخصص: إدخال يدوي متاح بالكامل لجميع الحقول.'}"
+        },
+        {
+          "line": 1759,
+          "text": "title=\"تحليل الأكواد الحالية للمنتجات (Analyze Product Codes)\""
+        },
+        {
+          "line": 1760,
+          "text": "subtitle=\"فحص المنتجات المسجلة واستخراج الحقول المشتقة (البادئة، التصنيف، الألومينا، المعرف) دون التأثير على الأوزان أو الأبعاد أو حذف أي سج"
+        },
+        {
+          "line": 1768,
+          "text": "<p className=\"font-bold\">اكتمل التحديث بنجاح!</p>"
+        },
+        {
+          "line": 1777,
+          "text": "<span className=\"block text-[11px] text-slate-500 font-medium\">إجمالي المنتجات</span>"
+        },
+        {
+          "line": 1781,
+          "text": "<span className=\"block text-[11px] text-amber-800 font-medium\">جاهز للإثراء والتحديث</span>"
+        },
+        {
+          "line": 1787,
+          "text": "<span className=\"block text-[11px] text-emerald-800 font-medium\">مكتمل ومحدث مسبقاً</span>"
+        },
+        {
+          "line": 1793,
+          "text": "<span className=\"block text-[11px] text-rose-800 font-medium\">بادئة غير مسجلة أو غير صالحة</span>"
+        },
+        {
+          "line": 1804,
+          "text": "<p className=\"font-bold\">التوافق والأمان مع البيانات السابقة (Backward Compatibility)</p>"
+        },
+        {
+          "line": 1806,
+          "text": "يقوم هذا الفحص بمعاينة الحقول الذكية المشتقة تلقائياً من كود المنتج وربطها مع جدول تصنيفات المنتجات (Product Types). لن يتم تعديل وزن القطعة"
+        },
+        {
+          "line": 1816,
+          "text": "<th className=\"px-3 py-2.5\">الكود</th>"
+        },
+        {
+          "line": 1817,
+          "text": "<th className=\"px-3 py-2.5\">الاسم الحالي</th>"
+        },
+        {
+          "line": 1818,
+          "text": "<th className=\"px-3 py-2.5\">البادئة المشتقة</th>"
+        },
+        {
+          "line": 1819,
+          "text": "<th className=\"px-3 py-2.5\">التصنيف المشتق</th>"
+        },
+        {
+          "line": 1820,
+          "text": "<th className=\"px-3 py-2.5\">الألومينا %</th>"
+        },
+        {
+          "line": 1821,
+          "text": "<th className=\"px-3 py-2.5\">المعرف</th>"
+        },
+        {
+          "line": 1822,
+          "text": "<th className=\"px-3 py-2.5 text-center\">الحالة</th>"
+        },
+        {
+          "line": 1829,
+          "text": "لا توجد منتجات مسجلة في قاعدة البيانات حالياً."
+        },
+        {
+          "line": 1863,
+          "text": "<span className=\"text-rose-600 font-bold\">بادئة غير مسجلة ({item.parseResult.prefix})</span>"
+        },
+        {
+          "line": 1878,
+          "text": "<Badge variant=\"warning\">بحاجة إثراء ⚡</Badge>"
+        },
+        {
+          "line": 1880,
+          "text": "<Badge variant=\"danger\">مراجعة البادئة ⚠️</Badge>"
+        },
+        {
+          "line": 1882,
+          "text": "<Badge variant=\"success\">محدث ✅</Badge>"
+        },
+        {
+          "line": 1895,
+          "text": "عدد المنتجات المستهدفة بالتحديث: <strong className=\"text-slate-900\">{analyzedItems.filter((i) => i.needsUpdate).length}</strong>"
+        },
+        {
+          "line": 1904,
+          "text": "إغلاق"
+        },
+        {
+          "line": 1916,
+          "text": "تطبيق التحديث الذكي والتطبيع ({analyzedItems.filter((i) => i.needsUpdate).length} منتج)"
+        }
+      ]
+    },
+    {
+      "file": "src\\components\\common\\SmartEntitySelect.tsx",
+      "count": 40,
+      "hits": [
+        {
+          "line": 78,
+          "text": "placeholder = 'ابحث بالكود أو بالاسم...',"
+        },
+        {
+          "line": 170,
+          "text": "case 'employee': return 'موظف / عامل';"
+        },
+        {
+          "line": 171,
+          "text": "case 'product': return 'منتج حراري';"
+        },
+        {
+          "line": 172,
+          "text": "case 'customer': return 'عميل';"
+        },
+        {
+          "line": 173,
+          "text": "case 'press': return 'مكبس';"
+        },
+        {
+          "line": 174,
+          "text": "case 'furnace': return 'فرن';"
+        },
+        {
+          "line": 175,
+          "text": "case 'car': return 'عربة فرن';"
+        },
+        {
+          "line": 176,
+          "text": "case 'shift': return 'وردية';"
+        },
+        {
+          "line": 177,
+          "text": "case 'material': return 'مادة خام';"
+        },
+        {
+          "line": 178,
+          "text": "case 'machine': return 'ماكينة';"
+        },
+        {
+          "line": 179,
+          "text": "case 'department': return 'قسم';"
+        },
+        {
+          "line": 180,
+          "text": "default: return 'عنصر';"
+        },
+        {
+          "line": 223,
+          "text": "setModalError('يرجى ملء كود واسم العنصر بدقة.');"
+        },
+        {
+          "line": 234,
+          "text": "? `هذا البيان موجود بالفعل: الكود \"${code}\" مسجل مسبقاً. / This record already exists.`"
+        },
+        {
+          "line": 235,
+          "text": ": `هذا البيان موجود بالفعل: الاسم \"${name}\" مسجل مسبقاً. / This record already exists.`"
+        },
+        {
+          "line": 249,
+          "text": "unit: newExtra.trim() || 'طن',"
+        },
+        {
+          "line": 250,
+          "text": "category: 'عام',"
+        },
+        {
+          "line": 260,
+          "text": "...(entityType === 'employee' ? { department: newExtra.trim() || 'الإنتاج' } : {}),"
+        },
+        {
+          "line": 282,
+          "text": "setModalError(err.message || 'حدث خطأ أثناء حفظ العنصر الجديد.');"
+        },
+        {
+          "line": 376,
+          "text": "title=\"إلغاء الاختيار\""
+        },
+        {
+          "line": 399,
+          "text": "البحث بالكود أو الاسم ({filteredOptions.length} عنصر)"
+        },
+        {
+          "line": 408,
+          "text": "إضافة {getEntityTitleAr(entityType)}"
+        },
+        {
+          "line": 416,
+          "text": "لا توجد بيانات مطابقة لـ <span className=\"font-semibold text-slate-800\">\"{searchQuery}\"</span>"
+        },
+        {
+          "line": 426,
+          "text": "+ إضافة {getEntityTitleAr(entityType)} جديد"
+        },
+        {
+          "line": 430,
+          "text": "يرجى مراجعة مسؤول النظام لإضافة عناصر جديدة."
+        },
+        {
+          "line": 486,
+          "text": "+ إضافة {getEntityTitleAr(entityType)} جديد إلى النظام"
+        },
+        {
+          "line": 501,
+          "text": "إضافة {getEntityTitleAr(entityType)} جديد"
+        },
+        {
+          "line": 522,
+          "text": "كود {getEntityTitleAr(entityType)} <span className=\"text-red-500\">*</span>"
+        },
+        {
+          "line": 530,
+          "text": "placeholder=\"مثال: 10025 أو MAT-01 أو P-40\""
+        },
+        {
+          "line": 537,
+          "text": "اسم {getEntityTitleAr(entityType)} <span className=\"text-red-500\">*</span>"
+        },
+        {
+          "line": 545,
+          "text": "placeholder={`اسم ${getEntityTitleAr(entityType)}...`}"
+        },
+        {
+          "line": 553,
+          "text": "وزن القطعة التقديري (كجم)"
+        },
+        {
+          "line": 569,
+          "text": "وحدة القياس"
+        },
+        {
+          "line": 575,
+          "text": "placeholder=\"طن / كجم / شيكارة\""
+        },
+        {
+          "line": 584,
+          "text": "القسم / الوردية"
+        },
+        {
+          "line": 590,
+          "text": "placeholder=\"الإنتاج / المكابس\""
+        },
+        {
+          "line": 598,
+          "text": "اضغط <kbd className=\"px-1.5 py-0.5 bg-slate-100 border border-slate-300 rounded text-slate-700 font-mono text-[10px]\">Enter</kbd> للحفظ، <kb"
+        },
+        {
+          "line": 606,
+          "text": "إلغاء"
+        },
+        {
+          "line": 617,
+          "text": "جاري الحفظ..."
+        },
+        {
+          "line": 622,
+          "text": "حفظ واختيار (Enter)"
+        }
+      ]
+    },
+    {
+      "file": "src\\components\\admin\\InlineMasterDataAddModal.tsx",
+      "count": 34,
+      "hits": [
+        {
+          "line": 101,
+          "text": "const [departmentName, setDepartmentName] = useState('قسم التشكيل والمكابس');"
+        },
+        {
+          "line": 108,
+          "text": "const [unit, setUnit] = useState('قطعة');"
+        },
+        {
+          "line": 134,
+          "text": "setJobTitle('مشغل مكبس');"
+        },
+        {
+          "line": 135,
+          "text": "setDepartmentName('قسم التشكيل والمكابس');"
+        },
+        {
+          "line": 140,
+          "text": "setName(val || 'مكبس جديد');"
+        },
+        {
+          "line": 142,
+          "text": "setModel('هيدروليكي');"
+        },
+        {
+          "line": 150,
+          "text": "setCategory(parsed.productType?.nameAr || parsed.productType?.nameEn || 'حراريات');"
+        },
+        {
+          "line": 157,
+          "text": "setUnit('قطعة');"
+        },
+        {
+          "line": 162,
+          "text": "setName(`عربة فرن رقم ${carNum}`);"
+        },
+        {
+          "line": 166,
+          "text": "setName(val || extraContext?.customerOrder || 'عميل جديد');"
+        },
+        {
+          "line": 173,
+          "text": "setName(`الوردية ${shiftNum === '1' ? 'الأولى (الصباحية)' : 'الثانية (المسائية)'}`);"
+        },
+        {
+          "line": 190,
+          "text": "titleAr: 'إضافة عامل / موظف جديد إلى البيانات الأساسية',"
+        },
+        {
+          "line": 197,
+          "text": "titleAr: 'إضافة مكبس جديد إلى البيانات الأساسية',"
+        },
+        {
+          "line": 204,
+          "text": "titleAr: 'إضافة صنف / منتج حراري إلى البيانات الأساسية',"
+        },
+        {
+          "line": 211,
+          "text": "titleAr: 'إضافة عربة فرن إلى البيانات الأساسية',"
+        },
+        {
+          "line": 218,
+          "text": "titleAr: 'إضافة عميل إلى البيانات الأساسية',"
+        },
+        {
+          "line": 225,
+          "text": "titleAr: 'إضافة وردية إلى البيانات الأساسية',"
+        },
+        {
+          "line": 232,
+          "text": "titleAr: 'إضافة فرن إلى البيانات الأساسية',"
+        },
+        {
+          "line": 239,
+          "text": "titleAr: 'إضافة مادة خام إلى البيانات الأساسية',"
+        },
+        {
+          "line": 246,
+          "text": "titleAr: 'إضافة بيان أساسي جديد',"
+        },
+        {
+          "line": 326,
+          "text": "jobTitle: jobTitle.trim() || 'مشغل مكبس',"
+        },
+        {
+          "line": 327,
+          "text": "departmentName: departmentName.trim() || 'قسم التشكيل والمكابس',"
+        },
+        {
+          "line": 334,
+          "text": "model: model.trim() || 'هيدروليكي',"
+        },
+        {
+          "line": 342,
+          "text": "category: category.trim() || 'حراريات',"
+        },
+        {
+          "line": 346,
+          "text": "unit: unit.trim() || 'قطعة',"
+        },
+        {
+          "line": 383,
+          "text": "unit: unit.trim() || 'طن',"
+        },
+        {
+          "line": 384,
+          "text": "category: category.trim() || 'عام',"
+        },
+        {
+          "line": 403,
+          "text": "`إضافة بيان أساسي فوري أثناء استيراد البيانات التاريخية: ${domainInfo.titleAr} (${trimmedName} - ${trimmedCode})`"
+        },
+        {
+          "line": 523,
+          "text": "placeholder=\"مثال: PRESS-01 أو BHA304\""
+        },
+        {
+          "line": 539,
+          "text": "setName(`عربة فرن رقم ${e.target.value}`);"
+        },
+        {
+          "line": 565,
+          "text": "placeholder=\"مشغل مكبس\""
+        },
+        {
+          "line": 578,
+          "text": "placeholder=\"قسم التشكيل والمكابس\""
+        },
+        {
+          "line": 625,
+          "text": "placeholder=\"طوب عالي الألومينا\""
+        },
+        {
+          "line": 656,
+          "text": "placeholder=\"هيدروليكي\""
+        }
+      ]
+    },
+    {
+      "file": "src\\components\\users\\UserManagementView.tsx",
+      "count": 26,
+      "hits": [
+        {
+          "line": 228,
+          "text": "setCreateError(err.message || 'فشل إنشاء المستخدم.');"
+        },
+        {
+          "line": 260,
+          "text": "editPermissionReason || 'تعديل الصلاحيات وبيانات المستخدم',"
+        },
+        {
+          "line": 274,
+          "text": "setEditError(err.message || 'فشل تحديث بيانات المستخدم.');"
+        },
+        {
+          "line": 290,
+          "text": "setActionErrorMessage(err.message || 'فشل تغيير حالة المستخدم.');"
+        },
+        {
+          "line": 303,
+          "text": "setActionErrorMessage(err.message || 'تعذر إرسال رابط إعادة التعيين.');"
+        },
+        {
+          "line": 318,
+          "text": "setActionErrorMessage(err.message || 'فشل حذف المستخدم.');"
+        },
+        {
+          "line": 662,
+          "text": "title={isPrimaryAdmin ? 'حساب المشرف الرئيسي دائم النشاط' : user.active ? 'انقر للتعطيل' : 'انقر للتفعيل'}"
+        },
+        {
+          "line": 831,
+          "text": "placeholder=\"لا تقل عن 6 أحرف\""
+        },
+        {
+          "line": 857,
+          "text": "<option value=\"PRODUCTION_OPERATOR\">PRODUCTION_OPERATOR (مشغل خط الإنتاج)</option>"
+        },
+        {
+          "line": 858,
+          "text": "<option value=\"PRODUCTION_SUPERVISOR\">PRODUCTION_SUPERVISOR (مشرف إنتاج)</option>"
+        },
+        {
+          "line": 859,
+          "text": "<option value=\"QUALITY_CONTROL\">QUALITY_CONTROL (مراقب الجودة)</option>"
+        },
+        {
+          "line": 860,
+          "text": "<option value=\"DATA_ENTRY\">DATA_ENTRY (مدخل بيانات)</option>"
+        },
+        {
+          "line": 861,
+          "text": "<option value=\"ACCOUNTING\">ACCOUNTING (محاسبة وتكاليف)</option>"
+        },
+        {
+          "line": 862,
+          "text": "<option value=\"REPORT_VIEWER\">REPORT_VIEWER (مشاهد تقارير)</option>"
+        },
+        {
+          "line": 863,
+          "text": "<option value=\"MAINTENANCE\">MAINTENANCE (مسؤول صيانة)</option>"
+        },
+        {
+          "line": 864,
+          "text": "<option value=\"SUPER_ADMIN\">SUPER_ADMIN (مشرف عام كامل الصلاحيات)</option>"
+        },
+        {
+          "line": 877,
+          "text": "placeholder=\"مثال: مكبس 1200 طن / خط تشكيل 1\""
+        },
+        {
+          "line": 1017,
+          "text": "<option value=\"PRODUCTION_OPERATOR\">PRODUCTION_OPERATOR (مشغل خط الإنتاج)</option>"
+        },
+        {
+          "line": 1018,
+          "text": "<option value=\"PRODUCTION_SUPERVISOR\">PRODUCTION_SUPERVISOR (مشرف إنتاج)</option>"
+        },
+        {
+          "line": 1019,
+          "text": "<option value=\"QUALITY_CONTROL\">QUALITY_CONTROL (مراقب الجودة)</option>"
+        },
+        {
+          "line": 1020,
+          "text": "<option value=\"DATA_ENTRY\">DATA_ENTRY (مدخل بيانات)</option>"
+        },
+        {
+          "line": 1021,
+          "text": "<option value=\"ACCOUNTING\">ACCOUNTING (محاسبة وتكاليف)</option>"
+        },
+        {
+          "line": 1022,
+          "text": "<option value=\"REPORT_VIEWER\">REPORT_VIEWER (مشاهد تقارير)</option>"
+        },
+        {
+          "line": 1023,
+          "text": "<option value=\"MAINTENANCE\">MAINTENANCE (مسؤول صيانة)</option>"
+        },
+        {
+          "line": 1024,
+          "text": "<option value=\"SUPER_ADMIN\">SUPER_ADMIN (مشرف عام كامل الصلاحيات)</option>"
+        },
+        {
+          "line": 1037,
+          "text": "placeholder=\"مثال: خط الكبس 1\""
+        }
+      ]
+    },
+    {
+      "file": "src\\components\\production\\ProductionStageSelector.tsx",
+      "count": 24,
+      "hits": [
+        {
+          "line": 41,
+          "text": "nameAr: 'التشكيل والمكابس',"
+        },
+        {
+          "line": 43,
+          "text": "descriptionAr: 'تشكيل الطوب الحراري، المكابس الهيدروليكية والميكانيكية، عمالة التشكيل وعربات الفرن',"
+        },
+        {
+          "line": 47,
+          "text": "badgeAr: 'المرحلة 1',"
+        },
+        {
+          "line": 53,
+          "text": "nameAr: 'الفرن الدوار',"
+        },
+        {
+          "line": 55,
+          "text": "descriptionAr: 'تكليس الخامات، استهلاك الغاز الطبيعي والكهرباء، الدفعات والخلطات ومعدلات الحرق',"
+        },
+        {
+          "line": 59,
+          "text": "badgeAr: 'المرحلة 2',"
+        },
+        {
+          "line": 65,
+          "text": "nameAr: 'الطواحين الصينية',"
+        },
+        {
+          "line": 67,
+          "text": "descriptionAr: 'طحن الخامات الحرارية الناعمة، عدد الشكائر، العميل، التوالف ومعدلات التشغيل بالساعة',"
+        },
+        {
+          "line": 71,
+          "text": "badgeAr: 'المرحلة 3',"
+        },
+        {
+          "line": 77,
+          "text": "nameAr: 'طواحين الأنابيب والكرات',"
+        },
+        {
+          "line": 79,
+          "text": "descriptionAr: 'طحن الخامات بالكرات، الصوامع والبناكر، ساعات التشغيل ومعدل الطن/ساعة',"
+        },
+        {
+          "line": 83,
+          "text": "badgeAr: 'المرحلة 4',"
+        },
+        {
+          "line": 89,
+          "text": "nameAr: 'المونة والخرسانات الحرارية',"
+        },
+        {
+          "line": 91,
+          "text": "descriptionAr: 'إنتاج خلطات المونة والخرسانات، أوامر التصنيع، الخامات المستخدمة والعملاء',"
+        },
+        {
+          "line": 95,
+          "text": "badgeAr: 'المرحلة 5',"
+        },
+        {
+          "line": 101,
+          "text": "nameAr: 'الخلط والتجهيز',"
+        },
+        {
+          "line": 103,
+          "text": "descriptionAr: 'تجهيز وتجنيس الخلطات الحرارية، الخامات المستخدمة، نسب الإضافة ومعدلات الإنتاج',"
+        },
+        {
+          "line": 107,
+          "text": "badgeAr: 'المرحلة 6',"
+        },
+        {
+          "line": 113,
+          "text": "nameAr: 'الشاموت الخفيف وعزل الفوم',"
+        },
+        {
+          "line": 115,
+          "text": "descriptionAr: 'إنتاج الطوب العازل الخفيف، الخامات المستخدمة، نسب المسامية ومعدل الهالك',"
+        },
+        {
+          "line": 119,
+          "text": "badgeAr: 'المرحلة 7',"
+        },
+        {
+          "line": 125,
+          "text": "nameAr: 'الفرز والمراقبة وتصنيف العيوب',"
+        },
+        {
+          "line": 127,
+          "text": "descriptionAr: 'فرز المنتج بعد الحرق، وزن القطعة، وتصنيف دقيق لعيوب الشطف، الشروخ، بقع الحديد والمرتجع',"
+        },
+        {
+          "line": 131,
+          "text": "badgeAr: 'المرحلة 8',"
+        }
+      ]
+    },
+    {
+      "file": "src\\components\\masterData\\MasterDataQualityReportModal.tsx",
+      "count": 20,
+      "hits": [
+        {
+          "line": 34,
+          "text": "products: { ar: 'الأصناف', en: 'Products' },"
+        },
+        {
+          "line": 35,
+          "text": "productTypes: { ar: 'تصنيفات المنتجات', en: 'Product Types' },"
+        },
+        {
+          "line": 36,
+          "text": "employees: { ar: 'العمال والموظفون', en: 'Employees' },"
+        },
+        {
+          "line": 37,
+          "text": "departments: { ar: 'الأقسام', en: 'Departments' },"
+        },
+        {
+          "line": 38,
+          "text": "presses: { ar: 'المكابس', en: 'Presses' },"
+        },
+        {
+          "line": 39,
+          "text": "furnaces: { ar: 'الأفران', en: 'Furnaces' },"
+        },
+        {
+          "line": 40,
+          "text": "furnaceCars: { ar: 'عربات الأفران', en: 'Furnace Cars' },"
+        },
+        {
+          "line": 41,
+          "text": "customers: { ar: 'العملاء', en: 'Customers' },"
+        },
+        {
+          "line": 42,
+          "text": "shifts: { ar: 'ورديات العمل', en: 'Shifts' },"
+        },
+        {
+          "line": 43,
+          "text": "materials: { ar: 'الخامات', en: 'Materials' },"
+        },
+        {
+          "line": 44,
+          "text": "machines: { ar: 'الآلات', en: 'Machines' },"
+        },
+        {
+          "line": 45,
+          "text": "stages: { ar: 'المراحل', en: 'Stages' },"
+        },
+        {
+          "line": 49,
+          "text": "DUPLICATE_CODE: { ar: 'كود مكرر', en: 'Duplicate Code' },"
+        },
+        {
+          "line": 50,
+          "text": "DUPLICATE_NAME: { ar: 'اسم مكرر تمامًا', en: 'Exact Duplicate Name' },"
+        },
+        {
+          "line": 51,
+          "text": "SIMILAR_NAME: { ar: 'اسم مشابه', en: 'Similar Name' },"
+        },
+        {
+          "line": 52,
+          "text": "MISSING_SEQUENCE: { ar: 'فجوة في التسلسل', en: 'Missing Sequence' },"
+        },
+        {
+          "line": 53,
+          "text": "INVALID_CODE: { ar: 'تنسيق كود غير صالح', en: 'Invalid Code Format' },"
+        },
+        {
+          "line": 54,
+          "text": "MISSING_REQUIRED: { ar: 'حقل إلزامي مفقود', en: 'Missing Required Field' },"
+        },
+        {
+          "line": 189,
+          "text": "await archiveMasterDataRecord(issue.entityType, item, `${reasonPrefix}تقرير جودة البيانات: ${ISSUE_TYPE_LABELS[issue.issueType].ar}`, issue."
+        },
+        {
+          "line": 192,
+          "text": "const outcome = await safeDeleteMasterDataRecord(issue.entityType, item, issue.referenceCount, `${reasonPrefix}تقرير جودة البيانات: ${ISSUE_"
+        }
+      ]
+    },
+    {
+      "file": "src\\components\\common\\VersionModal.tsx",
+      "count": 17,
+      "hits": [
+        {
+          "line": 29,
+          "text": "setCheckResultMsg('تم العثور على إصدار أحدث وجاهز للترقية!');"
+        },
+        {
+          "line": 31,
+          "text": "setCheckResultMsg('أنت تستخدم أحدث إصدار متاح بالفعل.');"
+        },
+        {
+          "line": 46,
+          "text": "<h3 className=\"font-bold text-lg text-white\">معلومات إصدار النظام</h3>"
+        },
+        {
+          "line": 70,
+          "text": "<span>رقم الإصدار (Version)</span>"
+        },
+        {
+          "line": 80,
+          "text": "<span>رقم البناء (Build ID)</span>"
+        },
+        {
+          "line": 90,
+          "text": "<span>إصدار المخطط (Schema)</span>"
+        },
+        {
+          "line": 100,
+          "text": "<span>تاريخ الإصدار</span>"
+        },
+        {
+          "line": 110,
+          "text": "<span>البيئة والاستضافة</span>"
+        },
+        {
+          "line": 120,
+          "text": "<span>قاعدة البيانات</span>"
+        },
+        {
+          "line": 134,
+          "text": "{hasUpdate ? `تحديث جديد متوفر: v${remoteVersion?.version}` : 'أنت تستخدم أحدث إصدار متاح'}"
+        },
+        {
+          "line": 137,
+          "text": "{checkResultMsg || (hasUpdate ? 'اضغط على تحديث الآن لإعادة تحميل النسخة الجديدة.' : 'يتم الفحص التلقائي دورياً كل 5 دقائق')}"
+        },
+        {
+          "line": 149,
+          "text": "<span>تحديث فوري الآن</span>"
+        },
+        {
+          "line": 158,
+          "text": "<span>فحص التحديثات</span>"
+        },
+        {
+          "line": 168,
+          "text": "<span>سجل التحديثات والترقيات (Release Notes)</span>"
+        },
+        {
+          "line": 176,
+          "text": "الإصدار {entry.version}"
+        },
+        {
+          "line": 200,
+          "text": "<span>نظام محمي ومشفر بالكامل</span>"
+        },
+        {
+          "line": 206,
+          "text": "إغلاق"
+        }
+      ]
+    },
+    {
+      "file": "src\\components\\dashboard\\ChartGalleryPicker.tsx",
+      "count": 17,
+      "hits": [
+        {
+          "line": 21,
+          "text": "BAR: { ar: 'أعمدة', en: 'Bar Chart', descAr: 'مقارنة فئات', descEn: 'Compare categories' },"
+        },
+        {
+          "line": 22,
+          "text": "HORIZONTAL_BAR: { ar: 'أعمدة أفقية', en: 'Horizontal Bar', descAr: 'مناسب للترتيب', descEn: 'Good for rankings' },"
+        },
+        {
+          "line": 23,
+          "text": "GROUPED_BAR: { ar: 'أعمدة مجمعة', en: 'Grouped Bar', descAr: 'مقارنة بين فترتين/عناصر', descEn: 'Compare two periods/entities' },"
+        },
+        {
+          "line": 24,
+          "text": "STACKED_BAR: { ar: 'أعمدة متراكمة', en: 'Stacked Bar', descAr: 'تركيبة الإجمالي', descEn: 'Composition of a total' },"
+        },
+        {
+          "line": 25,
+          "text": "LINE: { ar: 'خطي', en: 'Line Chart', descAr: 'اتجاه عبر الزمن', descEn: 'Trend over time' },"
+        },
+        {
+          "line": 26,
+          "text": "MULTI_LINE: { ar: 'خطوط متعددة', en: 'Multi-Line', descAr: 'مقارنة اتجاهات متعددة', descEn: 'Compare multiple trends' },"
+        },
+        {
+          "line": 27,
+          "text": "AREA: { ar: 'مساحي', en: 'Area Chart', descAr: 'اتجاه بحجم بصري', descEn: 'Trend with visual volume' },"
+        },
+        {
+          "line": 28,
+          "text": "STACKED_AREA: { ar: 'مساحي متراكم', en: 'Stacked Area', descAr: 'تركيبة عبر الزمن', descEn: 'Composition over time' },"
+        },
+        {
+          "line": 29,
+          "text": "PIE: { ar: 'دائري', en: 'Pie Chart', descAr: 'نسب من الإجمالي', descEn: 'Proportions of a total' },"
+        },
+        {
+          "line": 30,
+          "text": "DONUT: { ar: 'دائري مفرغ', en: 'Donut Chart', descAr: 'تركيبة بعدد قليل من الفئات', descEn: 'Composition of few categories' },"
+        },
+        {
+          "line": 31,
+          "text": "SCATTER: { ar: 'نقطي', en: 'Scatter Plot', descAr: 'علاقة بين متغيرين رقميين', descEn: 'Relationship between two numeric variables' },"
+        },
+        {
+          "line": 32,
+          "text": "HEATMAP: { ar: 'خريطة حرارية', en: 'Heatmap', descAr: 'مقارنة بعدين معًا', descEn: 'Compare two dimensions at once' },"
+        },
+        {
+          "line": 33,
+          "text": "RADAR: { ar: 'راداري', en: 'Radar Chart', descAr: 'توازن عدة مقاييس', descEn: 'Balance of several metrics' },"
+        },
+        {
+          "line": 34,
+          "text": "COMBO: { ar: 'مركب', en: 'Combo Chart', descAr: 'دمج أعمدة وخط', descEn: 'Bars combined with a line' },"
+        },
+        {
+          "line": 35,
+          "text": "TABLE: { ar: 'جدول', en: 'Table', descAr: 'أفضل لعدد كبير من العناصر', descEn: 'Best for many items' },"
+        },
+        {
+          "line": 36,
+          "text": "KPI: { ar: 'بطاقة مؤشر', en: 'KPI Card', descAr: 'قيمة مفردة بارزة', descEn: 'A single prominent value' },"
+        },
+        {
+          "line": 37,
+          "text": "RANKING_LIST: { ar: 'قائمة ترتيب', en: 'Ranking List', descAr: 'قائمة مرتبة بأشرطة تقدم', descEn: 'A ranked list with progress bars' },"
+        }
+      ]
+    },
+    {
+      "file": "src\\components\\assistant\\GlobalAssistant.tsx",
+      "count": 16,
+      "hits": [
+        {
+          "line": 114,
+          "text": "title={isAr ? 'المساعد الذكي لعصفور' : 'ASFOUR Assistant'}"
+        },
+        {
+          "line": 133,
+          "text": "<div className=\"text-sm font-bold truncate\">{isAr ? 'مساعد عصفور الذكي' : 'ASFOUR Assistant'}</div>"
+        },
+        {
+          "line": 135,
+          "text": "{isAr ? 'الشاشة: ' : 'Screen: '}{context.currentPage} · {isAr ? 'الوحدة: ' : 'Module: '}{context.currentModule}"
+        },
+        {
+          "line": 140,
+          "text": "<button type=\"button\" onClick={handleClear} title={isAr ? 'مسح المحادثة' : 'Clear'} className=\"p-1.5 hover:bg-white/15 rounded-lg cursor-poi"
+        },
+        {
+          "line": 143,
+          "text": "<button type=\"button\" onClick={() => setIsOpen(false)} title={isAr ? 'إغلاق' : 'Close'} className=\"p-1.5 hover:bg-white/15 rounded-lg cursor"
+        },
+        {
+          "line": 151,
+          "text": "<span>{isAr ? 'المستخدم: ' : 'User: '}{adminUser?.fullName || adminUser?.username}</span>"
+        },
+        {
+          "line": 152,
+          "text": "<span>{isAr ? 'اللغة: ' : 'Language: '}{isAr ? 'العربية' : 'English'}</span>"
+        },
+        {
+          "line": 153,
+          "text": "{AI_PROVIDER === 'mock' && <span className=\"text-amber-600 font-bold\">{isAr ? 'وضع تجريبي (Mock)' : 'Mock mode'}</span>}"
+        },
+        {
+          "line": 161,
+          "text": "? 'اسألني عن الإنتاج، أضف بيانات أساسية، صدّر تقريراً، أو انتقل بين الشاشات.'"
+        },
+        {
+          "line": 194,
+          "text": "<div><span className=\"font-bold text-emerald-700\">{isAr ? 'جديد: ' : 'New: '}</span>{pendingConfirmation.newItems.join(', ')}</div>"
+        },
+        {
+          "line": 197,
+          "text": "<div><span className=\"font-bold text-slate-500\">{isAr ? 'موجود مسبقاً: ' : 'Already exists: '}</span>{pendingConfirmation.existingItems.join"
+        },
+        {
+          "line": 200,
+          "text": "{isAr ? 'مستوى الخطورة: ' : 'Risk level: '}<span className=\"font-bold\">{pendingConfirmation.riskLevel}</span>"
+        },
+        {
+          "line": 209,
+          "text": "{isAr ? 'تأكيد' : 'Confirm'}"
+        },
+        {
+          "line": 217,
+          "text": "{isAr ? 'إلغاء' : 'Cancel'}"
+        },
+        {
+          "line": 226,
+          "text": "<span>{isAr ? 'جاري المعالجة...' : 'Processing...'}</span>"
+        },
+        {
+          "line": 239,
+          "text": "placeholder={isAr ? 'اكتب سؤالك أو طلبك هنا...' : 'Type your question or request...'}"
+        }
+      ]
+    },
+    {
+      "file": "src\\components\\users\\GranularPermissionEditor.tsx",
+      "count": 13,
+      "hits": [
+        {
+          "line": 185,
+          "text": "{ role: 'SUPER_ADMIN', labelAr: 'المشرف العام (كامل الصلاحيات)', labelEn: 'Super Admin', color: 'bg-indigo-600 text-white' },"
+        },
+        {
+          "line": 186,
+          "text": "{ role: 'PRODUCTION_SUPERVISOR', labelAr: 'مشرف إنتاج (اعتماد ومراجعة)', labelEn: 'Supervisor', color: 'bg-amber-600 text-white' },"
+        },
+        {
+          "line": 187,
+          "text": "{ role: 'PRODUCTION_OPERATOR', labelAr: 'مشغل خط إنتاج (إدخال وردية)', labelEn: 'Operator', color: 'bg-amber-500 text-slate-950 font-bold' }"
+        },
+        {
+          "line": 188,
+          "text": "{ role: 'QUALITY_CONTROL', labelAr: 'مراقب جودة وتدقيق', labelEn: 'Quality Control', color: 'bg-emerald-600 text-white' },"
+        },
+        {
+          "line": 189,
+          "text": "{ role: 'DATA_ENTRY', labelAr: 'مدخل بيانات واستيراد', labelEn: 'Data Entry', color: 'bg-sky-600 text-white' },"
+        },
+        {
+          "line": 190,
+          "text": "{ role: 'ACCOUNTING', labelAr: 'محاسبة وتكاليف', labelEn: 'Accounting', color: 'bg-purple-600 text-white' },"
+        },
+        {
+          "line": 191,
+          "text": "{ role: 'REPORT_VIEWER', labelAr: 'مشاهد تقارير فقط', labelEn: 'Report Viewer', color: 'bg-slate-700 text-white' },"
+        },
+        {
+          "line": 192,
+          "text": "{ role: 'MAINTENANCE', labelAr: 'مسؤول صيانة وأعطال', labelEn: 'Maintenance', color: 'bg-orange-600 text-white' },"
+        },
+        {
+          "line": 196,
+          "text": "{ scope: 'ALL', labelAr: 'كافة بيانات المصنع (بدون قيود)', labelEn: 'All Factory Data', descAr: 'رؤية كامل السجلات لجميع الورديات والأقسام',"
+        },
+        {
+          "line": 197,
+          "text": "{ scope: 'OWN_SHIFT', labelAr: 'سجلات الوردية الخاصة بالمستخدم', labelEn: 'Own Shift Only', descAr: 'حصر الرؤية على نفس الوردية التشغيلية', "
+        },
+        {
+          "line": 198,
+          "text": "{ scope: 'OWN_RECORDS', labelAr: 'السجلات التي أنشأها المستخدم فقط', labelEn: 'Own Records Only', descAr: 'رؤية السجلات المسجلة بواسطة المست"
+        },
+        {
+          "line": 199,
+          "text": "{ scope: 'SELECTED_STAGES', labelAr: 'حسب المراحل الإنتاجية المحددة أدناه', labelEn: 'Selected Stages Only', descAr: 'تقييد الوصول لمراحل مح"
+        },
+        {
+          "line": 361,
+          "text": "<span className=\"text-[10px] text-slate-500 font-mono block\">مرحلة {idx + 1}</span>"
+        }
+      ]
+    },
+    {
+      "file": "src\\context\\AuthContext.tsx",
+      "count": 13,
+      "hits": [
+        {
+          "line": 73,
+          "text": "fullName: 'مدير النظام الرئيسي (Super Admin)',"
+        },
+        {
+          "line": 98,
+          "text": "fullName: data.fullName || data.employeeName || data.name || (userRoleFromDb === 'SUPER_ADMIN' ? 'مدير النظام الرئيسي' : 'مشغل إنتاج'),"
+        },
+        {
+          "line": 130,
+          "text": "fullName: 'مدير النظام الرئيسي (Super Admin)',"
+        },
+        {
+          "line": 156,
+          "text": "setAuthError('حسابك غير مسجل في قاعدة البيانات أو تم تعطيله من قِبل إدارة النظام.');"
+        },
+        {
+          "line": 200,
+          "text": "'فشل التحقق من الصلاحيات: الحساب ليس مسجلاً كمستخدم نشط في قاعدة البيانات (adminUsers) أو تم تعطيله.'"
+        },
+        {
+          "line": 214,
+          "text": "`تسجيل دخول ناجح للمستخدم: ${verifiedProfile.fullName || verifiedProfile.email} [الدور: ${verifiedProfile.role}]`"
+        },
+        {
+          "line": 217,
+          "text": "let message = 'فشل تسجيل الدخول. يرجى التحقق من اسم المستخدم / البريد الإلكتروني وكلمة المرور.';"
+        },
+        {
+          "line": 219,
+          "text": "message = 'خطأ في مفتاح Firebase Web API. يرجى مراجعة إعدادات مشروع Firebase.';"
+        },
+        {
+          "line": 221,
+          "text": "message = 'بيانات الدخول غير صحيحة. يرجى التأكد من البريد الإلكتروني وكلمة المرور.';"
+        },
+        {
+          "line": 223,
+          "text": "message = 'تم تعطيل هذا الحساب في نظام Firebase Authentication.';"
+        },
+        {
+          "line": 225,
+          "text": "message = 'تم حظر الحساب مؤقتاً بسبب تكرار المحاولات الخاطئة. يرجى المحاولة بعد قليل.';"
+        },
+        {
+          "line": 227,
+          "text": "message = 'تعذر الاتصال بخدمة Firebase Authentication. يرجى التحقق من اتصال الشبكة.';"
+        },
+        {
+          "line": 245,
+          "text": "`تسجيل خروج المستخدم: ${adminUser?.fullName || currentUser.email}`"
+        }
+      ]
+    },
+    {
+      "file": "src\\components\\admin\\AdminProfileModal.tsx",
+      "count": 11,
+      "hits": [
+        {
+          "line": 43,
+          "text": "title={isProductionUser ? 'ملف مشغل خط الإنتاج' : 'ملف المشرف وصلاحيات النظام'}"
+        },
+        {
+          "line": 44,
+          "text": "subtitle={isProductionUser ? 'بيانات جلسة المشغل الميداني لخطوط الإنتاج' : 'بيانات المصادقة والتحقق من صلاحية المشرف العام (SUPER_ADMIN)'}"
+        },
+        {
+          "line": 56,
+          "text": "{adminUser?.fullName || (isProductionUser ? 'مشغل خط الإنتاج' : 'المشرف العام لمصنع عصفور')}"
+        },
+        {
+          "line": 69,
+          "text": "<span>جلسة نشطة ومصرحة</span>"
+        },
+        {
+          "line": 79,
+          "text": "<span className=\"text-slate-500\">اسم المستخدم / كود المشغل:</span>"
+        },
+        {
+          "line": 87,
+          "text": "<span>المحطة / المكبس المخصص:</span>"
+        },
+        {
+          "line": 94,
+          "text": "<span className=\"text-slate-500\">معرف الجلسة (UID):</span>"
+        },
+        {
+          "line": 102,
+          "text": "title=\"نسخ المعرف\""
+        },
+        {
+          "line": 111,
+          "text": "<span className=\"text-slate-500\">مشروع Firebase:</span>"
+        },
+        {
+          "line": 116,
+          "text": "<span className=\"text-slate-500\">توقيت بدء الجلسة:</span>"
+        },
+        {
+          "line": 130,
+          "text": "إغلاق"
+        }
+      ]
+    },
+    {
+      "file": "src\\components\\admin\\BatchAddMasterDataModal.tsx",
+      "count": 11,
+      "hits": [
+        {
+          "line": 219,
+          "text": "`استخدام بيان أساسي موجود بدلاً من إنشاء تكرار أثناء الاستيراد: ${row.existingMatch.name} (${row.token})`"
+        },
+        {
+          "line": 271,
+          "text": "`إضافة جماعية لبيان أساسي مفقود أثناء الاستيراد: ${payload.name} (${row.token})`"
+        },
+        {
+          "line": 327,
+          "text": "case 'employee': return 'موظف / عامل';"
+        },
+        {
+          "line": 328,
+          "text": "case 'press': return 'مكبس';"
+        },
+        {
+          "line": 329,
+          "text": "case 'product': return 'صنف';"
+        },
+        {
+          "line": 344,
+          "text": "NEW: { ar: 'جديد', en: 'New', cls: 'bg-emerald-100 text-emerald-800 border-emerald-300' },"
+        },
+        {
+          "line": 345,
+          "text": "ALREADY_EXISTS: { ar: 'موجود مسبقاً', en: 'Already Exists', cls: 'bg-amber-100 text-amber-900 border-amber-300' },"
+        },
+        {
+          "line": 346,
+          "text": "USE_EXISTING: { ar: 'سيُستخدم الموجود', en: 'Will use existing', cls: 'bg-sky-100 text-sky-800 border-sky-300' },"
+        },
+        {
+          "line": 347,
+          "text": "SAVING: { ar: 'جارٍ الحفظ...', en: 'Saving...', cls: 'bg-slate-100 text-slate-600 border-slate-300' },"
+        },
+        {
+          "line": 348,
+          "text": "CREATED: { ar: 'تم', en: 'Done', cls: 'bg-emerald-600 text-white border-emerald-700' },"
+        },
+        {
+          "line": 349,
+          "text": "FAILED: { ar: 'فشل', en: 'Failed', cls: 'bg-red-100 text-red-800 border-red-300' },"
+        }
+      ]
+    },
+    {
+      "file": "src\\components\\common\\SearchableCombobox.tsx",
+      "count": 11,
+      "hits": [
+        {
+          "line": 40,
+          "text": "placeholder = 'ابحث بالكود أو بالاسم...',"
+        },
+        {
+          "line": 244,
+          "text": "title=\"إلغاء الاختيار\""
+        },
+        {
+          "line": 267,
+          "text": "البحث بالكود أو الاسم ({filteredOptions.length} نتيجة)"
+        },
+        {
+          "line": 269,
+          "text": "<span className=\"text-slate-400 text-[10px]\">استخدم الأسهم ↵ للاختيار</span>"
+        },
+        {
+          "line": 274,
+          "text": "لا توجد نتائج مطابقة لـ <span className=\"font-semibold text-slate-800\">\"{searchQuery}\"</span>"
+        },
+        {
+          "line": 364,
+          "text": "placeholder = 'ابحث وأضف بالكود أو بالاسم...',"
+        },
+        {
+          "line": 424,
+          "text": "setDuplicateMessage('هذا البيان تم اختياره بالفعل. / This item has already been selected.');"
+        },
+        {
+          "line": 529,
+          "text": "title={`حذف ${opt.name}`}"
+        },
+        {
+          "line": 596,
+          "text": "<span>انقر أو اضغط Enter للإضافة ({filteredOptions.length} متاح)</span>"
+        },
+        {
+          "line": 597,
+          "text": "<span className=\"text-red-600 font-semibold\">{selectedIds.length} تم اختيارهم</span>"
+        },
+        {
+          "line": 602,
+          "text": "لا توجد نتائج مطابقة لـ <span className=\"font-semibold text-slate-800\">\"{searchQuery}\"</span>"
+        }
+      ]
+    },
+    {
+      "file": "src\\components\\common\\UpdateNotificationBanner.tsx",
+      "count": 11,
+      "hits": [
+        {
+          "line": 35,
+          "text": "<span>تحديث جديد متوفر للنظام</span>"
+        },
+        {
+          "line": 43,
+          "text": "title=\"إغلاق مؤقتاً\""
+        },
+        {
+          "line": 50,
+          "text": "{remoteVersion.releaseNotes || 'تم نشر تحسينات جديدة على النظام وقواعد البيانات ومراحل الإنتاج.'}"
+        },
+        {
+          "line": 59,
+          "text": "<span>تحديث الآن (Reload)</span>"
+        },
+        {
+          "line": 67,
+          "text": "<span>التفاصيل</span>"
+        },
+        {
+          "line": 74,
+          "text": "لاحقاً"
+        },
+        {
+          "line": 90,
+          "text": "<h3 className=\"font-bold text-lg\">تنبيه: توجد بيانات غير محفوظة!</h3>"
+        },
+        {
+          "line": 91,
+          "text": "<p className=\"text-xs text-slate-400\">يرجى التأكد قبل إعادة تحميل الصفحة</p>"
+        },
+        {
+          "line": 96,
+          "text": "لديك مسودات أو حقول إدخال لم يتم حفظها بعد في قاعدة البيانات. تحديث الصفحة الآن قد يؤدي لفقدان المدخلات غير المحفوظة في النموذج الحالي."
+        },
+        {
+          "line": 104,
+          "text": "إلغاء واستكمال الحفظ"
+        },
+        {
+          "line": 114,
+          "text": "<span>تحديث وتجاهل المسودة</span>"
+        }
+      ]
+    },
+    {
+      "file": "src\\components\\admin\\RawMaterialsView.tsx",
+      "count": 8,
+      "hits": [
+        {
+          "line": 26,
+          "text": "{ value: 'طن', labelAr: 'طن', labelEn: 'Ton' },"
+        },
+        {
+          "line": 27,
+          "text": "{ value: 'كجم', labelAr: 'كجم', labelEn: 'Kg' },"
+        },
+        {
+          "line": 28,
+          "text": "{ value: 'م3', labelAr: 'متر مكعب', labelEn: 'm³' },"
+        },
+        {
+          "line": 29,
+          "text": "{ value: 'لتر', labelAr: 'لتر', labelEn: 'Litre' },"
+        },
+        {
+          "line": 30,
+          "text": "{ value: 'شكارة', labelAr: 'شكارة', labelEn: 'Bag' },"
+        },
+        {
+          "line": 46,
+          "text": "const [unit, setUnit] = useState('طن');"
+        },
+        {
+          "line": 74,
+          "text": "setUnit('طن');"
+        },
+        {
+          "line": 87,
+          "text": "setUnit(mat.unit || 'طن');"
+        }
+      ]
+    },
+    {
+      "file": "src\\components\\layout\\MobileNav.tsx",
+      "count": 8,
+      "hits": [
+        {
+          "line": 22,
+          "text": "{ id: 'dashboard' as NavigationPage, label: 'الرئيسية', icon: LayoutDashboard },"
+        },
+        {
+          "line": 23,
+          "text": "{ id: 'production-entry' as NavigationPage, label: 'إدخال', icon: PlusCircle },"
+        },
+        {
+          "line": 24,
+          "text": "{ id: 'production-records' as NavigationPage, label: 'السجلات', icon: FileText },"
+        },
+        {
+          "line": 25,
+          "text": "{ id: 'master-data' as NavigationPage, label: 'البيانات', icon: Database },"
+        },
+        {
+          "line": 26,
+          "text": "{ id: 'reports' as NavigationPage, label: 'التقارير', icon: BarChart3 },"
+        },
+        {
+          "line": 27,
+          "text": "{ id: 'settings' as NavigationPage, label: 'الإعدادات', icon: Settings },"
+        },
+        {
+          "line": 31,
+          "text": "{ id: 'production-entry' as NavigationPage, label: 'تسجيل الإنتاج', icon: PlusCircle },"
+        },
+        {
+          "line": 32,
+          "text": "{ id: 'production-records' as NavigationPage, label: 'سجلات اليوم', icon: FileText },"
+        }
+      ]
+    },
+    {
+      "file": "src\\components\\production\\SortingEntryForm.tsx",
+      "count": 7,
+      "hits": [
+        {
+          "line": 72,
+          "text": "const [shiverDefectCount, setShiverDefectCount] = useState<number>(80);       // شطف"
+        },
+        {
+          "line": 73,
+          "text": "const [crackDefectCount, setCrackDefectCount] = useState<number>(90);         // شروخ"
+        },
+        {
+          "line": 74,
+          "text": "const [ironDefectCount, setIronDefectCount] = useState<number>(30);          // بقع حديد"
+        },
+        {
+          "line": 75,
+          "text": "const [contaminationDefectCount, setContaminationDefectCount] = useState<number>(20); // شوائب"
+        },
+        {
+          "line": 76,
+          "text": "const [kilnDefectCount, setKilnDefectCount] = useState<number>(20);          // حريق فرن"
+        },
+        {
+          "line": 77,
+          "text": "const [returnDefectCount, setReturnDefectCount] = useState<number>(10);      // مرتجع"
+        },
+        {
+          "line": 78,
+          "text": "const [returnType, setReturnType] = useState('كسر نقل / تداول');"
+        }
+      ]
+    },
+    {
+      "file": "src\\components\\common\\ConnectionStatusBadge.tsx",
+      "count": 6,
+      "hits": [
+        {
+          "line": 21,
+          "text": "title={message || 'متصل بخادم Firebase Firestore السحابي'}"
+        },
+        {
+          "line": 26,
+          "text": "<span className=\"hidden sm:inline\">سحابي مباشر</span>"
+        },
+        {
+          "line": 37,
+          "text": "title={message || 'جارٍ مزامنة البيانات مع Firestore...'}"
+        },
+        {
+          "line": 41,
+          "text": "<span className=\"hidden sm:inline\">مزامنة...</span>"
+        },
+        {
+          "line": 51,
+          "text": "title={message || 'غير متصل بالسحابة - وضع العمل دون اتصال'}"
+        },
+        {
+          "line": 55,
+          "text": "<span className=\"hidden sm:inline\">غير متصل</span>"
+        }
+      ]
+    },
+    {
+      "file": "src\\components\\common\\ErrorBoundary.tsx",
+      "count": 6,
+      "hits": [
+        {
+          "line": 61,
+          "text": "<h1 className=\"text-lg font-bold text-white\">خطأ أثناء معالجة واجهة التطبيق (Runtime Error)</h1>"
+        },
+        {
+          "line": 62,
+          "text": "<p className=\"text-xs text-slate-400\">تم التقاط الاستثناء بواسطة نظام الحماية لتفادي الشاشة البيضاء</p>"
+        },
+        {
+          "line": 68,
+          "text": "نوع الخطأ: {this.state.error?.name || 'Error'}"
+        },
+        {
+          "line": 71,
+          "text": "الرسالة: {this.state.error?.message || 'Unknown runtime error occurred'}"
+        },
+        {
+          "line": 91,
+          "text": "<span>إعادة تحميل الصفحة</span>"
+        },
+        {
+          "line": 99,
+          "text": "<span>تسجيل الخروج</span>"
+        }
+      ]
+    },
+    {
+      "file": "src\\components\\ai\\AIAssistantView.tsx",
+      "count": 5,
+      "hits": [
+        {
+          "line": 40,
+          "text": "'ما هو أكثر سبب أعطال أثر على الإنتاج هذا الشهر؟',"
+        },
+        {
+          "line": 41,
+          "text": "'قارن استهلاك الغاز ومعدلات الحرق في الأفران',"
+        },
+        {
+          "line": 42,
+          "text": "'ما هي الوردية الأعلى إنتاجية وكفاءة تشغيلية؟',"
+        },
+        {
+          "line": 43,
+          "text": "'ما هي نسبة الهالك وأكثر العيوب في مرحلة الفرز؟',"
+        },
+        {
+          "line": 44,
+          "text": "'أعلى العملاء استلاماً للطلبيات والشحنات',"
+        }
+      ]
+    },
+    {
+      "file": "src\\components\\common\\AsfourLogo.tsx",
+      "count": 4,
+      "hits": [
+        {
+          "line": 178,
+          "text": "شركة عصفور للتعدين والحراريات"
+        },
+        {
+          "line": 211,
+          "text": "عصفور للحراريات"
+        },
+        {
+          "line": 268,
+          "text": "شركة عصفور للتعدين والحراريات &bull; قطاع إدارة وتخطيط الإنتاج"
+        },
+        {
+          "line": 330,
+          "text": "شركة عصفور للتعدين والحراريات"
+        }
+      ]
+    },
+    {
+      "file": "src\\components\\common\\DeveloperBadge.tsx",
+      "count": 3,
+      "hits": [
+        {
+          "line": 104,
+          "text": "title=\"Developer Info / معلومات المطور\""
+        },
+        {
+          "line": 142,
+          "text": "تطوير وهندسة منظومة إدارة مصنع عصفور للتعدين والحراريات (ERP)"
+        },
+        {
+          "line": 171,
+          "text": "<span className=\"text-[10px] text-slate-400\">نظام إدارة الإنتاج والحراريات</span>"
+        }
+      ]
+    },
+    {
+      "file": "src\\components\\common\\LanguageSwitcher.tsx",
+      "count": 2,
+      "hits": [
+        {
+          "line": 26,
+          "text": "title=\"تغيير اللغة / Switch Language\""
+        },
+        {
+          "line": 52,
+          "text": "title=\"تغيير لغة العرض / Switch Display Language\""
+        }
+      ]
+    },
+    {
+      "file": "src\\components\\layout\\Header.tsx",
+      "count": 2,
+      "hits": [
+        {
+          "line": 141,
+          "text": "title=\"القائمة / Menu\""
+        },
+        {
+          "line": 214,
+          "text": "{adminUser?.fullName || adminUser?.username || 'مشغل خط الإنتاج'}"
+        }
+      ]
+    },
+    {
+      "file": "src\\components\\admin\\LanguageAuditView.tsx",
+      "count": 1,
+      "hits": [
+        {
+          "line": 55,
+          "text": "const ARABIC_RE = /[؀-ۿ]/;"
+        }
+      ]
+    },
+    {
+      "file": "src\\components\\admin\\LanguageCoverageModal.tsx",
+      "count": 1,
+      "hits": [
+        {
+          "line": 187,
+          "text": "<th className=\"py-2.5 px-4 text-right\">Arabic (العربية)</th>"
+        }
+      ]
+    },
+    {
+      "file": "src\\components\\dashboard\\AIReportDesignerPanel.tsx",
+      "count": 1,
+      "hits": [
+        {
+          "line": 33,
+          "text": "ar: ['اعمل لي لوحة تعرض أفضل المكابس من حيث الإنتاج', 'قارن الورديات من حيث الهالك', 'اتجاه الإنتاج خلال الوقت'],"
+        }
+      ]
+    },
+    {
+      "file": "src\\components\\dashboard\\WidgetRenderer.tsx",
+      "count": 1,
+      "hits": [
+        {
+          "line": 203,
+          "text": "function entityLabelAr(e: string) { return { EMPLOYEE: 'الموظفين', SHIFT: 'الورديات', EQUIPMENT: 'المعدات', PRODUCT: 'المنتجات', CUSTOMER: '"
+        }
+      ]
+    },
+    {
+      "file": "src\\components\\layout\\Sidebar.tsx",
+      "count": 1,
+      "hits": [
+        {
+          "line": 294,
+          "text": "{adminUser?.fullName || adminUser?.username || 'مشغل خط الإنتاج'}"
+        }
+      ]
+    }
+  ]
+}

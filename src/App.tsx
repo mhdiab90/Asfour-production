@@ -21,13 +21,6 @@ import { RawMaterialsView } from './components/admin/RawMaterialsView';
 import { BackupRestoreView } from './components/admin/BackupRestoreView';
 import { SystemHealthView } from './components/admin/SystemHealthView';
 import { AIAssistantView } from './components/ai/AIAssistantView';
-import { SystemVersionManagementView } from './components/admin/SystemVersionManagementView';
-import { AIProviderManagementView } from './components/admin/AIProviderManagementView';
-import { GlobalAssistant } from './components/assistant/GlobalAssistant';
-import { AssistantSelectionProvider } from './context/AssistantSelectionContext';
-import { setRuntimeActiveProvider } from './assistant/providerRuntime';
-import { AI_PROVIDER, AIProviderId } from './assistant/config';
-import { subscribeActiveProviderConfig } from './services/aiProviderConfigService';
 import { MasterDataView } from './components/masterData/MasterDataView';
 import { UserManagementView } from './components/users/UserManagementView';
 import { BulkEntryView } from './components/bulk/BulkEntryView';
@@ -36,12 +29,22 @@ import { SettingsView } from './components/settings/SettingsView';
 import { ErrorBoundary } from './components/common/ErrorBoundary';
 import { UpdateProvider, useUpdate } from './context/UpdateContext';
 import { BrandingProvider } from './context/BrandingContext';
+import { AssistantSelectionProvider } from './context/AssistantSelectionContext';
+import { setRuntimeActiveProvider } from './assistant/providerRuntime';
+import { AI_PROVIDER, AIProviderId } from './assistant/config';
+import { subscribeActiveProviderConfig } from './services/aiProviderConfigService';
+import { AIProviderManagementView } from './components/admin/AIProviderManagementView';
+import { SuggestedAnalyticsView } from './components/analytics/SuggestedAnalyticsView';
 import { UpdateNotificationBanner } from './components/common/UpdateNotificationBanner';
 import { VersionModal } from './components/common/VersionModal';
 import { CURRENT_APP_VERSION, DATABASE_SCHEMA_VERSION } from './config/appVersion';
 import { ShieldCheck, CheckCircle2, Cpu, Lock, ArrowRight, ArrowLeft } from 'lucide-react';
 import { AsfourLogo } from './components/common/AsfourLogo';
 import { BrandingView } from './components/admin/BrandingView';
+import { GlobalAssistant } from './components/assistant/GlobalAssistant';
+import { TranslationManagerView } from './components/admin/TranslationManagerView';
+import { LanguageAuditView } from './components/admin/LanguageAuditView';
+import { SystemVersionManagementView } from './components/admin/SystemVersionManagementView';
 
 const MainAppContent: React.FC = () => {
   const { isAuthenticated, isLoading, adminUser, isSuperAdmin, isProductionUser, canAccessPage } = useAuth();
@@ -54,32 +57,6 @@ const MainAppContent: React.FC = () => {
   const [isProfileModalOpen, setIsProfileModalOpen] = useState<boolean>(false);
   const [connectionStatus, setConnectionStatus] = useState<'online' | 'offline' | 'syncing'>('online');
   const [showLoginSplash, setShowLoginSplash] = useState<boolean>(true);
-
-  // Central AI Provider Manager - load the admin-selected active provider from
-  // Firestore once signed in and keep it live-synced (one shared listener), so
-  // the Global Assistant never uses a provider that is not really active.
-  // Cleared on sign-out so an unauthenticated session never inherits a stale choice.
-  const [activeProviderId, setActiveProviderId] = useState<AIProviderId>(AI_PROVIDER);
-  useEffect(() => {
-    if (!isAuthenticated) {
-      setRuntimeActiveProvider(null);
-      setActiveProviderId(AI_PROVIDER);
-      return;
-    }
-    const unsubscribe = subscribeActiveProviderConfig(
-      (config) => {
-        const resolved = config?.activeProvider ?? null;
-        setRuntimeActiveProvider(resolved);
-        setActiveProviderId(resolved ?? AI_PROVIDER);
-      },
-      () => {
-        setRuntimeActiveProvider(null);
-        setActiveProviderId(AI_PROVIDER);
-      }
-    );
-    return () => unsubscribe();
-  }, [isAuthenticated]);
-
 
   // Synchronize route with browser URL / hash if /production requested
   useEffect(() => {
@@ -109,6 +86,34 @@ const MainAppContent: React.FC = () => {
       }
     }
   }, [isAuthenticated, isProductionUser]);
+
+  // Central AI Provider Manager - load the admin-selected active provider
+  // from Firestore once signed in, and keep it live-synced across tabs so
+  // the Global Assistant never shows/uses a provider that isn't really
+  // active (§24). Unsubscribes on sign-out; runtime override clears too so
+  // an unauthenticated session never inherits a stale cloud-provider choice.
+  // Mirrored into React state (not just the module-level runtime cache) so
+  // components actually re-render when the admin changes the provider.
+  const [activeProviderId, setActiveProviderId] = useState<AIProviderId>(AI_PROVIDER);
+  useEffect(() => {
+    if (!isAuthenticated) {
+      setRuntimeActiveProvider(null);
+      setActiveProviderId(AI_PROVIDER);
+      return;
+    }
+    const unsubscribe = subscribeActiveProviderConfig(
+      (config) => {
+        const resolved = config?.activeProvider ?? null;
+        setRuntimeActiveProvider(resolved);
+        setActiveProviderId(resolved ?? AI_PROVIDER);
+      },
+      () => {
+        setRuntimeActiveProvider(null);
+        setActiveProviderId(AI_PROVIDER);
+      }
+    );
+    return () => unsubscribe();
+  }, [isAuthenticated]);
 
   // Monitor network connectivity
   useEffect(() => {
@@ -326,7 +331,7 @@ const MainAppContent: React.FC = () => {
                 <SystemHealthView initialTab="health" />
               )}
 
-              {/* System Version Management, Change Registry & Rollback */}
+              {/* System Version Management & Application Rollback */}
               {currentPage === 'versions' && (
                 <SystemVersionManagementView />
               )}
@@ -355,6 +360,10 @@ const MainAppContent: React.FC = () => {
                 <ReportsView onNavigate={handleNavigate} />
               )}
 
+              {currentPage === 'data-quality' && (
+                <SuggestedAnalyticsView onNavigate={handleNavigate} />
+              )}
+
               {currentPage === 'branding' && (
                 <BrandingView />
               )}
@@ -362,12 +371,20 @@ const MainAppContent: React.FC = () => {
               {currentPage === 'settings' && (
                 <SettingsView onNavigate={handleNavigate} />
               )}
+
+              {currentPage === 'translation-manager' && (
+                <TranslationManagerView />
+              )}
+
+              {currentPage === 'language-audit' && (
+                <LanguageAuditView onNavigate={handleNavigate} />
+              )}
             </>
           )}
         </main>
 
         {/* Geometric Balance Persistent Footer */}
-        <footer className="h-10 bg-slate-900 border-t border-slate-800 flex items-center justify-between px-6 text-[10px] font-bold text-slate-400 uppercase tracking-widest mt-auto">
+        <footer className="no-print h-10 bg-slate-900 border-t border-slate-800 flex items-center justify-between px-6 text-[10px] font-bold text-slate-400 uppercase tracking-widest mt-auto">
           <div className="flex items-center gap-3">
             <button
               onClick={() => setShowVersionModal(true)}

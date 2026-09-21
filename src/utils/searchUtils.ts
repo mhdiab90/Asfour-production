@@ -161,6 +161,39 @@ export function enrichWithNormalizedFields(
       }
       break;
 
+    case 'mills':
+      if (raw.code || raw.millCode) {
+        result.millCodeNormalized = normalizeCode(raw.code || raw.millCode);
+      }
+      if (raw.name || raw.millName) {
+        result.nameNormalized = normalizeName(raw.name || raw.millName);
+      }
+      break;
+
+    case 'tubeBallMills':
+      if (raw.code) {
+        result.millCodeNormalized = normalizeCode(raw.code);
+      }
+      break;
+
+    case 'bunkers':
+      if (raw.code) {
+        result.bunkerCodeNormalized = normalizeCode(raw.code);
+      }
+      break;
+
+    case 'rotaryKilns':
+      if (raw.code) {
+        result.kilnCodeNormalized = normalizeCode(raw.code);
+      }
+      break;
+
+    case 'batches':
+      if (raw.batchNumber) {
+        result.batchNumberNormalized = normalizeCode(raw.batchNumber);
+      }
+      break;
+
     case 'departments':
       if (raw.code || raw.departmentCode) {
         result.departmentCodeNormalized = normalizeCode(raw.code || raw.departmentCode);

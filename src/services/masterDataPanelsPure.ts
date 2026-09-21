@@ -63,6 +63,13 @@ export const PANEL_CATEGORY_IDS = [
   'financialAccounts',
   // The imported hierarchy IS the cost-centre master data now.
   'hierarchicalCostCenters',
+  // One GROUP for every equipment category (Phase 1 Step 1D) - see the
+  // registry's `subCategoryIds`. The machine types are not primary categories.
+  'equipment',
+  // Job References and Batches (Phase 1 Step 1E), grouped the same way.
+  'jobsAndBatches',
+  // The configurable Operation Master (Phase 1 Step 1C), beside the legacy stages.
+  'operations',
 ] as const;
 
 export type PanelCategoryId = (typeof PANEL_CATEGORY_IDS)[number];

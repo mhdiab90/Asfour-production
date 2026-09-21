@@ -260,6 +260,76 @@ export const PRODUCTION_STAGE_CONFIGS: Record<ProductionStageType, ProductionSta
       { key: 'returnDefectCount', labelAr: 'مرتجع', labelEn: 'Returns', columnAliases: ['مرتجع', 'returnDefectCount'], type: 'number', required: false },
     ],
   },
+
+  /*
+   * Phase 1 Step 8C-5 - the remaining production areas. Each reuses the fields
+   * of the closest existing stage (types/index.ts documents which) and carries
+   * the source document columns the Odoo workbook gives (MO reference, Source).
+   */
+  thermal_concrete: {
+    stageId: 'thermal_concrete',
+    masterDataFields: [
+      { field: 'productId', entityType: 'product', labelAr: 'المنتج', labelEn: 'Product', required: true, multi: false },
+      { field: 'customerId', entityType: 'customer', labelAr: 'العميل', labelEn: 'Customer', required: false, multi: false },
+      { field: 'materials', entityType: 'material', labelAr: 'الخامات المستخدمة', labelEn: 'Materials Used', required: false, multi: true },
+      { field: 'workers', entityType: 'employee', labelAr: 'العمالة', labelEn: 'Workers', required: false, multi: true },
+    ],
+    hasShift: false,
+    hasFurnaceCarBrickCount: false,
+    warningContext: { productionField: 'productionQuantity', hasShiftHours: false },
+    importFields: [
+      DATE_FIELD,
+      { key: 'productCode', labelAr: 'كود المنتج', labelEn: 'Product Code', columnAliases: ['كود المنتج', 'productCode'], type: 'masterData', entityType: 'product', required: true },
+      { key: 'customerName', labelAr: 'العميل', labelEn: 'Customer', columnAliases: ['العميل', 'customerName'], type: 'masterData', entityType: 'customer', required: false },
+      { key: 'batchNumber', labelAr: 'رقم الدفعة', labelEn: 'Batch Number', columnAliases: ['رقم الدفعة', 'batchNumber'], type: 'text', required: false },
+      { key: 'manufacturingOrderNumber', labelAr: 'رقم أمر التصنيع', labelEn: 'Manufacturing Order #', columnAliases: ['رقم أمر التصنيع', 'manufacturingOrderNumber'], type: 'text', required: false },
+      { key: 'productionQuantity', labelAr: 'كمية الإنتاج', labelEn: 'Production Quantity', columnAliases: ['كمية الإنتاج', 'productionQuantity'], type: 'number', required: true },
+      { key: 'operatingHours', labelAr: 'ساعات التشغيل', labelEn: 'Operating Hours', columnAliases: ['ساعات التشغيل', 'operatingHours'], type: 'number', required: false },
+    ],
+  },
+
+  tunnel_kiln: {
+    stageId: 'tunnel_kiln',
+    masterDataFields: [
+      { field: 'productId', entityType: 'product', labelAr: 'المنتج المحروق', labelEn: 'Fired Product', required: true, multi: false },
+      { field: 'furnaceId', entityType: 'furnace', labelAr: 'الفرن', labelEn: 'Kiln', required: false, multi: false },
+      { field: 'materials', entityType: 'material', labelAr: 'الطوب الأخضر المحروق', labelEn: 'Green Bricks Fired', required: false, multi: true },
+      { field: 'workers', entityType: 'employee', labelAr: 'العمالة', labelEn: 'Workers', required: false, multi: true },
+    ],
+    hasShift: false,
+    // The furnace-car + brick-count pair stays a pressing-only concept; the kiln records car numbers only.
+    hasFurnaceCarBrickCount: false,
+    warningContext: { productionField: 'productionQuantity', wasteField: 'wasteQuantity', hasShiftHours: false },
+    importFields: [
+      DATE_FIELD,
+      { key: 'productCode', labelAr: 'كود المنتج', labelEn: 'Product Code', columnAliases: ['كود المنتج', 'productCode'], type: 'masterData', entityType: 'product', required: true },
+      { key: 'batchNumber', labelAr: 'رقم الدفعة', labelEn: 'Batch Number', columnAliases: ['رقم الدفعة', 'batchNumber'], type: 'text', required: false },
+      { key: 'manufacturingOrderNumber', labelAr: 'رقم أمر التصنيع', labelEn: 'Manufacturing Order #', columnAliases: ['رقم أمر التصنيع', 'manufacturingOrderNumber'], type: 'text', required: false },
+      { key: 'productionQuantity', labelAr: 'كمية الإنتاج', labelEn: 'Production Quantity', columnAliases: ['كمية الإنتاج', 'productionQuantity'], type: 'number', required: true },
+      { key: 'wasteQuantity', labelAr: 'الهالك', labelEn: 'Waste', columnAliases: ['الهالك', 'wasteQuantity'], type: 'number', required: false },
+      { key: 'sourceDocumentReference', labelAr: 'المصدر', labelEn: 'Source', columnAliases: ['المصدر', 'sourceDocumentReference'], type: 'text', required: false },
+    ],
+  },
+
+  handmade_brick: {
+    stageId: 'handmade_brick',
+    masterDataFields: [
+      { field: 'productId', entityType: 'product', labelAr: 'المنتج', labelEn: 'Product', required: true, multi: false },
+      { field: 'materials', entityType: 'material', labelAr: 'الخامات المستخدمة', labelEn: 'Materials Used', required: false, multi: true },
+      { field: 'workers', entityType: 'employee', labelAr: 'العمالة', labelEn: 'Workers', required: false, multi: true },
+    ],
+    hasShift: false,
+    hasFurnaceCarBrickCount: false,
+    warningContext: { productionField: 'productionQuantity', wasteField: 'wasteQuantity', hasShiftHours: false },
+    importFields: [
+      DATE_FIELD,
+      { key: 'productCode', labelAr: 'كود المنتج', labelEn: 'Product Code', columnAliases: ['كود المنتج', 'productCode'], type: 'masterData', entityType: 'product', required: true },
+      { key: 'batchNumber', labelAr: 'رقم الدفعة', labelEn: 'Batch Number', columnAliases: ['رقم الدفعة', 'batchNumber'], type: 'text', required: false },
+      { key: 'productionQuantity', labelAr: 'عدد القطع', labelEn: 'Pieces Produced', columnAliases: ['عدد القطع', 'productionQuantity'], type: 'number', required: true },
+      { key: 'pieceWeightKg', labelAr: 'وزن القطعة كجم', labelEn: 'Piece Weight (kg)', columnAliases: ['وزن القطعة كجم', 'pieceWeightKg'], type: 'number', required: false },
+      { key: 'wasteQuantity', labelAr: 'الهالك', labelEn: 'Waste', columnAliases: ['الهالك', 'wasteQuantity'], type: 'number', required: false },
+    ],
+  },
 };
 
 export function getStageConfig(stage: ProductionStageType): ProductionStageConfig {

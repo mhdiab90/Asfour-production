@@ -191,13 +191,32 @@ test('§4 - Final Status is derived purely from actual recorded counts, never in
   assert.equal(deriveImportFinalStatus({ importedCount: 200, failedCount: 0, cancelledCount: 50 }), 'PARTIALLY_COMPLETED', 'a mid-execution cancellation is partial, never silently COMPLETED');
 });
 
-// §3 - Same-day multiple imports: ImportId (timestamp+random suffix) must be unique even for two imports started in the same millisecond-adjacent window.
-test('§3/TEST 4 - ImportId uniqueness holds across same-day (even near-simultaneous) imports', () => {
-  const ids = new Set<string>();
-  for (let i = 0; i < 500; i++) {
-    ids.add(`HIST-IMP-CM-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`);
-  }
-  assert.equal(ids.size, 500, 'every generated ImportId must be unique - the random suffix protects against Date.now() collisions within the same millisecond');
+/*
+ * §3 - Same-day multiple imports: an ImportId is `HIST-IMP-CM-<epoch ms>-<4
+ * base36 chars>` (chineseMillsHistoricalImportService.ts). Two imports started
+ * in the same millisecond are told apart by the suffix alone.
+ *
+ * This test used to draw 500 REAL random suffixes and assert they were all
+ * distinct. With 36^4 possibilities that collides by birthday chance roughly
+ * once every fourteen runs, which made the suite flaky without saying anything
+ * about the production code. It now checks the two things that are actually
+ * contracts - the id's shape, and that the id is unique whenever either the
+ * timestamp or the suffix differs - with no randomness at all.
+ */
+test('§3/TEST 4 - the ImportId shape makes same-millisecond imports distinguishable', () => {
+  const importId = (ms: number, suffix: string) => `HIST-IMP-CM-${ms}-${suffix}`;
+  const shape = /^HIST-IMP-CM-\d{13}-[0-9a-z]{4}$/;
+  assert.ok(shape.test(importId(1767225600000, 'a1b2')), 'prefix + epoch milliseconds + a 4-character base36 suffix');
+  assert.ok(shape.test(`HIST-IMP-CM-${Date.now()}-${Math.random().toString(36).slice(2, 6).padEnd(4, '0')}`), 'the real generator matches that shape');
+
+  // Same millisecond, different suffix -> different id. Different millisecond -> different id.
+  const sameMs = new Set(['a1b2', 'a1b3', 'zzzz', '0000'].map((s) => importId(1767225600000, s)));
+  assert.equal(sameMs.size, 4, 'the suffix alone separates imports started in the same millisecond');
+  const acrossMs = new Set([1767225600000, 1767225600001, 1767225600002].map((ms) => importId(ms, 'a1b2')));
+  assert.equal(acrossMs.size, 3, 'the timestamp alone separates imports started in different milliseconds');
+
+  // The suffix space is what that separation rests on - stated, not assumed.
+  assert.equal(36 ** 4, 1679616, 'a 4-character base36 suffix has 1,679,616 values');
 });
 
 // §44 - No broad Firestore scan: the record-level detail query is a single-field equality filter (importBatchId), never an unfiltered/unbounded collection read.

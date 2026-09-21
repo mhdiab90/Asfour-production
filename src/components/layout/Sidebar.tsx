@@ -22,7 +22,10 @@ import {
   Info,
   Layers,
   Award,
-  Image as ImageIcon
+  Image as ImageIcon,
+  Languages,
+  SearchCheck,
+  Lightbulb
 } from 'lucide-react';
 import { NavigationPage } from '../../types';
 import { useAuth } from '../../context/AuthContext';
@@ -69,6 +72,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
     { id: 'historical-import' as NavigationPage, label: t('nav_historical_import'), icon: FileSpreadsheet, badge: 'Excel' },
     { id: 'user-management' as NavigationPage, label: t('nav_user_management'), icon: Users },
     { id: 'reports' as NavigationPage, label: t('nav_reports'), icon: BarChart3 },
+    { id: 'data-quality' as NavigationPage, label: language === 'ar' ? 'التحليلات والمؤشرات المقترحة' : 'Suggested Analytics', icon: Lightbulb, badge: 'AI' },
   ];
 
   // Group 3: System & Security
@@ -79,6 +83,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
     { id: 'system-health' as NavigationPage, label: t('nav_system_health'), icon: Activity },
     { id: 'versions' as NavigationPage, label: t('nav_versions'), icon: GitBranch, badge: `v${CURRENT_APP_VERSION.version}` },
     { id: 'ai-provider-management' as NavigationPage, label: language === 'ar' ? 'إدارة مزود الذكاء الاصطناعي' : 'AI Provider Management', icon: Sparkles },
+    { id: 'translation-manager' as NavigationPage, label: language === 'ar' ? 'مدير الترجمة' : 'Translation Manager', icon: Languages },
+    { id: 'language-audit' as NavigationPage, label: language === 'ar' ? 'التدقيق اللغوي' : 'Language Audit', icon: SearchCheck },
     { id: 'settings' as NavigationPage, label: t('nav_settings'), icon: Settings },
   ];
 
@@ -109,7 +115,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
       {/* Modern ASFOUR ERP Sidebar */}
       <aside
-        className={`fixed top-0 bottom-0 z-50 w-64 bg-slate-900 text-slate-200 flex flex-col h-full shadow-2xl transition-transform duration-300 ease-in-out select-none ${positionClasses}`}
+        className={`no-print fixed top-0 bottom-0 z-50 w-64 bg-slate-900 text-slate-200 flex flex-col h-full shadow-2xl transition-transform duration-300 ease-in-out select-none ${positionClasses}`}
         dir={isRtl ? 'rtl' : 'ltr'}
       >
         {/* Brand Header */}

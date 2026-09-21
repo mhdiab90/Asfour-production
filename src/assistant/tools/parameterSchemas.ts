@@ -281,7 +281,7 @@ export const OPEN_REPORT_VIEW_SCHEMA = {
     },
     stageType: {
       type: 'string',
-      description: 'Optional single production stage id to filter to, e.g. "pressing", "rotary_furnace", "chinese_mills", "tube_ball_mills", "mortar_concrete", "mixing", "lightweight_foam", "sorting" - map colloquial names ("المكابس", "أفران دوارة") to these exact ids. Omit for all stages.',
+      description: 'Optional single production stage id to filter to, e.g. "pressing", "rotary_furnace", "chinese_mills", "tube_ball_mills", "mortar_concrete", "mixing", "lightweight_foam", "sorting", "thermal_concrete", "tunnel_kiln", "handmade_brick" - map colloquial names ("المكابس", "أفران دوارة") to these exact ids. Omit for all stages.',
     },
     startDate: { type: 'string', description: 'ISO date YYYY-MM-DD; if omitted along with endDate, the Reports screen keeps its current date range' },
     endDate: { type: 'string', description: 'ISO date YYYY-MM-DD' },

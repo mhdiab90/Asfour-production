@@ -3,17 +3,45 @@
  * Implements previewing, pre-restore safety checkpoints, batch restoration,
  * file upload verification, and double-confirmation verification.
  */
-import { 
-  collection, 
-  getDocs, 
-  doc, 
-  setDoc, 
-  writeBatch 
+import {
+  collection,
+  getCountFromServer,
+  doc,
+  setDoc,
+  writeBatch
 } from 'firebase/firestore';
 import { db, auth } from '../config/firebase';
-import { SystemBackup, RestorePreview, RestoreResult } from '../types';
-import { createDatabaseBackup, memoryBackupCache, calculateChecksum } from './backupService';
+import { SystemBackup, RestorePreview, RestoreResult, ChecksumStatus } from '../types';
+import { createDatabaseBackup, memoryBackupCache, calculateChecksum, calculateSha256 } from './backupService';
 import { logAuditAction } from './auditService';
+
+/**
+ * Recompute the checksum of raw backup content and compare it against the
+ * checksum recorded in the backup's metadata at creation time.
+ *
+ * Backups are hashed with calculateSha256() (backupService.ts), which itself
+ * falls back to the legacy calculateChecksum() format ("CHK-XXXXXXXX") when
+ * window.crypto.subtle is unavailable. To correctly verify both older
+ * (legacy-format) and current (real SHA-256) backups, the same algorithm
+ * that produced the stored checksum is used to recompute it.
+ */
+export async function verifyBackupChecksum(
+  content: string,
+  storedChecksum?: string
+): Promise<{ status: ChecksumStatus; calculatedChecksum: string }> {
+  if (!storedChecksum) {
+    return { status: 'MISSING', calculatedChecksum: '' };
+  }
+
+  const calculatedChecksum = storedChecksum.startsWith('CHK-')
+    ? calculateChecksum(content)
+    : await calculateSha256(content);
+
+  return {
+    status: calculatedChecksum === storedChecksum ? 'VALID' : 'INVALID',
+    calculatedChecksum,
+  };
+}
 
 /**
  * Parse and validate an uploaded ASFOUR JSON backup file
@@ -21,7 +49,8 @@ import { logAuditAction } from './auditService';
 export async function parseBackupFile(file: File): Promise<{
   backup: SystemBackup;
   data: Record<string, any[]>;
-  isValidChecksum: boolean;
+  checksumStatus: ChecksumStatus;
+  calculatedChecksum: string;
 }> {
   const content = await file.text();
   let parsed: any;
@@ -39,8 +68,7 @@ export async function parseBackupFile(file: File): Promise<{
     throw new Error('الملف لا يحتوي على بنية بيانات نسخ احتياطي صالحة لمنظومة عصفور.');
   }
 
-  const calculatedCheck = calculateChecksum(content);
-  const isValidChecksum = !metadata.checksum || metadata.checksum === calculatedCheck || true;
+  const { status: checksumStatus, calculatedChecksum } = await verifyBackupChecksum(content, metadata.checksum);
 
   const recordCounts: Record<string, number> = {};
   let totalRecords = 0;
@@ -68,7 +96,7 @@ export async function parseBackupFile(file: File): Promise<{
     recordCounts: metadata.recordCounts || recordCounts,
     totalRecords: metadata.totalRecords || totalRecords,
     sizeBytes: file.size,
-    checksum: metadata.checksum || calculatedCheck,
+    checksum: metadata.checksum || calculatedChecksum,
     storageLocation: 'LOCAL_JSON',
     dataPayload: content
   };
@@ -79,12 +107,24 @@ export async function parseBackupFile(file: File): Promise<{
   return {
     backup,
     data,
-    isValidChecksum
+    checksumStatus,
+    calculatedChecksum
   };
 }
 
 /**
  * Generate a comparison preview between current Firestore counts and the backup counts
+ *
+ * PHASE 4D: this only ever displays currentCount/backupCount/diff (see
+ * RestorePreview's shape below and its sole use in BackupRestoreView.tsx,
+ * where the result populates a display-only comparison modal, never an
+ * automatic restore decision) - no document content is read or used, so
+ * getCountFromServer() (an aggregation query, not a document download)
+ * replaces the previous getDocs()+.size for up to 23 collections here.
+ * Same collection, no filter, no auth change, same client SDK context -
+ * count semantics are identical to the previous `.size` on an unfiltered
+ * collection() query. On any error, the count still defaults to 0 exactly
+ * as before - never a fallback to a full getDocs() download.
  */
 export async function generateRestorePreview(backup: SystemBackup): Promise<RestorePreview> {
   const collectionDiffs: {
@@ -99,8 +139,8 @@ export async function generateRestorePreview(backup: SystemBackup): Promise<Rest
   for (const colName of collectionsToCheck) {
     let currentCount = 0;
     try {
-      const snap = await getDocs(collection(db, colName));
-      currentCount = snap.size;
+      const snap = await getCountFromServer(collection(db, colName));
+      currentCount = snap.data().count;
     } catch {
       currentCount = 0;
     }
@@ -126,6 +166,10 @@ export async function generateRestorePreview(backup: SystemBackup): Promise<Rest
 
 /**
  * Execute Safe Database Restoration
+ * 0. Recomputes the backup's SHA-256 checksum and enforces it BEFORE any other step
+ *    - INVALID checksum: restore is stopped immediately, nothing is touched.
+ *    - MISSING checksum: restore requires options.allowMissingChecksum === true
+ *      (the caller must have obtained explicit SUPER_ADMIN confirmation).
  * 1. Creates a safety checkpoint backup of the CURRENT database first
  * 2. Deserializes backup payload
  * 3. Restores records using batched writes in chunks of 400
@@ -135,12 +179,38 @@ export async function executeSafeRestore(
   backup: SystemBackup,
   options: {
     createCheckpointFirst?: boolean;
+    allowMissingChecksum?: boolean;
     onProgress?: (message: string, percent: number) => void;
   } = {}
 ): Promise<RestoreResult> {
   const startTime = Date.now();
   const errors: string[] = [];
   let safetyBackupId: string | undefined = undefined;
+
+  // Step 0: Resolve the raw backup payload and verify its integrity FIRST.
+  // No checkpoint is created and no data is touched until this check passes.
+  if (options.onProgress) options.onProgress('جاري التحقق من بصمة الملف (SHA-256)...', 5);
+
+  const rawPayload = backup.dataPayload || memoryBackupCache.get(backup.backupId);
+  if (!rawPayload) {
+    throw new Error('لا تحتوي هذه النسخة على بيانات في ذاكرة المتصفح. يرجى رفع ملف النسخة الاحتياطية (JSON) للاستعادة.');
+  }
+
+  const { status: checksumStatus, calculatedChecksum } = await verifyBackupChecksum(rawPayload, backup.checksum);
+
+  if (checksumStatus === 'INVALID') {
+    throw new Error(
+      'تم إيقاف الاستعادة لأن بصمة الملف لا تطابق البصمة المسجلة. / Restore stopped because the file checksum does not match the recorded checksum. ' +
+      `(المسجلة: ${backup.checksum} | المحسوبة: ${calculatedChecksum})`
+    );
+  }
+
+  if (checksumStatus === 'MISSING' && options.allowMissingChecksum !== true) {
+    throw new Error(
+      'النسخة الاحتياطية لا تحتوي على بصمة SHA-256 ولا يمكن التحقق من سلامتها بالكامل. / This backup does not contain a SHA-256 checksum and cannot be fully verified. ' +
+      'يتطلب تأكيد صريح من مدير عام (SUPER_ADMIN) للمتابعة رغم ذلك.'
+    );
+  }
 
   // Step 1: Create automatic safety checkpoint before overwriting
   if (options.createCheckpointFirst !== false) {
@@ -159,12 +229,7 @@ export async function executeSafeRestore(
     }
   }
 
-  // Step 2: Parse backup payload
-  const rawPayload = backup.dataPayload || memoryBackupCache.get(backup.backupId);
-  if (!rawPayload) {
-    throw new Error('لا تحتوي هذه النسخة على بيانات في ذاكرة المتصفح. يرجى رفع ملف النسخة الاحتياطية (JSON) للاستعادة.');
-  }
-
+  // Step 2: Parse backup payload (already integrity-checked in Step 0)
   let parsedObject: any = {};
   try {
     parsedObject = JSON.parse(rawPayload);
@@ -222,7 +287,7 @@ export async function executeSafeRestore(
     'RESTORE_EXECUTE',
     'system_backups',
     backup.backupId,
-    `تم استعادة ${totalRestored} سجل من النسخة ${backup.backupId} - وقت العملية: ${(durationMs / 1000).toFixed(1)} ثانية`
+    `تم استعادة ${totalRestored} سجل من النسخة ${backup.backupId} - بصمة الملف: ${checksumStatus} - وقت العملية: ${(durationMs / 1000).toFixed(1)} ثانية`
   );
 
   if (options.onProgress) options.onProgress('تمت عملية الاستعادة بنجاح!', 100);
@@ -235,5 +300,6 @@ export async function executeSafeRestore(
     durationMs,
     errors,
     timestamp: new Date().toISOString(),
+    checksumStatus,
   };
 }

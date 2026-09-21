@@ -90,6 +90,8 @@ import { useSetAssistantSelection } from '../../context/AssistantSelectionContex
 import { InlineMasterDataAddModal } from './InlineMasterDataAddModal';
 import { BatchAddMasterDataModal, MissingEntityItem } from './BatchAddMasterDataModal';
 import { ChineseMillsImportPanel } from './ChineseMillsImportPanel';
+import { EntityImportPanel } from './EntityImportPanel';
+import { OdooHistoricalImportPanel } from './OdooHistoricalImportPanel';
 import { TubeBallMillsImportPanel } from './TubeBallMillsImportPanel';
 import {
   getRowSelection,
@@ -311,6 +313,10 @@ export const DataImportView: React.FC = () => {
 
   const [file, setFile] = useState<File | null>(null);
   const [isParsing, setIsParsing] = useState<boolean>(false);
+  /** Phase 1 Step 8C-2: importing the entities the system defines (jobs, batches, BOMs, routings, traced production). */
+  const [isEntityImportOpen, setIsEntityImportOpen] = useState<boolean>(false);
+  /** Phase 1 Step 8D - the three-file Odoo historical import, inside this same centre. */
+  const [isOdooImportOpen, setIsOdooImportOpen] = useState<boolean>(false);
   
   // Pressing Stage Dedicated State
   const [pressingSummary, setPressingSummary] = useState<PressingImportSummary | null>(null);
@@ -2722,6 +2728,26 @@ export const DataImportView: React.FC = () => {
         </div>
 
         <div className="flex items-center gap-2.5">
+          <button
+            id="entity-import-open-btn"
+            type="button"
+            onClick={() => setIsEntityImportOpen(true)}
+            className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl font-bold text-indigo-800 bg-indigo-50 border border-indigo-200 hover:bg-indigo-100 transition-colors cursor-pointer"
+            title={language === 'ar' ? 'استيراد أوامر الشغل والدفعات وقوائم المواد والمسارات وسجلات الإنتاج المتتبعة' : 'Import jobs, batches, BOMs, routings and traced production records'}
+          >
+            <FileSpreadsheet className="w-3.5 h-3.5 text-indigo-600" />
+            {language === 'ar' ? 'استيراد الكيانات' : 'Entity Import'}
+          </button>
+          <button
+            id="odoo-import-open-btn"
+            type="button"
+            onClick={() => setIsOdooImportOpen(true)}
+            className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl font-bold text-amber-900 bg-amber-50 border border-amber-200 hover:bg-amber-100 transition-colors cursor-pointer"
+            title={language === 'ar' ? 'استيراد ثلاثة ملفات أودو: mrp.production و mrp.workorder و stock.scrap' : 'Import the three Odoo files: mrp.production, mrp.workorder and stock.scrap'}
+          >
+            <FileSpreadsheet className="w-3.5 h-3.5 text-amber-600" />
+            {language === 'ar' ? 'استيراد أودو (3 ملفات)' : 'Odoo Import (3 files)'}
+          </button>
           <button
             type="button"
             onClick={openHistoryModal}
@@ -5312,6 +5338,12 @@ export const DataImportView: React.FC = () => {
           </Modal>
         );
       })()}
+
+      {/* Entity import (Phase 1 Step 8C-2) - the same review flow, for the entities the system defines */}
+      <EntityImportPanel isOpen={isEntityImportOpen} onClose={() => setIsEntityImportOpen(false)} />
+
+      {/* Odoo historical import (Phase 1 Step 8D) - three files, staged and reviewed before anything is written */}
+      <OdooHistoricalImportPanel isOpen={isOdooImportOpen} onClose={() => setIsOdooImportOpen(false)} />
     </div>
   );
 };

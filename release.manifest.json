@@ -1,9 +1,18 @@
 {
   "_doc": "Release Manifest precursor. Describes WHAT is being released so the gate checks a committed declaration rather than whatever flags an operator typed. commitSha/buildId/deploymentId are left null until a release is cut - the gate fills the comparison from the build itself, and only enforces a field that is set here. This is NOT the Change Registry: no change IDs, no Firestore, no UI.",
-  "version": "3.20.0",
-  "releaseId": "REL-2026-0022",
+  "version": "3.21.0",
+  "releaseId": "REL-2026-0023",
   "changeIds": [
-    "PERM-0027"
+    "MOD-0028",
+    "MOD-0029",
+    "MOD-0030",
+    "MOD-0031",
+    "MOD-0032",
+    "DB-0033",
+    "PERF-0034",
+    "SEC-0035",
+    "AI-0036",
+    "UI-0037"
   ],
   "commitSha": null,
   "buildId": null,
@@ -36,7 +45,14 @@
     "custom-dashboard-filter-grid",
     "data-widget-state",
     "production-records-filter-panel",
-    "production-records-bulk-delete-btn"
+    "production-records-bulk-delete-btn",
+    "entity-import-open-btn",
+    "entity-import-package",
+    "entity-import-package-deferred",
+    "odoo-import-open-btn",
+    "stage_tunnel_kiln",
+    "costingPeriods",
+    "translation-manager"
   ],
   "_markerNotes": {
     "ai-provider-management": "AI Provider Management route - absent means the AI Assistant closure was dropped",
@@ -66,7 +82,14 @@
     "custom-dashboard-filter-grid": "The Custom Dashboard responsive filter grid - absent means it reverted to the cramped horizontally scrolling strip",
     "data-widget-state": "Widget-level loading / no-data / quantities-off state - absent means filter changes may unmount the Custom Dashboard widget grid again",
     "production-records-filter-panel": "The unified Production Records filter panel with the shared cost-centre selector - absent means the redundant drill-down / code-type filters returned",
-    "production-records-bulk-delete-btn": "The permission-gated Delete Selected action - absent means bulk delete of selected production records was dropped"
+    "production-records-bulk-delete-btn": "The permission-gated Delete Selected action - absent means bulk delete of selected production records was dropped",
+    "entity-import-open-btn": "The Entity Import entry point in Historical Import - absent means the entity/master-data import is unreachable",
+    "entity-import-package": "The Master Data Package mode inside Entity Import - absent means the Product/Material/BOM package import was dropped",
+    "entity-import-package-deferred": "The package deferred/skipped list - absent means skipped duplicates and deferred rows are no longer shown for audit",
+    "odoo-import-open-btn": "The three-file Odoo historical import entry point - absent means the Odoo import was dropped",
+    "stage_tunnel_kiln": "The tunnel kiln stage collection - absent means the three new production areas were dropped",
+    "costingPeriods": "The costing setup collection - absent means costing periods and allocation setup were dropped",
+    "translation-manager": "The Translation Manager route - absent means translation governance was dropped"
   },
   "tests": [
     "buildIdentity",
@@ -87,11 +110,46 @@
     "legacyHierarchyReconciliation",
     "masterDataPanels",
     "costCenterDashboard",
-    "productionRecordsBulkDelete"
+    "productionRecordsBulkDelete",
+    "masterDataPackageImport",
+    "entityImport",
+    "workbookImport",
+    "referenceResolution",
+    "externalReferences",
+    "itemClassification",
+    "bom",
+    "bomFormula",
+    "uomReadiness",
+    "uomLabels",
+    "logicalItem",
+    "routing",
+    "operationMaster",
+    "equipmentMaster",
+    "jobBatch",
+    "odooHistoricalImport",
+    "productionAreas",
+    "productionReferences",
+    "productionGenealogy",
+    "actualConsumption",
+    "quantityVariance",
+    "costingFoundation",
+    "productionQueryBounds",
+    "chineseMillsImportHistory",
+    "stageRecordQueryBounds"
   ],
   "deployCommand": "firebase deploy --only hosting --project asfourproduction-70e6e",
   "treeClean": true,
   "_changeNotes": {
+    "UI-0037": "Translation governance and print styling. A Translation Manager and a Language Audit screen (gated by the new translation.manage permission) read and write translationOverrides, whose rule already exists; LanguageContext merges the overrides for signed-in users. The header, sidebar, mobile navigation and footer are hidden when printing. No production, Master Data or costing behaviour changed",
+    "AI-0036": "AI Assistant through the assistant gateway. The AI Assistant screen now drives the same AssistantGateway / tool registry / permission checks as the Global Assistant, and the old client-side aiService was removed. A real provider is reached only through the separately deployed Cloudflare Worker in cloudflare/ai-gateway (NOT deployed by this release); VITE_AI_PROVIDER defaults to the local mock, so nothing calls an external model until that gateway is configured. Suggested Analytics is reachable from the sidebar. No API key is shipped in the bundle",
+    "SEC-0035": "Backup integrity before restore. The previous restore preview treated every checksum as valid (a trailing \"|| true\"). Restores now verify the file fingerprint (SHA-256, or the legacy CHK- checksum for older backups) and STOP on a mismatch; a backup with no checksum needs an explicit allowance. Collection counts use getCountFromServer instead of reading every document. No backup format, data or rule changed",
+    "PERF-0034": "Listener and query bounds. Production Records re-subscribes only its production listener when the date filter changes (the date range is passed to the query; empty = the previous unbounded behaviour) while Master Data stays a mount-only fetch; Data Quality no longer fetches the full production history on open; the user list listener no longer re-subscribes on language change; system tests count documents instead of reading them. productionQueryBounds #17 failed only because its source window was too narrow after PERM-0027 added three fetches to the same mount-only effect - the effect was always mount-only; the window was widened and no application code changed for it",
+    "DB-0033": "Firestore rules for every collection this release writes, purely additive, deployed separately with firebase deploy --only firestore:rules. Master Data pattern (read signed-in, write admin): rotaryKilns, jobReferences, batches, boms, bomVersions, logicalItems, itemPairDecisions, routings, routingVersions, stages, costingPeriods, allocationSetups. Stage records (read/write signed-in, like the existing stage_* collections): stage_thermal_concrete, stage_tunnel_kiln, stage_handmade_brick. Import collections (read signed-in, create/update signed-in, delete admin): importSessions, importStagingRows, workOrders, stockScrap, workCenters. Corrected during release preparation: costingPeriods/allocationSetups had no rule (the Costing Setup panel could neither read nor save), and workCenters let any signed-in user delete a mapping the import never deletes. No existing rule was altered or weakened",
+    "MOD-0032": "Costing setup foundation (Phase 1 Step 8C). Costing periods (open/closed as a status, never deleted) and allocation setups are configured from Master Data by users who can import Master Data; writes are admin-only in the rules. Configuration only: nothing is calculated, allocated or posted, and no financial record is touched",
+    "MOD-0031": "Production traceability and new production areas (Phase 1 Steps 4 to 8C-5). Production references (job / batch / manufacturing order), actual consumption, production genealogy, quantity variance, unit readiness, record correction and packaging activity are attached by the existing entry forms and shown in Data Review. Three new stages - Thermal Concrete, Tunnel Kiln (team-based, continuous) and Hand-made Brick (pieces x piece weight) - each with its own stage_* collection, entry form and stage permission; a missing permission key falls back to the role preset, so existing users need no migration. Units are labels only: no Tons to Pieces conversion without an approved product-specific rule",
+    "MOD-0030": "Odoo three-file historical import (Phase 1 Step 8D). mrp.production, mrp.workorder and stock.scrap are read together, staged in importSessions/importStagingRows and reviewed before anything is written. Odoo ids stay external references; a production record is created only from a real production event (employee-only and continuation rows are participation, never production); repeated Chinese Mills rows across mills/shifts stay separate; stock.scrap is the only scrap source and is never subtracted from good production; Sorting and the Tunnel Kiln are team-based with no invented participation; السرد is never the rotary furnace and مركز الصب والفرم is never lightweight_foam; Work Center names stay distinct from Main Center identity; no fuzzy automatic merge; bad rows never block valid rows. Writing requires excel.import or historical.import.execute. No historical data was imported by this release",
+    "MOD-0029": "Entity Import engine and Master Data Package (Phase 1 Steps 8C-2 to 8E). One review flow - upload, parse, normalise, validate, preview, review, approval, user-triggered write - for jobs, batches, BOMs, routings, their versions, traced production and the reconciled Master Data package (products, materials, and each BOM with its single internal V1/DRAFT version, no invented effective dates, the Odoo BOM id kept as an external reference). Upserts by code then external reference, never by name; case-only duplicate codes keep the first record and SKIP the rest; CHR3600401F is a non-blocking warning; the six purchased raw materials and the two reject outputs are Ton; LCC-S9006 / LCC8004 / LCC-S8005 output Ton; units m2 and متر are approved with NO conversion to Ton or to each other; unsupported units are DEFERRED, never blocking. Writing requires excel.import and the Master Data rules (admin). Nothing was imported by this release",
+    "MOD-0028": "Master Data foundation (Phase 1 Steps 1A to 3, 7A). Item classification and overlap review, logical items, BOMs and BOM versions, routings and routing versions, the configurable Operation Master and its seed, equipment masters (tube/ball mills, bunkers, rotary kilns) grouped under one equipment category, job references and batches, external references, product-type seeding and Master Data quality checks, all through the existing audited Master Data service. Additive collections only; no existing record is migrated or rewritten",
     "PERM-0027": "Production Records: canonical cost-centre filter and safe bulk delete. FILTER: the screen carried three controls for one organisational dimension - a multi-level drill-down with per-level checkbox columns, an equipment checklist beneath it (which said there was no equipment for a childless node), and a Code Type -> Codes pair. All three and their state are removed. The organisational filter is now the SAME CostCenterScopeSelector the Dashboard and Custom Dashboard use (search by code/name with path context, 5/6/7/8/9 groups, recursive checkboxes, clear, select all), over the canonical hierarchy index; ticked node ids go through the shared selection shape into the existing filterLegacyProductionRecords engine with the reconciled equipment links, so node -> descendants -> linked equipment -> records naming that press or furnace, and a leaf is its equipment. Date, cost centres, shift, product, a new customer filter (records already carry customerId) and search sit in one panel in the Dashboard filter-panel style with the export and new-entry actions. BULK DELETE (explicitly authorised): with production.delete (the existing key - no new permission) and at least one selected row, Delete Selected shows the exact count. The batch is selected ∩ visible, deduplicated, by document id, and is frozen when the confirmation opens; the confirmation states the deletion is permanent and cannot be undone through the current system. Nothing is deleted by selecting or by opening the dialog. On confirm, each record is checked against the live snapshot and passed to the existing deleteProductionRecord primitive one at a time - its existing audit entry per record, no batch write, no second delete service, no deleteStageRecord. Failures are isolated and nothing is rolled back; records already removed are skipped; a summary reports succeeded, failed (with ids), skipped and selected, and failed rows remain listed and selected for retry. No undo, restore or soft delete is claimed. Master Data, the hierarchy, Reports, AI and the Dashboard are not touched; no Firestore rule, schema or permission changed",
     "FIX-0026": "Custom Dashboard filter and content integration. Two defects, both traced to their cause. (1) The widget grid was not stable: the Builder rendered `isLoading ? <loading box> : <sections>`, so every date change - which re-runs the shared, date-bounded fetch - unmounted the whole widget tree and rebuilt it, and unticking quantities (3.19.1) dropped it entirely, leaving an empty shell with the financial card as a separate area above. The sections container now always renders; loading, 'quantities not shown' and 'no data for this period / selection' are states inside each widget card, the financial value is a section of the same dashboard, and nothing uses a filter-derived key. Product, customer, shift, cost-centre and metric changes never refetched and still do not; widgets recompute from the one shared dataset through resolveWidgetFilters and the shared hierarchy scope. (2) A dashboard-wide Stage dropdown ('التشكيل والمكابس' once a saved or template dashboard set pressing) duplicated the organisational dimension the cost-centre hierarchy already provides. It is removed from the bar, and the dashboard filter state is normalised on EVERY write - the bar, a loaded, template or prefilled dashboard's saved defaults, the assistant's SET_FILTERS action, the AI designer, reset and save-as-default - so an old saved stage cannot linger as an invisible filter or be re-serialised. A widget keeps its own stage in its settings. The assistant's setCustomDashboardFilters no longer sends or reports a stage patch; a stage request is answered with where stage lives now. The classic Dashboard and Reports keep their own stage filters. One filter state, no new reads, no Firestore rule, schema, permission or data change",
     "UI-0025": "Custom Dashboard visual parity with the classic Dashboard. Both already render in the same page container; the compression came from inside the Builder. Its Live Control Bar squeezed every filter into one overflow-x-auto strip of non-shrinking controls, which forced horizontal scrolling and clipped the cost-centre dropdown (an overflow container clips its absolutely positioned children), in a smaller light style unlike the classic dark filter panel; the dashboard name also appeared three times (a generic header, a narrow identity strip, and the filter bar). The filter panel now uses the classic Dashboard's own classes, extracted into shared dashboardFilterStyles tokens that the classic Dashboard uses too (identical class strings): period and actions, wrapping period presets, then a responsive 1/2/4-column filter grid with no scroll strip. The shared hierarchical cost-centre selector fills its cell and opens a 24rem panel capped at 90vw. The open dashboard is the page title with rename/duplicate/default/delete beside it and every dashboard action on the other side; section headers, widget toolbars and widget cards use the classic card treatment with readable controls; widget sizes and section columns are unchanged. The metric type toggle, financial card and gated financial read were moved out of DashboardView into shared DashboardMetricControls and reused by the Custom Dashboard, whose metric type is an optional field on the existing GlobalDashboardFilters (absent = QUANTITY, so saved dashboards are unchanged). No Firestore rule, schema, permission, query or data changed",
@@ -112,8 +170,8 @@
     "UI-0010": "Financial Accounts import opens a dedicated Master Data importer instead of the Historical Excel Import screen: the action no longer navigates to the bulk-entry route (which App.tsx renders as DataImportView); a new in-place modal reuses the existing financialAccounts schema, XLSX reader, row validation, duplicate detection and chunked commit, adds sheet selection and parent/cycle relationship checks, and keeps partial import so invalid rows never block valid ones",
     "DB-0009": "Category-first Master Data over an extensible registry; Financial Accounts master data with Excel import and hierarchical editing (new financialAccounts collection and its Firestore rule); one shared generic hierarchy resolver reused by Master Data, Production Review and production aggregation; hierarchical cost-centre editing with cycle, self-parent and unknown-parent protection"
   },
-  "previousVersion": "3.19.2",
+  "previousVersion": "3.20.0",
   "versionBump": "MINOR",
   "classificationConfidence": "MEDIUM",
-  "previousReleaseId": "REL-2026-0021"
+  "previousReleaseId": "REL-2026-0022"
 }

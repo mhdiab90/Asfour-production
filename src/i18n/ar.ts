@@ -147,6 +147,9 @@ export const ar = {
   stage_mixing: 'الخلط وتجهيز الخامات',
   stage_lightweight_foam: 'الشاموت الخفيف وعزل الفوم',
   stage_sorting: 'الفرز والمراقبة النهائية',
+  stage_thermal_concrete: 'الخرسانة الحرارية',
+  stage_tunnel_kiln: 'الفرن النفقي',
+  stage_handmade_brick: 'الطوب اليدوي',
 
   // Production Entry Form Fields
   entry_title: 'تسجيل عملية إنتاج جديدة',

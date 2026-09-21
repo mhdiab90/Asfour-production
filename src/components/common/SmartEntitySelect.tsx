@@ -31,6 +31,8 @@ import { useAuth } from '../../context/AuthContext';
 import { createMasterDataItem, MASTER_DATA_COLLECTIONS } from '../../services/masterDataService';
 import { createMaterial } from '../../services/materialService';
 import { matchesSearch } from '../../utils/searchUtils';
+// Phase 1 Step 8: a new material's unit is chosen from the approved units, never free text.
+import { UOM_DEFINITIONS, normaliseUom } from '../../services/uomPure';
 
 export type EntityType = 
   | 'employee' 
@@ -246,7 +248,7 @@ export const SmartEntitySelect: React.FC<SmartEntitySelectProps> = ({
         createdId = await createMaterial({
           code,
           name,
-          unit: newExtra.trim() || 'طن',
+          unit: normaliseUom(newExtra).normalized || 'طن',
           category: 'عام',
           active: true
         });
@@ -568,13 +570,13 @@ export const SmartEntitySelect: React.FC<SmartEntitySelectProps> = ({
                   <label className="block text-xs font-bold text-slate-700 mb-1">
                     وحدة القياس
                   </label>
-                  <input
-                    type="text"
-                    value={newExtra}
+                  <select
+                    value={normaliseUom(newExtra).normalized || 'طن'}
                     onChange={(e) => setNewExtra(e.target.value)}
-                    placeholder="طن / كجم / شيكارة"
                     className="w-full px-3.5 py-2.5 text-sm bg-slate-50 border border-slate-300 rounded-xl focus:ring-2 focus:ring-red-500/20 focus:border-red-500 outline-none"
-                  />
+                  >
+                    {UOM_DEFINITIONS.map((u) => <option key={u.code} value={u.value}>{u.labelAr}</option>)}
+                  </select>
                 </div>
               )}
 

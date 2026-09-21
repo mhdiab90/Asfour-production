@@ -181,6 +181,79 @@ service cloud.firestore {
       allow write: if isAdmin();
     }
 
+    // Rotary Kiln equipment master (Phase 1 Step 1D) - the same access as every
+    // other equipment master: any signed-in user reads, only admins write.
+    match /rotaryKilns/{kilnId} {
+      allow read: if isSignedIn();
+      allow write: if isAdmin();
+    }
+
+    // ASFOUR Job References and Batches (Phase 1 Step 1E) - the Master Data
+    // pattern: any signed-in user reads, only admins write.
+    match /jobReferences/{jobReferenceId} {
+      allow read: if isSignedIn();
+      allow write: if isAdmin();
+    }
+
+    match /batches/{batchId} {
+      allow read: if isSignedIn();
+      allow write: if isAdmin();
+    }
+
+    // Bills of Materials and their versions (Phase 1 Step 2) - the Master Data
+    // pattern: any signed-in user reads, only admins write. Nothing is deleted
+    // by the application; retirement is a status.
+    match /boms/{bomId} {
+      allow read: if isSignedIn();
+      allow write: if isAdmin();
+    }
+
+    match /bomVersions/{bomVersionId} {
+      allow read: if isSignedIn();
+      allow write: if isAdmin();
+    }
+
+    // Logical item identities and Keep Separate decisions (Phase 1 Step 2A) -
+    // the Master Data pattern: any signed-in user reads, only admins write.
+    // Mappings are retired (INACTIVE), never deleted by the application.
+    match /logicalItems/{logicalItemId} {
+      allow read: if isSignedIn();
+      allow write: if isAdmin();
+    }
+
+    match /itemPairDecisions/{decisionId} {
+      allow read: if isSignedIn();
+      allow write: if isAdmin();
+    }
+
+    // Routings and their versions (Phase 1 Step 3) - the Master Data pattern:
+    // any signed-in user reads, only admins write. Retirement is a status;
+    // nothing is deleted by the application.
+    match /routings/{routingId} {
+      allow read: if isSignedIn();
+      allow write: if isAdmin();
+    }
+
+    match /routingVersions/{routingVersionId} {
+      allow read: if isSignedIn();
+      allow write: if isAdmin();
+    }
+
+    // Costing setup (Phase 1 Step 8C) - costing periods and allocation setups.
+    // CostingSetupPanel reads and writes them through the Master Data service,
+    // so they take the Master Data pattern: any signed-in user reads, only
+    // admins write. Configuration only - nothing is calculated or posted, and
+    // closing a period is a status, never a delete.
+    match /costingPeriods/{periodId} {
+      allow read: if isSignedIn();
+      allow write: if isAdmin();
+    }
+
+    match /allocationSetups/{setupId} {
+      allow read: if isSignedIn();
+      allow write: if isAdmin();
+    }
+
     // Cost Center / Department Hierarchy (generic self-referencing tree,
     // sourced from Sheet1 of the authoritative Cost Center workbook) - a
     // NEW, separate sibling collection to `departments` above, never merged
@@ -189,6 +262,19 @@ service cloud.firestore {
     // leaves, would corrupt that). Same read/write pattern as every other
     // Master Data collection in this file.
     match /costCenterHierarchy/{nodeId} {
+      allow read: if isSignedIn();
+      allow write: if isAdmin();
+    }
+
+    // Operation Master (Phase 1 Step 1C) - the configurable production
+    // operations, stored in the `stages` collection that masterDataService
+    // already registered. It had no block until now, so the default-deny above
+    // meant it was never read or written.
+    //
+    // Purely ADDITIVE, no new privilege: read for any signed-in user, write for
+    // admins - the same pattern as every other Master Data collection. Legacy
+    // stage collections (production, stage_*) are untouched.
+    match /stages/{operationId} {
       allow read: if isSignedIn();
       allow write: if isAdmin();
     }
@@ -328,7 +414,68 @@ service cloud.firestore {
       allow write: if isSignedIn();
     }
 
+    // Phase 1 Step 8C-5 - the remaining production areas' record collections
+    // (stageQueryBoundsPure.ts STAGE_COLLECTION_NAMES). Same read/write pattern
+    // as every other stage_* collection. Defined in the repository only - NOT
+    // deployed by this step.
+    match /stage_thermal_concrete/{id} {
+      allow read: if isSignedIn();
+      allow write: if isSignedIn();
+    }
+
+    match /stage_tunnel_kiln/{id} {
+      allow read: if isSignedIn();
+      allow write: if isSignedIn();
+    }
+
+    match /stage_handmade_brick/{id} {
+      allow read: if isSignedIn();
+      allow write: if isSignedIn();
+    }
+
     // Process record change audit trail
+    // Phase 1 Step 8D - the three-file Odoo historical import.
+    //
+    // importSessions / importStagingRows hold the RAW Excel rows and the review
+    // state before anything is written, so the review survives a reload.
+    // workOrders and stockScrap are the operational records the import creates.
+    // workCenters holds the Work Center mappings a user approved.
+    //
+    // Same read/write pattern as the other import and production collections
+    // (signed-in read and write, admin-only delete where the data is a record
+    // of what happened). Defined in the repository only - NOT deployed here.
+    match /importSessions/{sessionId} {
+      allow read: if isSignedIn();
+      allow create, update: if isSignedIn();
+      allow delete: if isAdmin();
+    }
+
+    match /importStagingRows/{rowId} {
+      allow read: if isSignedIn();
+      allow create, update: if isSignedIn();
+      allow delete: if isAdmin();
+    }
+
+    match /workOrders/{workOrderId} {
+      allow read: if isSignedIn();
+      allow create, update: if isSignedIn();
+      allow delete: if isAdmin();
+    }
+
+    match /stockScrap/{scrapId} {
+      allow read: if isSignedIn();
+      allow create, update: if isSignedIn();
+      allow delete: if isAdmin();
+    }
+
+    // The Odoo import only creates or updates a work-centre mapping; it never
+    // deletes one. Delete is admin-only, like the other import collections above.
+    match /workCenters/{workCenterId} {
+      allow read: if isSignedIn();
+      allow create, update: if isSignedIn();
+      allow delete: if isAdmin();
+    }
+
     match /recordAuditHistory/{historyId} {
       allow read: if isSignedIn();
       allow create: if isSignedIn();

@@ -95,8 +95,9 @@ test('A2. TEST A2 / CRITICAL 2 - a different category is never linked on code al
     'a financial account sharing a production code must never be linked');
   assert.equal(report.unmatchedLegacy.some((u: any) => u.id === 'A-1'), false,
     'and it is not even considered - it is out of scope, not unmatched');
-  // Only equipment categories are reconcilable at all.
-  assert.deepEqual([...rec.RECONCILABLE_EQUIPMENT_CATEGORIES].sort(), ['furnaces', 'mills', 'presses']);
+  // Only equipment categories are reconcilable at all. Tube/Ball Mills and
+  // Rotary Kilns joined in Phase 1 Step 1D (real hierarchy EQUIPMENT nodes).
+  assert.deepEqual([...rec.RECONCILABLE_EQUIPMENT_CATEGORIES].sort(), ['furnaces', 'mills', 'presses', 'rotaryKilns', 'tubeBallMills']);
 });
 
 test('A3. §33 - cost centres are not reconciled with equipment either', () => {

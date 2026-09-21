@@ -34,8 +34,15 @@
  * Pure and Firebase-free.
  */
 
-/** Categories whose records are production equipment. Nothing else is reconciled. */
-export const RECONCILABLE_EQUIPMENT_CATEGORIES = ['presses', 'furnaces', 'mills'] as const;
+/**
+ * Categories whose records are production equipment. Nothing else is reconciled.
+ *
+ * Tube/Ball Mills and Rotary Kilns joined in Phase 1 Step 1D: the hierarchy has
+ * real EQUIPMENT nodes for both. Bunkers and furnace cars are deliberately NOT
+ * here - no hierarchy node represents either, so a code match could only ever
+ * be a coincidence (see equipmentMasterPure.ts).
+ */
+export const RECONCILABLE_EQUIPMENT_CATEGORIES = ['presses', 'furnaces', 'mills', 'tubeBallMills', 'rotaryKilns'] as const;
 export type ReconcilableCategory = (typeof RECONCILABLE_EQUIPMENT_CATEGORIES)[number];
 
 export interface LegacyEquipmentRecord {
@@ -165,6 +172,15 @@ export function reconcileLegacyWithHierarchy(
 
   const nodesByCode = groupBy(nodes, (n) => normaliseCode(n.code));
   const legacyByCodeCategory = groupBy(eligible, (l) => `${l.categoryId}::${normaliseCode(l.code)}`);
+  // Which categories use each code. A node claimed by records in two categories
+  // (a press and a tube mill both coded "5011") has no single owner.
+  const categoriesByCode = new Map<string, Set<string>>();
+  for (const l of eligible) {
+    const code = normaliseCode(l.code);
+    const set = categoriesByCode.get(code) ?? new Set<string>();
+    set.add(l.categoryId);
+    categoriesByCode.set(code, set);
+  }
 
   const matched: MatchedPair[] = [];
   const conflicts: ConflictMatch[] = [];
@@ -186,6 +202,19 @@ export function reconcileLegacyWithHierarchy(
     // Ambiguity on EITHER side blocks the link. Two legacy presses sharing a
     // code is itself a data problem, and guessing which one owns the node would
     // bury it rather than surface it.
+    const claimingCategories = [...(categoriesByCode.get(code) ?? [])].sort();
+    if (claimingCategories.length > 1) {
+      ambiguous.push({
+        code,
+        category: categoryId,
+        legacyIds: records.map((r) => r.id),
+        hierarchyNodeIds: candidates.map((c) => c.id),
+        reason: `code "${code}" is used in ${claimingCategories.length} equipment categories (${claimingCategories.join(', ')})`,
+      });
+      for (const c of candidates) consumedNodeIds.add(c.id);
+      continue;
+    }
+
     if (candidates.length > 1 || records.length > 1) {
       ambiguous.push({
         code,

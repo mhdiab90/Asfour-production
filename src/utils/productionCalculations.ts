@@ -80,6 +80,10 @@ export const STAGE_PRODUCTION_UNITS: Record<ProductionStageType, ProductionInput
   mixing: 'TON',              // TON
   lightweight_foam: 'MIXED',  // COUNT + Piece Weight OR TON
   sorting: 'COUNT',           // COUNT + Piece Weight -> TON
+  // Phase 1 Step 8C-5: the remaining production areas.
+  thermal_concrete: 'TON',    // TON (as mortar's production quantity)
+  tunnel_kiln: 'TON',         // TON (the unit the kiln source records)
+  handmade_brick: 'COUNT',    // COUNT + Piece Weight -> TON
 };
 
 /**

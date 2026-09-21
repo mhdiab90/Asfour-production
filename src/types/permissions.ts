@@ -44,7 +44,6 @@ export interface GranularPermissions {
   // 1. Dashboard & Analytics
   'dashboard.view': boolean;
   'dashboard.export_kpi': boolean;
-  'dashboard.manageCustomDashboards': boolean;
 
   // 2. Production Entry & Direct Operations
   'production.view': boolean;
@@ -72,6 +71,10 @@ export interface GranularPermissions {
   'stage.mixing': boolean;
   'stage.lightweight_foam': boolean;
   'stage.sorting': boolean;
+  // Phase 1 Step 8C-5
+  'stage.thermal_concrete': boolean;
+  'stage.tunnel_kiln': boolean;
+  'stage.handmade_brick': boolean;
 
   // 5. Master Data & Inline Add
   'masterdata.view': boolean;
@@ -106,6 +109,11 @@ export interface GranularPermissions {
   'furnaceCars.create': boolean;
   'furnaceCars.edit': boolean;
   'furnaceCars.delete': boolean;
+
+  'mills.view': boolean;
+  'mills.create': boolean;
+  'mills.edit': boolean;
+  'mills.delete': boolean;
 
   'shifts.view': boolean;
   'shifts.create': boolean;
@@ -170,13 +178,6 @@ export interface GranularPermissions {
   'system.view': boolean;
   'system.health.view': boolean;
   'system.manage': boolean;
-  'system.version.manage': boolean;
-  'system.version.rollback': boolean;
-  'system.aiProvider.manage': boolean;
-  'mills.view': boolean;
-  'mills.create': boolean;
-  'mills.edit': boolean;
-  'mills.delete': boolean;
   'audit.view': boolean;
   'settings.view': boolean;
   'settings.edit': boolean;
@@ -184,11 +185,43 @@ export interface GranularPermissions {
   'branding.edit': boolean;
   'versions.view': boolean;
 
+  // System Version Management & Application Rollback - a DIFFERENT domain
+  // from backup/restore above (that is Firestore DATA; this is application
+  // CODE/deployment). 'versions.view' (above) already covers read-only
+  // access to version history/release notes, reused here rather than
+  // duplicated. These two are additive: non-destructive management
+  // (creating checkpoints, marking a version Known Good) vs. the actual
+  // rollback execution, which is deliberately its own, narrower key.
+  'system.version.manage': boolean;
+  'system.version.rollback': boolean;
+
+  // Central AI Provider Manager - which AIProvider (Claude/Gemini/Cloudflare
+  // Workers AI/Mock) the entire application's AI Assistant uses. Reusing this
+  // one key rather than inventing per-provider permissions, matching the
+  // "one active provider" architecture.
+  'system.aiProvider.manage': boolean;
+
   // 13. Sensitive Field / Domain Restrictions
   'fields.view_cost': boolean;
   'fields.edit_downtime': boolean;
   'fields.view_consumption': boolean;
   'fields.view_tonnage': boolean;
+
+  // 14. Business Validation Warning Override - lets a user explicitly save/import
+  // a technically-valid record despite a non-blocking business WARNING (e.g.
+  // waste > production). Never bypasses genuine BLOCKING/technical failures.
+  'validation.overrideWarnings': boolean;
+
+  // 15. Dashboard Builder - saving/editing/deleting custom dashboards and
+  // using the AI Report Designer to propose widgets. Viewing the standard
+  // dashboard is unaffected by this key (that stays open, as before).
+  'dashboard.manageCustomDashboards': boolean;
+
+  // 16. Translation Governance - editing translation overrides, restoring
+  // defaults, and using the Translation Manager / Language Audit tools.
+  // Everyone can still USE the bilingual application without this key;
+  // it only gates changing what words the application shows.
+  'translation.manage': boolean;
 }
 
 export type PermissionKey = keyof Omit<

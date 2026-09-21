@@ -132,6 +132,10 @@ test('#9 all 8 stage collections are still present in STAGE_COLLECTION_NAMES, no
     mixing: 'stage_mixing',
     lightweight_foam: 'stage_lightweight_foam',
     sorting: 'stage_sorting',
+    // Phase 1 Step 8C-5 (approved): the three remaining production areas, appended.
+    thermal_concrete: 'stage_thermal_concrete',
+    tunnel_kiln: 'stage_tunnel_kiln',
+    handmade_brick: 'stage_handmade_brick',
   };
   assert.deepEqual(STAGE_COLLECTION_NAMES, expected);
 });

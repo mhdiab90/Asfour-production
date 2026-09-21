@@ -25,6 +25,7 @@ import {
   RefreshCw,
   AlertCircle,
   Layers,
+  CalendarRange,
   Sparkles,
   Check,
   AlertTriangle,
@@ -32,7 +33,15 @@ import {
   HelpCircle,
   Info,
   ShieldCheck,
-  Wrench
+  Wrench,
+  Workflow,
+  Cog,
+  Archive,
+  Factory,
+  ClipboardList,
+  Tag,
+  ListTree,
+  Route
 } from 'lucide-react';
 import {
   MasterDataTab,
@@ -46,7 +55,8 @@ import {
   ProductType,
   Customer,
   Shift,
-  NavigationPage
+  NavigationPage,
+  Operation
 } from '../../types';
 import {
   fetchMasterData,
@@ -67,18 +77,100 @@ import { parseProductCode, normalizeProductCode } from '../../utils/productCodeP
 import { enrichWithNormalizedFields } from '../../utils/searchUtils';
 import { DataQualityModal } from '../admin/DataQualityModal';
 import { MasterDataQualityReportModal } from './MasterDataQualityReportModal';
+import { ItemOverlapReviewModal } from './ItemOverlapReviewModal';
+import { OperationSeedModal } from './OperationSeedModal';
+import { SmartEntitySelect, SmartOption } from '../common/SmartEntitySelect';
+import { BomVersionsModal } from './BomVersionsModal';
+import { RoutingVersionsModal } from './RoutingVersionsModal';
+/*
+ * Routings (Phase 1 Step 3): the routing header is a Master Data record in this
+ * tab engine and belongs to a logical item; versions and ordered steps open in
+ * RoutingVersionsModal. No route exists in code.
+ */
+import { ROUTING_VERSION_COLLECTION, describeRoutingChange, routingPayloadForSave, validateRoutingForSave } from '../../services/routingPure';
+import { BOM_VERSION_COLLECTION } from '../../services/bomPure';
+/*
+ * Job execution setup (Phase 1 Step 4): a job's logical item, BOM version,
+ * routing version and batch, chosen in the existing Job Reference form and
+ * validated before the job's single write. Selection only - nothing executes.
+ */
+import {
+  compatibleBatches,
+  compatibleBomVersions,
+  compatibleRoutingVersions,
+  describeJobConfigurationChange,
+  jobConfigurationPatch,
+  resolveDefaultBomVersion,
+  resolveDefaultRoutingVersion,
+  validateJobConfiguration,
+} from '../../services/jobConfigurationPure';
+import { loadLogicalItemState } from '../../services/logicalItemService';
+import type { LogicalItemRecord } from '../../services/logicalItemPure';
+/*
+ * Bills of Materials (Phase 1 Step 2): the BOM header is a Master Data record
+ * in this tab engine; versions and components open in BomVersionsModal. Rules
+ * are pure; historical mixtures on products are only read.
+ */
+import {
+  BOM_ITEM_SOURCES,
+  bomPayloadForSave,
+  describeBomChange,
+  readLegacyMixture,
+  validateBomForSave,
+} from '../../services/bomPure';
+/*
+ * ASFOUR Job References and Batches (Phase 1 Step 1E): identity objects saved
+ * through the same audited services. Rules and the batch duplicate scope are
+ * pure; nothing here generates a number or reads production records.
+ */
+import {
+  ASFOUR_SOURCE_SYSTEM,
+  JOB_REFERENCE_STATUSES,
+  batchPayloadForSave,
+  jobReferencePayloadForSave,
+  validateBatchForSave,
+  validateJobReferenceForSave,
+} from '../../services/jobBatchPure';
 import { CostCenterHierarchyPanel } from './CostCenterHierarchyPanel';
+import { CostingSetupPanel } from './CostingSetupPanel';
 import {
   MASTER_DATA_CATEGORIES,
   MasterDataCategory,
   categoryForTab,
   categoryLabel,
   getCategory,
+  navigationCategoryIdForTab,
+  subCategories,
 } from '../../services/masterDataCategoryRegistry';
+/*
+ * Equipment completion (Phase 1 Step 1D): which equipment tabs carry the
+ * optional hierarchy link, and the save rules for the equipment categories
+ * newly managed here. Same tab engine, same audited services.
+ */
+import {
+  equipmentPayloadForSave,
+  isCompletedEquipmentTab,
+  isEquipmentLinkTab,
+  validateEquipmentForSave,
+} from '../../services/equipmentMasterPure';
 import { buildHierarchyIndex, getNodePath, validateEquipmentLink } from '../../services/hierarchyResolverPure';
 import { validateAccountForSave } from '../../services/financialAccountService';
 import { FinancialAccountsImportModal } from './FinancialAccountsImportModal';
 import { FinancialTransactionsImportModal } from './FinancialTransactionsImportModal';
+/*
+ * Operation Master (the registered `stages` collection). Validation and the
+ * save shape are pure; writes use the same audited master-data services as
+ * every other tab. The legacy stage architecture is only READ here.
+ */
+import {
+  LEGACY_STAGE_KEYS,
+  OPERATION_EQUIPMENT_CATEGORY_IDS,
+  operationPayloadForSave,
+  readOperation,
+  validateOperationActiveToggle,
+  validateOperationForSave,
+} from '../../services/operationMasterPure';
+import { getStageDisplayName } from '../../services/reportingEngine';
 import { useAuth } from '../../context/AuthContext';
 /*
  * The three-panel organisation. Selection state only - every label, collection
@@ -195,7 +287,12 @@ export const MasterDataView: React.FC<MasterDataViewProps> = ({ onNavigate }) =>
     function handlePrefillUpdate(e: Event) {
       const detail = (e as CustomEvent<MasterDataPrefill>).detail;
       if (!detail) return;
-      if (detail.tab) setActiveTab(detail.tab);
+      if (detail.tab) {
+        setActiveTab(detail.tab);
+        // Highlight the navigation entry that owns the tab (e.g. Equipment for a press).
+        const owner = navigationCategoryIdForTab(detail.tab, panelCategories());
+        if (owner) setActiveCategoryId(owner);
+      }
       if (detail.query !== undefined) setSearchQuery(detail.query || '');
     }
     window.addEventListener(MASTER_DATA_PREFILL_EVENT, handlePrefillUpdate as EventListener);
@@ -224,7 +321,13 @@ export const MasterDataView: React.FC<MasterDataViewProps> = ({ onNavigate }) =>
   const [isAnalyzeModalOpen, setIsAnalyzeModalOpen] = useState<boolean>(false);
   const [isQualityModalOpen, setIsQualityModalOpen] = useState<boolean>(false);
   const [isQualityReportOpen, setIsQualityReportOpen] = useState<boolean>(false);
+  /** Read-only products <-> materials overlap review (Phase 1 Step 1B). */
+  const [isItemOverlapOpen, setIsItemOverlapOpen] = useState<boolean>(false);
+  /** Approved Operation Master seed (Phase 1 Step 1C-Final) - creates only missing approved operations. */
+  const [isOperationSeedOpen, setIsOperationSeedOpen] = useState<boolean>(false);
   const [isHierarchyPanelOpen, setIsHierarchyPanelOpen] = useState<boolean>(false);
+  /** Phase 1 Step 8C: costing periods and cost-centre allocation setup - configuration only. */
+  const [isCostingSetupOpen, setIsCostingSetupOpen] = useState<boolean>(false);
   /**
    * Codes selected inside the CURRENT category only.
    *
@@ -254,7 +357,9 @@ export const MasterDataView: React.FC<MasterDataViewProps> = ({ onNavigate }) =>
    * category row repeated the very navigation underneath it, so choosing a
    * category took two controls instead of one.
    */
-  const [activeCategoryId, setActiveCategoryId] = useState<string>('products');
+  const [activeCategoryId, setActiveCategoryId] = useState<string>(
+    () => (prefill?.tab && navigationCategoryIdForTab(prefill.tab, panelCategories())) || 'products'
+  );
   /** Cost-centre classifications. Empty = no narrowing, as everywhere else. */
   const [costCenterDigits, setCostCenterDigits] = useState<string[]>([]);
   const [isApplyingLinks, setIsApplyingLinks] = useState<boolean>(false);
@@ -298,10 +403,18 @@ export const MasterDataView: React.FC<MasterDataViewProps> = ({ onNavigate }) =>
     { id: 'furnaces', label: language === 'ar' ? 'الأفران' : 'Furnaces', icon: Flame },
     { id: 'furnaceCars', label: language === 'ar' ? 'عربات الأفران' : 'Furnace Cars', icon: Truck },
     { id: 'mills', label: language === 'ar' ? 'الطواحين الصينية' : 'Chinese Mills', icon: Wrench },
+    { id: 'tubeBallMills', label: language === 'ar' ? 'طواحين الأنابيب والكرات' : 'Tube & Ball Mills', icon: Cog },
+    { id: 'bunkers', label: language === 'ar' ? 'البناكر' : 'Bunkers', icon: Archive },
+    { id: 'rotaryKilns', label: language === 'ar' ? 'الأفران الدوارة' : 'Rotary Kilns', icon: Factory },
+    { id: 'jobReferences', label: language === 'ar' ? 'أوامر الشغل' : 'Job References', icon: ClipboardList },
+    { id: 'batches', label: language === 'ar' ? 'الدفعات' : 'Batches', icon: Tag },
+    { id: 'boms', label: language === 'ar' ? 'قوائم المواد (BOM)' : 'Bills of Materials', icon: ListTree },
+    { id: 'routings', label: language === 'ar' ? 'مسارات التصنيع (Routing)' : 'Routings', icon: Route },
     { id: 'customers', label: language === 'ar' ? 'العملاء' : 'Customers', icon: Building },
     { id: 'departments', label: language === 'ar' ? 'الأقسام' : 'Departments', icon: Building2 },
     { id: 'shifts', label: language === 'ar' ? 'ورديات العمل' : 'Shifts', icon: Clock },
     { id: 'financialAccounts', label: language === 'ar' ? 'الحسابات المالية' : 'Financial Accounts', icon: Building2 },
+    { id: 'stages', label: language === 'ar' ? 'العمليات الإنتاجية' : 'Operations', icon: Workflow },
   ];
 
   /** The seven top-level categories, straight from the registry. */
@@ -330,8 +443,18 @@ export const MasterDataView: React.FC<MasterDataViewProps> = ({ onNavigate }) =>
    */
   useEffect(() => {
     const category = areaCategories.find((c) => c.id === activeCategoryId);
-    if (category?.tab) setActiveTab(category.tab as MasterDataTab);
+    if (!category?.tab) return;
+    // A group (Equipment) keeps whichever of its own tabs is already open.
+    if (category.subCategoryIds) {
+      const groupTabs = subCategories(category.id).map((sc) => sc.tab);
+      setActiveTab((current) => (groupTabs.includes(current) ? current : (category.tab as MasterDataTab)));
+      return;
+    }
+    setActiveTab(category.tab as MasterDataTab);
   }, [activeCategoryId, areaCategories]);
+
+  /** The Equipment group's categories, when that group is the active navigation entry. */
+  const activeSubCategories = useMemo(() => subCategories(activeCategoryId), [activeCategoryId]);
 
   const isCostCenterActive = activeCategoryId === COST_CENTER_CATEGORY_ID;
 
@@ -412,8 +535,178 @@ export const MasterDataView: React.FC<MasterDataViewProps> = ({ onNavigate }) =>
    * actually points at (pressId / furnaceId), plus mills for future use. A
    * non-equipment tab never shows the selector.
    */
-  const EQUIPMENT_TABS = ['presses', 'furnaces', 'mills'];
-  const isEquipmentTab = EQUIPMENT_TABS.includes(activeTab);
+  // Furnace cars are deliberately not here - see equipmentMasterPure.ts.
+  const isEquipmentTab = isEquipmentLinkTab(activeTab);
+  /** Tube/Ball Mills, Bunkers and Rotary Kilns: validated save shape, admin-gated, retired rather than deleted. */
+  const isCompletedEquipment = isCompletedEquipmentTab(activeTab);
+  /** Job References and Batches (Phase 1 Step 1E). */
+  const isJobBatchTab = activeTab === 'jobReferences' || activeTab === 'batches';
+  /** Bills of Materials (Phase 1 Step 2). */
+  const isBomTab = activeTab === 'boms';
+  /** Routings (Phase 1 Step 3). */
+  const isRoutingTab = activeTab === 'routings';
+  /** Tabs saved through a validated shape, admin-gated, and retired (inactive) rather than deleted. */
+  const isRetireOnlyTab = isCompletedEquipment || isJobBatchTab || isBomTab || isRoutingTab;
+  /** The BOM whose versions window is open. */
+  const [bomForVersions, setBomForVersions] = useState<any | null>(null);
+  /** The routing whose versions window is open. */
+  const [routingForVersions, setRoutingForVersions] = useState<any | null>(null);
+
+  /*
+   * Products, customers and job references for the Job/Batch pickers and
+   * labels - read cache-first, only while one of those tabs is open.
+   */
+  const [referenceProducts, setReferenceProducts] = useState<any[]>([]);
+  const [referenceCustomers, setReferenceCustomers] = useState<any[]>([]);
+  const [referenceJobs, setReferenceJobs] = useState<any[]>([]);
+  const [referenceMaterials, setReferenceMaterials] = useState<any[]>([]);
+  /** Logical items (Phase 1 Step 2A): default BOM scopes are per logical item. */
+  const [referenceLogicalItems, setReferenceLogicalItems] = useState<LogicalItemRecord[]>([]);
+  /* Bills of Materials need products, materials (items) and customers (optional scope). */
+  useEffect(() => {
+    if (!isBomTab) return;
+    fetchMasterData<any>(MASTER_DATA_COLLECTIONS.products).then(setReferenceProducts).catch(() => {});
+    fetchMasterData<any>(MASTER_DATA_COLLECTIONS.materials).then(setReferenceMaterials).catch(() => {});
+    fetchMasterData<any>(MASTER_DATA_COLLECTIONS.customers).then(setReferenceCustomers).catch(() => {});
+    loadLogicalItemState().then((state) => setReferenceLogicalItems(state.items)).catch(() => {});
+  }, [isBomTab]);
+  /* Routings need logical items (their identity), product/material labels, customers and the Operation Master. */
+  const [referenceOperations, setReferenceOperations] = useState<any[]>([]);
+  useEffect(() => {
+    if (!isRoutingTab) return;
+    fetchMasterData<any>(MASTER_DATA_COLLECTIONS.products).then(setReferenceProducts).catch(() => {});
+    fetchMasterData<any>(MASTER_DATA_COLLECTIONS.materials).then(setReferenceMaterials).catch(() => {});
+    fetchMasterData<any>(MASTER_DATA_COLLECTIONS.customers).then(setReferenceCustomers).catch(() => {});
+    fetchMasterData<any>(MASTER_DATA_COLLECTIONS.stages).then((rows) => setReferenceOperations(rows.map(readOperation))).catch(() => {});
+    loadLogicalItemState().then((state) => setReferenceLogicalItems(state.items)).catch(() => {});
+  }, [isRoutingTab]);
+  /*
+   * Job execution setup data (Phase 1 Step 4), read cache-first only on the Job
+   * References tab. Each list stays null until read, so a failed read refuses a
+   * selection instead of accepting it unverified.
+   */
+  const [jobSetup, setJobSetup] = useState<{
+    logicalItems: LogicalItemRecord[] | null; boms: any[] | null; bomVersions: any[] | null;
+    routings: any[] | null; routingVersions: any[] | null; batches: any[] | null;
+  }>({ logicalItems: null, boms: null, bomVersions: null, routings: null, routingVersions: null, batches: null });
+  const [jobSetupNotice, setJobSetupNotice] = useState<string | null>(null);
+  useEffect(() => {
+    if (activeTab !== 'jobReferences') return;
+    const put = (key: string) => (rows: any) => setJobSetup((s) => ({ ...s, [key]: rows }));
+    fetchMasterData<any>(MASTER_DATA_COLLECTIONS.materials).then(setReferenceMaterials).catch(() => {});
+    loadLogicalItemState().then((state) => { setReferenceLogicalItems(state.items); put('logicalItems')(state.items); }).catch(() => {});
+    fetchMasterData<any>(MASTER_DATA_COLLECTIONS.boms).then(put('boms')).catch(() => {});
+    fetchMasterData<any>(BOM_VERSION_COLLECTION).then(put('bomVersions')).catch(() => {});
+    fetchMasterData<any>(MASTER_DATA_COLLECTIONS.routings).then(put('routings')).catch(() => {});
+    fetchMasterData<any>(ROUTING_VERSION_COLLECTION).then(put('routingVersions')).catch(() => {});
+    fetchMasterData<any>(MASTER_DATA_COLLECTIONS.batches).then(put('batches')).catch(() => {});
+  }, [activeTab]);
+  useEffect(() => {
+    if (!isJobBatchTab) return;
+    fetchMasterData<any>(MASTER_DATA_COLLECTIONS.products).then(setReferenceProducts).catch(() => {});
+    if (activeTab === 'jobReferences') {
+      fetchMasterData<any>(MASTER_DATA_COLLECTIONS.customers).then(setReferenceCustomers).catch(() => {});
+    } else {
+      fetchMasterData<any>(MASTER_DATA_COLLECTIONS.jobReferences).then(setReferenceJobs).catch(() => {});
+    }
+  }, [isJobBatchTab, activeTab]);
+
+  const referenceProductOptions: SmartOption[] = useMemo(
+    () => referenceProducts.map((p) => ({ id: p.id || '', code: p.code || p.productCode || '', name: p.name || '', rawItem: p })),
+    [referenceProducts],
+  );
+  const referenceMaterialOptions: SmartOption[] = useMemo(
+    () => referenceMaterials.map((m) => ({ id: m.id || '', code: m.code || '', name: m.name || '' })),
+    [referenceMaterials],
+  );
+  /** A logical item's readable label, from its product and/or material record. */
+  const logicalItemLabel = (logicalItemId: unknown): string => {
+    const item = referenceLogicalItems.find((i) => i.id === String(logicalItemId ?? ''));
+    if (!item) return String(logicalItemId ?? '') || '-';
+    const product = item.productId ? referenceProducts.find((p) => p.id === item.productId) : null;
+    const material = item.materialId ? referenceMaterials.find((m) => m.id === item.materialId) : null;
+    const parts = [
+      product ? `${language === 'ar' ? 'منتج' : 'Product'}: ${[product.code || product.productCode, product.name].filter(Boolean).join(' - ')}` : null,
+      material ? `${language === 'ar' ? 'خامة' : 'Material'}: ${[material.code, material.name].filter(Boolean).join(' - ')}` : null,
+    ].filter(Boolean);
+    return parts.length ? parts.join(' | ') : item.id;
+  };
+  /** Only ACTIVE logical items can own a new routing; identities are never created from here. */
+  const logicalItemOptions: SmartOption[] = useMemo(
+    () => referenceLogicalItems.filter((i) => i.status === 'ACTIVE').map((i) => {
+      const product = i.productId ? referenceProducts.find((p) => p.id === i.productId) : null;
+      const material = i.materialId ? referenceMaterials.find((m) => m.id === i.materialId) : null;
+      return {
+        id: i.id,
+        code: product?.code || product?.productCode || material?.code || '',
+        name: product?.name || material?.name || i.id,
+        subtitle: [product ? 'products' : null, material ? 'materials' : null].filter(Boolean).join(' + '),
+      };
+    }),
+    [referenceLogicalItems, referenceProducts, referenceMaterials],
+  );
+  /** Equipment of the registered categories, already loaded for reconciliation - reused for routing steps. */
+  const routingEquipment = useMemo(
+    () => allEquipment.map((e) => ({ id: String(e.id ?? ''), categoryId: String(e.__categoryId ?? ''), active: e.active !== false, code: e.code, name: e.name })),
+    [allEquipment],
+  );
+
+  /** Readable labels for a job's execution setup - "BOM code / version / scope / status". */
+  const scopeLabel = (customerId: unknown) => (customerId ? referenceLabel(referenceCustomers, customerId) : (language === 'ar' ? 'قياسي' : 'Standard'));
+  const bomVersionLabel = (versionId: unknown): string => {
+    const version = (jobSetup.bomVersions ?? []).find((v) => v.id === String(versionId ?? ''));
+    if (!version) return versionId ? String(versionId) : '-';
+    const bom = (jobSetup.boms ?? []).find((b) => b.id === version.bomId);
+    return [bom ? `${bom.code} - ${bom.name}` : version.bomId, version.versionCode, bom ? scopeLabel(bom.customerId) : '', version.status].filter(Boolean).join(' / ');
+  };
+  const routingVersionLabel = (versionId: unknown): string => {
+    const version = (jobSetup.routingVersions ?? []).find((v) => v.id === String(versionId ?? ''));
+    if (!version) return versionId ? String(versionId) : '-';
+    const routing = (jobSetup.routings ?? []).find((r) => r.id === version.routingId);
+    return [routing ? `${routing.code} - ${routing.name}` : version.routingId, version.versionCode, routing ? scopeLabel(routing.customerId) : '', version.status].filter(Boolean).join(' / ');
+  };
+  const batchLabel = (batchId: unknown): string => {
+    const batch = (jobSetup.batches ?? []).find((b) => b.id === String(batchId ?? ''));
+    if (!batch) return batchId ? String(batchId) : '-';
+    return [batch.batchNumber, batch.productId ? referenceLabel(referenceProducts, batch.productId) : '', batch.active === false ? (language === 'ar' ? 'معطلة' : 'INACTIVE') : 'ACTIVE'].filter(Boolean).join(' / ');
+  };
+  const jobSetupScope = { logicalItemId: formData.logicalItemId, customerId: formData.customerId };
+  const jobBomChoices = useMemo(
+    () => (activeTab === 'jobReferences' ? compatibleBomVersions(jobSetupScope, jobSetup.boms ?? [], jobSetup.bomVersions ?? [], jobSetup.logicalItems ?? []) : []),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [activeTab, formData.logicalItemId, formData.customerId, jobSetup],
+  );
+  const jobRoutingChoices = useMemo(
+    () => (activeTab === 'jobReferences' ? compatibleRoutingVersions(jobSetupScope, jobSetup.routings ?? [], jobSetup.routingVersions ?? []) : []),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [activeTab, formData.logicalItemId, formData.customerId, jobSetup],
+  );
+  const jobBatchChoices = useMemo(
+    () => (activeTab === 'jobReferences' ? compatibleBatches(jobSetupScope, jobSetup.batches ?? [], jobSetup.logicalItems ?? [], editingItem?.id ?? null) : []),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [activeTab, formData.logicalItemId, jobSetup, editingItem],
+  );
+  /** COMPLETED / CANCELLED jobs keep their setup as it is. */
+  const jobSetupLocked = activeTab === 'jobReferences' && editingItem != null && ['COMPLETED', 'CANCELLED'].includes(String(editingItem.status ?? '').toUpperCase());
+
+  /** Products carrying a historical mixture - shown read-only, never converted. */
+  const legacyMixtureCount = useMemo(
+    () => (isBomTab ? referenceProducts.filter((p) => readLegacyMixture(p).isLegacyMixture).length : 0),
+    [isBomTab, referenceProducts],
+  );
+  const referenceCustomerOptions: SmartOption[] = useMemo(
+    () => referenceCustomers.map((c) => ({ id: c.id || '', code: c.code || '', name: c.name || '' })),
+    [referenceCustomers],
+  );
+  /** "code - name" for a stored id; the id itself when the record is not loaded. */
+  const referenceLabel = (list: any[], id: unknown, codeField = 'code'): string => {
+    const key = id == null ? '' : String(id);
+    if (!key) return '-';
+    const found = list.find((x) => x.id === key);
+    return found ? [found[codeField], found.name].filter(Boolean).join(' - ') : key;
+  };
+  /** Loaded ids for existence checks; null when the list is not loaded, so nothing is refused on a failed read. */
+  const loadedIds = (list: any[]): Set<string> | null => (list.length > 0 ? new Set(list.map((x) => String(x.id))) : null);
 
   /**
    * Index of the COST-CENTRE HIERARCHY NODES, used to label and validate an
@@ -732,6 +1025,21 @@ export const MasterDataView: React.FC<MasterDataViewProps> = ({ onNavigate }) =>
       setFormData({ code: '', name: '', capacity: 50, maxTemperature: 1650, status: 'active', active: true });
     } else if (activeTab === 'furnaceCars') {
       setFormData({ code: '', carNumber: '', furnaceId: '', furnaceName: '', capacity: 1200, active: true });
+    } else if (activeTab === 'tubeBallMills') {
+      setFormData({ code: '', name: '', model: '', millKind: null, status: 'active', hierarchyNodeId: null, active: true });
+    } else if (activeTab === 'bunkers') {
+      setFormData({ code: '', bunkerNumber: '', name: '', center: '', notes: '', status: 'active', hierarchyNodeId: null, active: true });
+    } else if (activeTab === 'rotaryKilns') {
+      setFormData({ code: '', name: '', model: '', description: '', status: 'active', hierarchyNodeId: null, active: true });
+    } else if (activeTab === 'jobReferences') {
+      setFormData({ code: '', productId: null, customerId: null, status: 'ACTIVE', sourceSystem: ASFOUR_SOURCE_SYSTEM, notes: '', active: true });
+    } else if (activeTab === 'batches') {
+      // The batch number is entered by the user - no generated default.
+      setFormData({ batchNumber: '', productId: null, jobReferenceId: null, notes: '', active: true });
+    } else if (activeTab === 'boms') {
+      setFormData({ code: '', name: '', itemSource: 'products', itemId: null, customerId: null, isDefault: false, notes: '', active: true });
+    } else if (activeTab === 'routings') {
+      setFormData({ code: '', name: '', logicalItemId: null, customerId: null, isDefault: false, notes: '', active: true });
     } else if (activeTab === 'customers') {
       setFormData({ code: '', name: '', company: '', phone: '', email: '', address: '', active: true });
     } else if (activeTab === 'departments') {
@@ -740,6 +1048,8 @@ export const MasterDataView: React.FC<MasterDataViewProps> = ({ onNavigate }) =>
       setFormData({ code: '', name: '', startTime: '08:00', endTime: '16:00', hours: 8, active: true });
     } else if (activeTab === 'financialAccounts') {
       setFormData({ code: '', name: '', nameEn: '', parentCode: '', accountType: '', description: '', active: true });
+    } else if (activeTab === 'stages') {
+      setFormData({ code: '', nameAr: '', nameEn: '', description: '', defaultOrder: '', legacyStageKey: '', hierarchyNodeId: '', allowedEquipmentCategoryIds: [], active: true });
     }
     setIsModalOpen(true);
   };
@@ -854,7 +1164,8 @@ export const MasterDataView: React.FC<MasterDataViewProps> = ({ onNavigate }) =>
         }
       }
 
-      if (!formData.code || !formData.code.trim()) {
+      // A bunker's code is optional (its identity is bunkerNumber) - checked below.
+      if (activeTab !== 'bunkers' && activeTab !== 'batches' && (!formData.code || !formData.code.trim())) {
         throw new Error(language === 'ar' ? 'حقل الكود إلزامي.' : 'Code is required.');
       }
       /*
@@ -871,7 +1182,7 @@ export const MasterDataView: React.FC<MasterDataViewProps> = ({ onNavigate }) =>
         }
       }
 
-      if (!formData.name && activeTab !== 'furnaceCars') {
+      if (!formData.name && activeTab !== 'furnaceCars' && activeTab !== 'stages' && activeTab !== 'bunkers' && !isJobBatchTab) {
         throw new Error(language === 'ar' ? 'حقل الاسم إلزامي.' : 'Name is required.');
       }
 
@@ -904,10 +1215,144 @@ export const MasterDataView: React.FC<MasterDataViewProps> = ({ onNavigate }) =>
         formData.parentCode = formData.parentCode ? String(formData.parentCode).trim() : null;
       }
 
+      /*
+       * Operation Master. Validated as a whole before the shared write below:
+       * unique code, Arabic name, a real legacy stage mapped by at most one
+       * active operation, a cost centre that exists in the shared hierarchy,
+       * and only existing equipment categories. Only Operation fields are
+       * written - never the id, timestamps or external references.
+       */
+      let dataToWrite: Record<string, any> = formData;
+      if (activeTab === 'stages') {
+        if (!canImportMasterData) {
+          throw new Error(language === 'ar' ? 'لا تملك صلاحية تعديل البيانات الأساسية.' : 'You do not have permission to edit Master Data.');
+        }
+        const check = validateOperationForSave(items.map(readOperation), formData, {
+          hierarchyIndex: linkHierarchyIndex,
+          editingId: editingItem?.id ?? null,
+        });
+        if (!check.valid) {
+          throw new Error(check.issues.map((i) => (language === 'ar' ? i.messageAr : i.messageEn)).join(' | '));
+        }
+        dataToWrite = operationPayloadForSave(formData);
+      }
+      /*
+       * Equipment completed in Phase 1 Step 1D. Unique code (and bunker number)
+       * within the category, the required name, and an optional hierarchy link
+       * that must be a real node id. Only that category's fields are written.
+       */
+      if (isCompletedEquipmentTab(activeTab)) {
+        if (!canImportMasterData) {
+          throw new Error(language === 'ar' ? 'لا تملك صلاحية تعديل البيانات الأساسية.' : 'You do not have permission to edit Master Data.');
+        }
+        const check = validateEquipmentForSave(activeTab, items, formData, {
+          hierarchyIndex: linkHierarchyIndex,
+          editingId: editingItem?.id ?? null,
+        });
+        if (!check.valid) {
+          throw new Error(check.issues.map((i) => (language === 'ar' ? i.messageAr : i.messageEn)).join(' | '));
+        }
+        dataToWrite = equipmentPayloadForSave(activeTab, formData);
+      }
+      /*
+       * Job References and Batches (Phase 1 Step 1E). Unique job code, a real
+       * status and source, optional product/customer/job links that must exist,
+       * and the explicit batch duplicate scope (number + product + job).
+       */
+      if (isJobBatchTab) {
+        if (!canImportMasterData) {
+          throw new Error(language === 'ar' ? 'لا تملك صلاحية تعديل البيانات الأساسية.' : 'You do not have permission to edit Master Data.');
+        }
+        const context = {
+          editingId: editingItem?.id ?? null,
+          knownProductIds: loadedIds(referenceProducts),
+          knownCustomerIds: loadedIds(referenceCustomers),
+          knownJobReferenceIds: loadedIds(referenceJobs),
+        };
+        const check = activeTab === 'jobReferences'
+          ? validateJobReferenceForSave(items, formData, context)
+          : validateBatchForSave(items, formData, context);
+        if (!check.valid) {
+          throw new Error(check.issues.map((i) => (language === 'ar' ? i.messageAr : i.messageEn)).join(' | '));
+        }
+        dataToWrite = activeTab === 'jobReferences' ? jobReferencePayloadForSave(formData) : batchPayloadForSave(formData);
+        /*
+         * Execution setup (Phase 1 Step 4): validated in the pure layer against
+         * the loaded logical items, BOMs, routings and batches, then written in
+         * the SAME single update as the job. Any refusal throws - nothing is written.
+         */
+        if (activeTab === 'jobReferences') {
+          const setup = validateJobConfiguration(editingItem, formData, { editingId: editingItem?.id ?? null, ...jobSetup });
+          if (!setup.valid) {
+            throw new Error(setup.issues.map((i) => (language === 'ar' ? i.messageAr : i.messageEn)).join(' | '));
+          }
+          dataToWrite = { ...dataToWrite, ...jobConfigurationPatch(editingItem, formData) };
+        }
+      }
+      /*
+       * Bills of Materials (Phase 1 Step 2). Unique code, a name, a real item
+       * (products or materials, by id), an optional customer, and at most one
+       * active default per (item, customer) - reported, never auto-resolved.
+       */
+      if (isBomTab) {
+        if (!canImportMasterData) {
+          throw new Error(language === 'ar' ? 'لا تملك صلاحية تعديل البيانات الأساسية.' : 'You do not have permission to edit Master Data.');
+        }
+        const check = validateBomForSave(items, formData, {
+          editingId: editingItem?.id ?? null,
+          knownItems: { products: loadedIds(referenceProducts), materials: loadedIds(referenceMaterials) },
+          knownCustomerIds: loadedIds(referenceCustomers),
+          logicalItems: referenceLogicalItems,
+        });
+        if (!check.valid) {
+          throw new Error(check.issues.map((i) => (language === 'ar' ? i.messageAr : i.messageEn)).join(' | '));
+        }
+        dataToWrite = bomPayloadForSave(formData);
+      }
+      /*
+       * Routings (Phase 1 Step 3). Unique code, a name, an ACTIVE logical item
+       * (never created here), an optional customer, and at most one active
+       * default per (logical item, customer) - reported, never auto-resolved.
+       */
+      if (isRoutingTab) {
+        if (!canImportMasterData) {
+          throw new Error(language === 'ar' ? 'لا تملك صلاحية تعديل البيانات الأساسية.' : 'You do not have permission to edit Master Data.');
+        }
+        const check = validateRoutingForSave(items, formData, {
+          editingId: editingItem?.id ?? null,
+          logicalItems: referenceLogicalItems,
+          knownCustomerIds: loadedIds(referenceCustomers),
+        });
+        if (!check.valid) {
+          throw new Error(check.issues.map((i) => (language === 'ar' ? i.messageAr : i.messageEn)).join(' | '));
+        }
+        dataToWrite = routingPayloadForSave(formData);
+      }
+
+      let savedId: string | undefined = editingItem?.id;
       if (editingItem && editingItem.id) {
-        await updateMasterDataItem(MASTER_DATA_COLLECTIONS[activeTab], editingItem.id, formData);
+        await updateMasterDataItem(MASTER_DATA_COLLECTIONS[activeTab], editingItem.id, dataToWrite);
       } else {
-        await createMasterDataItem(MASTER_DATA_COLLECTIONS[activeTab], formData);
+        savedId = await createMasterDataItem(MASTER_DATA_COLLECTIONS[activeTab], dataToWrite);
+      }
+      // BOM identity and customer scope are described in the existing audit log, beside the shared entry.
+      if (isBomTab && savedId) {
+        logAuditAction(editingItem ? 'UPDATE' : 'CREATE', MASTER_DATA_COLLECTIONS.boms, savedId, describeBomChange(editingItem, dataToWrite)).catch(() => {});
+      }
+      // A job's execution setup change - "from BOM V1 / Routing R1 / Batch B1 to ..." - likewise.
+      if (activeTab === 'jobReferences' && savedId) {
+        const setupChange = describeJobConfigurationChange(editingItem, dataToWrite, (field, id) => {
+          if (!id) return '-';
+          if (field === 'logicalItemId') return logicalItemLabel(id);
+          if (field === 'bomVersionId') return bomVersionLabel(id);
+          if (field === 'routingVersionId') return routingVersionLabel(id);
+          return batchLabel(id);
+        });
+        if (setupChange) logAuditAction(editingItem ? 'UPDATE' : 'CREATE', MASTER_DATA_COLLECTIONS.jobReferences, savedId, setupChange).catch(() => {});
+      }
+      // Routing identity, customer scope and default changes, likewise.
+      if (isRoutingTab && savedId) {
+        logAuditAction(editingItem ? 'UPDATE' : 'CREATE', MASTER_DATA_COLLECTIONS.routings, savedId, describeRoutingChange(editingItem, dataToWrite)).catch(() => {});
       }
 
       setIsModalOpen(false);
@@ -920,6 +1365,39 @@ export const MasterDataView: React.FC<MasterDataViewProps> = ({ onNavigate }) =>
 
   const handleToggleStatus = async (item: any) => {
     try {
+      /* Retiring an operation is always allowed; reactivating runs the legacy-stage rule. */
+      if (activeTab === 'stages') {
+        if (!canImportMasterData) return;
+        const check = validateOperationActiveToggle(items.map(readOperation), readOperation(item));
+        if (!check.valid) {
+          alert(check.issues.map((i) => (language === 'ar' ? i.messageAr : i.messageEn)).join(' | '));
+          return;
+        }
+      }
+      if (isCompletedEquipmentTab(activeTab) && !canImportMasterData) return;
+      if (isJobBatchTab && !canImportMasterData) return;
+      /* Reactivating a routing must not create a second active default in its scope. */
+      if (isRoutingTab) {
+        if (!canImportMasterData) return;
+        if (item.active === false) {
+          const conflict = validateRoutingForSave(items, { ...item, active: true }, { editingId: item.id, logicalItems: referenceLogicalItems }).issues.filter((i) => i.field === 'isDefault');
+          if (conflict.length > 0) {
+            alert(conflict.map((i) => (language === 'ar' ? i.messageAr : i.messageEn)).join(' | '));
+            return;
+          }
+        }
+      }
+      /* Reactivating a BOM must not create a second active default in its scope. */
+      if (isBomTab) {
+        if (!canImportMasterData) return;
+        if (item.active === false) {
+          const conflict = validateBomForSave(items, { ...item, active: true }, { editingId: item.id, logicalItems: referenceLogicalItems }).issues.filter((i) => i.field === 'isDefault');
+          if (conflict.length > 0) {
+            alert(conflict.map((i) => (language === 'ar' ? i.messageAr : i.messageEn)).join(' | '));
+            return;
+          }
+        }
+      }
       if (activeTab === 'productTypes') {
         await toggleProductTypeActive(item.id, item.active !== false, item.prefixCode);
       } else {
@@ -932,6 +1410,16 @@ export const MasterDataView: React.FC<MasterDataViewProps> = ({ onNavigate }) =>
 
   const handleDelete = async () => {
     if (!deleteConfirmItem || !deleteConfirmItem.id) return;
+    // Operations are never deleted - retire them (inactive) so history stays readable.
+    if (activeTab === 'stages') { setDeleteConfirmItem(null); return; }
+    // Historical stage records reference these ids (millTypeId, bunkerAllocations) - retire instead.
+    if (isCompletedEquipmentTab(activeTab)) { setDeleteConfirmItem(null); return; }
+    // Future production records will point at job references and batches - retire instead.
+    if (isJobBatchTab) { setDeleteConfirmItem(null); return; }
+    // BOMs are retired, never deleted - their versions stay readable.
+    if (isBomTab) { setDeleteConfirmItem(null); return; }
+    // Routings are retired, never deleted - their versions stay readable.
+    if (isRoutingTab) { setDeleteConfirmItem(null); return; }
     try {
       if (activeTab === 'productTypes') {
         await toggleProductTypeActive(deleteConfirmItem.id, true, deleteConfirmItem.prefixCode);
@@ -1241,6 +1729,16 @@ export const MasterDataView: React.FC<MasterDataViewProps> = ({ onNavigate }) =>
             </button>
           )}
           <button
+            id="master-data-costing-setup-btn"
+            type="button"
+            onClick={() => setIsCostingSetupOpen(true)}
+            className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl font-bold text-teal-800 bg-teal-50 border border-teal-200 hover:bg-teal-100 transition-colors cursor-pointer"
+            title={language === 'ar' ? 'فترات التكلفة وقواعد توزيع مراكز التكلفة (إعداد فقط)' : 'Costing periods and cost-centre allocation rules (configuration only)'}
+          >
+            <CalendarRange className="w-3.5 h-3.5 text-teal-600" />
+            {language === 'ar' ? 'إعداد التكاليف' : 'Costing Setup'}
+          </button>
+          <button
             id="master-data-cost-center-hierarchy-btn"
             type="button"
             onClick={() => setIsHierarchyPanelOpen(true)}
@@ -1286,6 +1784,37 @@ export const MasterDataView: React.FC<MasterDataViewProps> = ({ onNavigate }) =>
           );
         })}
       </div>
+
+      {/*
+        Equipment categories (Phase 1 Step 1D).
+
+        One Equipment entry in the navigation above, and each machine type
+        here. Every button only switches the existing tab engine - the same
+        table, form, hierarchy-link selector, search, export and permissions.
+      */}
+      {activeSubCategories.length > 0 && (
+        <div id="master-data-equipment-subcategories" className="bg-white rounded-2xl p-2 border border-slate-200 shadow-xs flex items-center gap-1.5 overflow-x-auto">
+          {activeSubCategories.map((sc) => {
+            const tab = tabs.find((t) => t.id === sc.tab);
+            const Icon = tab?.icon ?? Layers;
+            const isActive = activeTab === sc.tab;
+            return (
+              <button
+                key={sc.id}
+                id={`master-data-equipment-${sc.id}`}
+                type="button"
+                onClick={() => setActiveTab(sc.tab as MasterDataTab)}
+                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-[11px] font-bold transition-all shrink-0 cursor-pointer ${
+                  isActive ? 'bg-slate-900 text-white shadow-xs' : 'text-slate-600 hover:text-slate-900 hover:bg-slate-50'
+                }`}
+              >
+                <Icon className={`w-3.5 h-3.5 ${isActive ? 'text-amber-400' : 'text-slate-500'}`} />
+                <span>{categoryLabel(sc, language)}</span>
+              </button>
+            );
+          })}
+        </div>
+      )}
 
       {/*
         Cost-centre sub-categories.
@@ -1475,6 +2004,40 @@ export const MasterDataView: React.FC<MasterDataViewProps> = ({ onNavigate }) =>
             <span>{language === 'ar' ? 'مطابقة الأكواد مع التسلسل الهرمي' : 'Reconcile Codes with Hierarchy'}</span>
           </button>
 
+          {/*
+            Products <-> Materials overlap review. Read-only: it reports which
+            records may be the same logical item and why, and changes nothing.
+          */}
+          {/*
+            Approved Operation Master seed. Creates only the missing approved
+            operations through the audited create path; never edits or deletes.
+          */}
+          {activeTab === 'stages' && canImportMasterData && (
+            <button
+              id="master-data-operation-seed-btn"
+              type="button"
+              onClick={() => setIsOperationSeedOpen(true)}
+              className="flex items-center gap-1.5 px-3 py-2 text-xs font-bold text-emerald-800 bg-emerald-50 border border-emerald-300 hover:bg-emerald-100 rounded-xl transition-colors cursor-pointer"
+              title={language === 'ar' ? 'إنشاء العمليات الإنتاجية المعتمدة الناقصة فقط' : 'Create only the missing approved operations'}
+            >
+              <Workflow className="w-3.5 h-3.5 text-emerald-600" />
+              <span>{language === 'ar' ? 'إنشاء العمليات المعتمدة' : 'Create Approved Operations'}</span>
+            </button>
+          )}
+
+          {(activeTab === 'products' || activeTab === 'materials') && (
+            <button
+              id="master-data-item-overlap-btn"
+              type="button"
+              onClick={() => setIsItemOverlapOpen(true)}
+              className="flex items-center gap-1.5 px-3 py-2 text-xs font-bold text-teal-800 bg-teal-50 border border-teal-300 hover:bg-teal-100 rounded-xl transition-colors cursor-pointer"
+              title={language === 'ar' ? 'مراجعة المنتجات والخامات التي قد تمثل نفس الصنف - مطابقة حتمية بالكود والاسم، عرض فقط' : 'Review products and materials that may be the same item - deterministic code and name matching, review only'}
+            >
+              <Layers className="w-3.5 h-3.5 text-teal-600" />
+              <span>{language === 'ar' ? 'مراجعة تداخل المنتجات والخامات' : 'Products & Materials Overlap'}</span>
+            </button>
+          )}
+
           {activeTab === 'products' && (
             <button
               id="master-data-analyze-codes-btn"
@@ -1499,7 +2062,7 @@ export const MasterDataView: React.FC<MasterDataViewProps> = ({ onNavigate }) =>
             <span>{language === 'ar' ? 'تصدير Excel' : 'Export Excel'}</span>
           </button>
 
-          {activeTab !== 'productTypes' && (
+          {activeTab !== 'productTypes' && activeTab !== 'stages' && !isRoutingTab && !isBomTab && !isJobBatchTab && !isCompletedEquipment && (
             <button
               id="master-data-bulk-link-btn"
               type="button"
@@ -1511,11 +2074,12 @@ export const MasterDataView: React.FC<MasterDataViewProps> = ({ onNavigate }) =>
             </button>
           )}
 
+          {(activeTab !== 'stages' || canImportMasterData) && (
           <button
             id="master-data-add-btn"
             type="button"
             onClick={handleOpenAdd}
-            className="flex items-center gap-1.5 px-4 py-2 text-xs font-extrabold text-slate-950 bg-amber-400 hover:bg-amber-500 rounded-xl shadow-xs transition-colors cursor-pointer"
+            className={`${isRetireOnlyTab && !canImportMasterData ? 'hidden' : 'flex'} items-center gap-1.5 px-4 py-2 text-xs font-extrabold text-slate-950 bg-amber-400 hover:bg-amber-500 rounded-xl shadow-xs transition-colors cursor-pointer`}
           >
             <Plus className="w-4 h-4" />
             <span>
@@ -1524,6 +2088,7 @@ export const MasterDataView: React.FC<MasterDataViewProps> = ({ onNavigate }) =>
                 : (language === 'ar' ? 'إضافة سجل جديد' : 'Add New Record')}
             </span>
           </button>
+          )}
         </div>
       </div>
 
@@ -1539,6 +2104,14 @@ export const MasterDataView: React.FC<MasterDataViewProps> = ({ onNavigate }) =>
           {language === 'ar'
             ? `${unlinkedEquipmentCount} من ${items.length} سجل غير مرتبط بعقدة هرمية - لن تظهر هذه السجلات عند اختيار عقدة أب في التصفية.`
             : `${unlinkedEquipmentCount} of ${items.length} record(s) are not linked to a hierarchy node - they will not appear when an ancestor node is selected in a filter.`}
+        </div>
+      )}
+
+      {isBomTab && legacyMixtureCount > 0 && (
+        <div id="bom-legacy-mixture-status" className="bg-amber-50 border border-amber-200 rounded-2xl px-4 py-3 text-xs font-bold text-amber-900">
+          {language === 'ar'
+            ? `${legacyMixtureCount} منتج يحمل خلطة قديمة من الاستيراد التاريخي (خلطة قديمة). تُعرض للقراءة فقط داخل نافذة إصدارات قائمة المواد لنفس المنتج، ولا تُحوَّل تلقائيًا.`
+            : `${legacyMixtureCount} product(s) carry a legacy mixture from the historical import. They are shown read-only in the BOM versions window for that product and are not converted automatically.`}
         </div>
       )}
 
@@ -1659,10 +2232,6 @@ export const MasterDataView: React.FC<MasterDataViewProps> = ({ onNavigate }) =>
                       <th className="px-4 py-3.5">{language === 'ar' ? 'الحالة التشغيلية' : 'Operating Status'}</th>
                     </>
                   )}
-                  {/* Whether this equipment participates in hierarchy filtering at all. */}
-                  {isEquipmentTab && (
-                    <th className="px-4 py-3.5">{language === 'ar' ? 'التسلسل الهرمي' : 'Hierarchy'}</th>
-                  )}
                   {activeTab === 'mills' && (
                     <>
                       <th className="px-4 py-3.5">{language === 'ar' ? 'الموديل' : 'Model'}</th>
@@ -1674,6 +2243,47 @@ export const MasterDataView: React.FC<MasterDataViewProps> = ({ onNavigate }) =>
                       <th className="px-4 py-3.5">{language === 'ar' ? 'السعة (طن)' : 'Capacity (t)'}</th>
                       <th className="px-4 py-3.5">{language === 'ar' ? 'أقصى حرارة' : 'Max Temperature'}</th>
                       <th className="px-4 py-3.5">{language === 'ar' ? 'الحالة' : 'Status'}</th>
+                    </>
+                  )}
+                  {(activeTab === 'tubeBallMills' || activeTab === 'rotaryKilns') && (
+                    <>
+                      <th className="px-4 py-3.5">{language === 'ar' ? 'الموديل' : 'Model'}</th>
+                      <th className="px-4 py-3.5">{language === 'ar' ? 'الحالة التشغيلية' : 'Operating Status'}</th>
+                    </>
+                  )}
+                  {activeTab === 'jobReferences' && (
+                    <>
+                      <th className="px-4 py-3.5">{language === 'ar' ? 'المنتج' : 'Product'}</th>
+                      <th className="px-4 py-3.5">{language === 'ar' ? 'العميل' : 'Customer'}</th>
+                      <th className="px-4 py-3.5">{language === 'ar' ? 'الحالة' : 'Status'}</th>
+                      <th className="px-4 py-3.5">{language === 'ar' ? 'المصدر' : 'Source'}</th>
+                      <th className="px-4 py-3.5">{language === 'ar' ? 'إعداد التنفيذ' : 'Execution Setup'}</th>
+                    </>
+                  )}
+                  {activeTab === 'batches' && (
+                    <>
+                      <th className="px-4 py-3.5">{language === 'ar' ? 'المنتج' : 'Product'}</th>
+                      <th className="px-4 py-3.5">{language === 'ar' ? 'أمر الشغل' : 'Job Reference'}</th>
+                    </>
+                  )}
+                  {activeTab === 'routings' && (
+                    <>
+                      <th className="px-4 py-3.5">{language === 'ar' ? 'الصنف المنطقي' : 'Logical Item'}</th>
+                      <th className="px-4 py-3.5">{language === 'ar' ? 'العميل' : 'Customer'}</th>
+                      <th className="px-4 py-3.5">{language === 'ar' ? 'افتراضي' : 'Default'}</th>
+                    </>
+                  )}
+                  {activeTab === 'boms' && (
+                    <>
+                      <th className="px-4 py-3.5">{language === 'ar' ? 'الصنف' : 'Item'}</th>
+                      <th className="px-4 py-3.5">{language === 'ar' ? 'العميل' : 'Customer'}</th>
+                      <th className="px-4 py-3.5">{language === 'ar' ? 'افتراضي' : 'Default'}</th>
+                    </>
+                  )}
+                  {activeTab === 'bunkers' && (
+                    <>
+                      <th className="px-4 py-3.5">{language === 'ar' ? 'رقم البنكر' : 'Bunker Number'}</th>
+                      <th className="px-4 py-3.5">{language === 'ar' ? 'المركز (نص أصلي)' : 'Center (original text)'}</th>
                     </>
                   )}
                   {activeTab === 'furnaceCars' && (
@@ -1702,6 +2312,15 @@ export const MasterDataView: React.FC<MasterDataViewProps> = ({ onNavigate }) =>
                       <th className="px-4 py-3.5">{language === 'ar' ? 'نوع الحساب' : 'Account Type'}</th>
                     </>
                   )}
+                  {activeTab === 'stages' && (
+                    <>
+                      <th className="px-4 py-3.5">{language === 'ar' ? 'الاسم بالإنجليزية' : 'Name (EN)'}</th>
+                      <th className="px-4 py-3.5">{language === 'ar' ? 'المرحلة القديمة' : 'Legacy Stage'}</th>
+                      <th className="px-4 py-3.5">{language === 'ar' ? 'مركز التكلفة الافتراضي' : 'Default Cost Center'}</th>
+                      <th className="px-4 py-3.5">{language === 'ar' ? 'فئات المعدات' : 'Equipment Categories'}</th>
+                      <th className="px-4 py-3.5">{language === 'ar' ? 'الترتيب' : 'Order'}</th>
+                    </>
+                  )}
                   {currentCategory?.hierarchical && (
                     <>
                       <th className="px-4 py-3.5">{language === 'ar' ? 'الحساب الأصل' : 'Parent'}</th>
@@ -1709,6 +2328,10 @@ export const MasterDataView: React.FC<MasterDataViewProps> = ({ onNavigate }) =>
                     </>
                   )}
                   <th className="px-4 py-3.5">{language === 'ar' ? 'حالة التفعيل' : 'Active Status'}</th>
+                  {/* Whether this equipment participates in hierarchy filtering at all - after Active Status, matching the row cells. */}
+                  {isEquipmentTab && (
+                    <th className="px-4 py-3.5">{language === 'ar' ? 'التسلسل الهرمي' : 'Hierarchy'}</th>
+                  )}
                   <th className="px-4 py-3.5 text-center">{language === 'ar' ? 'الإجراءات' : 'Actions'}</th>
                 </tr>
               </thead>
@@ -1749,10 +2372,10 @@ export const MasterDataView: React.FC<MasterDataViewProps> = ({ onNavigate }) =>
                     ) : (
                       <>
                         <td className="px-4 py-3 font-mono font-bold text-slate-900">
-                          {item.code || '-'}
+                          {item.code || item.batchNumber || '-'}
                         </td>
                         <td className="px-4 py-3 font-bold text-slate-800">
-                          {item.name || item.carNumber || '-'}
+                          {item.name || item.nameAr || item.carNumber || item.bunkerNumber || item.notes || '-'}
                         </td>
                       </>
                     )}
@@ -1846,6 +2469,100 @@ export const MasterDataView: React.FC<MasterDataViewProps> = ({ onNavigate }) =>
                       </>
                     )}
 
+                    {/* Tube/Ball Mills and Rotary Kilns details */}
+                    {(activeTab === 'tubeBallMills' || activeTab === 'rotaryKilns') && (
+                      <>
+                        <td className="px-4 py-3 text-slate-600">
+                          {item.model || '-'}
+                          {activeTab === 'tubeBallMills' && (
+                            <span className="block text-[10px] text-slate-400">
+                              {item.millKind === 'TUBE' ? (language === 'ar' ? 'أنبوبية' : 'Tube') : item.millKind === 'BALL' ? (language === 'ar' ? 'كرات' : 'Ball') : (language === 'ar' ? 'النوع غير محدد' : 'Type not identified')}
+                            </span>
+                          )}
+                        </td>
+                        <td className="px-4 py-3">
+                          <Badge variant={item.status === 'maintenance' ? 'warning' : item.status === 'inactive' ? 'danger' : 'success'}>
+                            {item.status === 'maintenance'
+                              ? (language === 'ar' ? 'صيانة' : 'Maintenance')
+                              : item.status === 'inactive'
+                              ? (language === 'ar' ? 'معطل' : 'Inactive')
+                              : (language === 'ar' ? 'جاهز للعمل' : 'Ready')}
+                          </Badge>
+                        </td>
+                      </>
+                    )}
+
+                    {/* Job Reference details */}
+                    {activeTab === 'jobReferences' && (
+                      <>
+                        <td className="px-4 py-3 text-[11px] text-slate-600">{referenceLabel(referenceProducts, item.productId)}</td>
+                        <td className="px-4 py-3 text-[11px] text-slate-600">{referenceLabel(referenceCustomers, item.customerId)}</td>
+                        <td className="px-4 py-3">
+                          <Badge variant={item.status === 'ACTIVE' ? 'success' : item.status === 'CANCELLED' ? 'danger' : item.status === 'COMPLETED' ? 'amber' : 'warning'}>
+                            {item.status || '-'}
+                          </Badge>
+                        </td>
+                        <td className="px-4 py-3 font-mono text-[11px] text-slate-600">{item.sourceSystem || '-'}</td>
+                        <td className="px-4 py-3 text-[10px] text-slate-600 leading-relaxed">
+                          {item.logicalItemId || item.bomVersionId || item.routingVersionId || item.batchId ? (
+                            <>
+                              <div>{language === 'ar' ? 'الصنف' : 'Item'}: {item.logicalItemId ? logicalItemLabel(item.logicalItemId) : '-'}</div>
+                              <div>BOM: {bomVersionLabel(item.bomVersionId)}</div>
+                              <div>{language === 'ar' ? 'المسار' : 'Routing'}: {routingVersionLabel(item.routingVersionId)}</div>
+                              <div>{language === 'ar' ? 'الدفعة' : 'Batch'}: {batchLabel(item.batchId)}</div>
+                            </>
+                          ) : (
+                            <span className="text-slate-400">{language === 'ar' ? 'غير مُعد' : 'Not configured'}</span>
+                          )}
+                        </td>
+                      </>
+                    )}
+
+                    {/* Batch details */}
+                    {activeTab === 'batches' && (
+                      <>
+                        <td className="px-4 py-3 text-[11px] text-slate-600">{referenceLabel(referenceProducts, item.productId)}</td>
+                        <td className="px-4 py-3 font-mono text-[11px] text-slate-600">{referenceLabel(referenceJobs, item.jobReferenceId)}</td>
+                      </>
+                    )}
+
+                    {/* Bill of Materials details */}
+                    {activeTab === 'boms' && (
+                      <>
+                        <td className="px-4 py-3 text-[11px] text-slate-600">
+                          <span className="text-slate-400">{item.itemSource === 'materials' ? (language === 'ar' ? 'خامة: ' : 'Material: ') : (language === 'ar' ? 'منتج: ' : 'Product: ')}</span>
+                          {referenceLabel(item.itemSource === 'materials' ? referenceMaterials : referenceProducts, item.itemId)}
+                        </td>
+                        <td className="px-4 py-3 text-[11px] text-slate-600">
+                          {item.customerId ? referenceLabel(referenceCustomers, item.customerId) : (language === 'ar' ? 'قياسية (بدون عميل)' : 'Standard (no customer)')}
+                        </td>
+                        <td className="px-4 py-3">
+                          {item.isDefault ? <Badge variant="amber">{language === 'ar' ? 'افتراضي' : 'Default'}</Badge> : <span className="text-slate-400 text-[11px]">-</span>}
+                        </td>
+                      </>
+                    )}
+
+                    {/* Routing details */}
+                    {activeTab === 'routings' && (
+                      <>
+                        <td className="px-4 py-3 text-[11px] text-slate-600">{logicalItemLabel(item.logicalItemId)}</td>
+                        <td className="px-4 py-3 text-[11px] text-slate-600">
+                          {item.customerId ? referenceLabel(referenceCustomers, item.customerId) : (language === 'ar' ? 'قياسي (بدون عميل)' : 'Standard (no customer)')}
+                        </td>
+                        <td className="px-4 py-3">
+                          {item.isDefault ? <Badge variant="amber">{language === 'ar' ? 'افتراضي' : 'Default'}</Badge> : <span className="text-slate-400 text-[11px]">-</span>}
+                        </td>
+                      </>
+                    )}
+
+                    {/* Bunkers details - `center` is the original free text, shown as stored */}
+                    {activeTab === 'bunkers' && (
+                      <>
+                        <td className="px-4 py-3 font-mono font-bold text-slate-900">{item.bunkerNumber || '-'}</td>
+                        <td className="px-4 py-3 text-slate-600">{item.center || '-'}</td>
+                      </>
+                    )}
+
                     {/* Furnace Cars details */}
                     {activeTab === 'furnaceCars' && (
                       <>
@@ -1880,6 +2597,32 @@ export const MasterDataView: React.FC<MasterDataViewProps> = ({ onNavigate }) =>
                         <td className="px-4 py-3 text-slate-600">{item.accountType || '-'}</td>
                       </>
                     )}
+                    {activeTab === 'stages' && (
+                      <>
+                        <td className="px-4 py-3 text-slate-600" dir="ltr">{item.nameEn || '-'}</td>
+                        <td className="px-4 py-3">
+                          {/* Both concepts, for traceability: the legacy key stays authoritative for history. */}
+                          {item.legacyStageKey ? (
+                            <span className="text-[11px] text-slate-700">
+                              <span className="font-mono font-bold">{item.legacyStageKey}</span>
+                              <span className="text-slate-400"> · {LEGACY_STAGE_KEYS.includes(item.legacyStageKey) ? getStageDisplayName(item.legacyStageKey, language) : '?'}</span>
+                            </span>
+                          ) : (
+                            <span className="text-[11px] text-slate-400">{language === 'ar' ? 'بدون (عملية جديدة)' : 'None (new operation)'}</span>
+                          )}
+                        </td>
+                        <td className="px-4 py-3 text-[11px] text-slate-600">{item.hierarchyNodeId ? (hierarchyLabelFor(item.hierarchyNodeId) || item.hierarchyNodeId) : '-'}</td>
+                        <td className="px-4 py-3 text-[11px] text-slate-600">
+                          {Array.isArray(item.allowedEquipmentCategoryIds) && item.allowedEquipmentCategoryIds.length > 0
+                            ? item.allowedEquipmentCategoryIds.map((id: string) => {
+                                const category = getCategory(id);
+                                return category ? categoryLabel(category, language) : id;
+                              }).join('، ')
+                            : '-'}
+                        </td>
+                        <td className="px-4 py-3 font-mono text-slate-600">{item.defaultOrder ?? '-'}</td>
+                      </>
+                    )}
                     {currentCategory?.hierarchical && (
                       <>
                         <td className="px-4 py-3 font-mono text-slate-500" dir="ltr">
@@ -1903,7 +2646,8 @@ export const MasterDataView: React.FC<MasterDataViewProps> = ({ onNavigate }) =>
                       <button
                         type="button"
                         onClick={() => handleToggleStatus(item)}
-                        className="cursor-pointer"
+                        disabled={(activeTab === 'stages' || isRetireOnlyTab) && !canImportMasterData}
+                        className="cursor-pointer disabled:cursor-default"
                         title={item.active !== false ? (language === 'ar' ? 'تعطيل السجل' : 'Deactivate record') : (language === 'ar' ? 'تفعيل السجل' : 'Activate record')}
                       >
                         {item.active !== false ? (
@@ -1935,22 +2679,51 @@ export const MasterDataView: React.FC<MasterDataViewProps> = ({ onNavigate }) =>
                     {/* Actions */}
                     <td className="px-4 py-3 text-center">
                       <div className="flex items-center justify-center gap-1.5">
+                        {/* A routing's versions and steps - readable by everyone who can see the tab. */}
+                        {activeTab === 'routings' && (
+                          <button
+                            type="button"
+                            onClick={() => setRoutingForVersions(item)}
+                            className="px-2 h-7 rounded-lg flex items-center gap-1 text-[11px] font-bold text-indigo-700 bg-indigo-50 hover:bg-indigo-100 transition-colors"
+                            title={language === 'ar' ? 'الإصدارات والخطوات' : 'Versions and steps'}
+                          >
+                            <Route className="w-3.5 h-3.5" />
+                            <span>{language === 'ar' ? 'الإصدارات' : 'Versions'}</span>
+                          </button>
+                        )}
+                        {/* A BOM's versions and components - readable by everyone who can see the tab. */}
+                        {activeTab === 'boms' && (
+                          <button
+                            type="button"
+                            onClick={() => setBomForVersions(item)}
+                            className="px-2 h-7 rounded-lg flex items-center gap-1 text-[11px] font-bold text-indigo-700 bg-indigo-50 hover:bg-indigo-100 transition-colors"
+                            title={language === 'ar' ? 'الإصدارات والمكونات' : 'Versions and components'}
+                          >
+                            <ListTree className="w-3.5 h-3.5" />
+                            <span>{language === 'ar' ? 'الإصدارات' : 'Versions'}</span>
+                          </button>
+                        )}
+                        {(activeTab !== 'stages' || canImportMasterData) && (
                         <button
                           type="button"
                           onClick={() => handleOpenEdit(item)}
-                          className="w-7 h-7 rounded-lg flex items-center justify-center text-slate-500 hover:text-slate-900 hover:bg-slate-100 transition-colors"
+                          className={`w-7 h-7 rounded-lg ${isRetireOnlyTab && !canImportMasterData ? 'hidden' : 'flex'} items-center justify-center text-slate-500 hover:text-slate-900 hover:bg-slate-100 transition-colors`}
                           title={language === 'ar' ? 'تعديل' : 'Edit'}
                         >
                           <Edit className="w-3.5 h-3.5" />
                         </button>
+                        )}
+                        {/* Operations, and the equipment completed in Step 1D (hidden by class), are retired (inactive), never deleted. */}
+                        {activeTab !== 'stages' && (
                         <button
                           type="button"
                           onClick={() => setDeleteConfirmItem(item)}
-                          className="w-7 h-7 rounded-lg flex items-center justify-center text-slate-400 hover:text-rose-600 hover:bg-rose-50 transition-colors"
+                          className={`w-7 h-7 rounded-lg ${isRetireOnlyTab ? 'hidden' : 'flex'} items-center justify-center text-slate-400 hover:text-rose-600 hover:bg-rose-50 transition-colors`}
                           title={language === 'ar' ? 'حذف' : 'Delete'}
                         >
                           <Trash2 className="w-3.5 h-3.5" />
                         </button>
+                        )}
                       </div>
                     </td>
                   </tr>
@@ -2262,15 +3035,19 @@ export const MasterDataView: React.FC<MasterDataViewProps> = ({ onNavigate }) =>
           )}
 
           {/* Common Code & Name for Other Entities */}
-          {activeTab !== 'products' && activeTab !== 'productTypes' && (
+          {activeTab !== 'products' && activeTab !== 'productTypes' && activeTab !== 'batches' && (
             <>
               <div>
                 <label className="block text-xs font-bold text-slate-700 mb-1">
-                  {language === 'ar' ? 'الكود التعريفي *' : 'Identifier Code *'}
+                  {activeTab === 'jobReferences'
+                    ? (language === 'ar' ? 'رقم أمر الشغل *' : 'Job Reference Code *')
+                    : activeTab === 'bunkers'
+                    ? (language === 'ar' ? 'الكود التعريفي (اختياري)' : 'Identifier Code (optional)')
+                    : (language === 'ar' ? 'الكود التعريفي *' : 'Identifier Code *')}
                 </label>
                 <input
                   type="text"
-                  required
+                  required={activeTab !== 'bunkers'}
                   value={formData.code || ''}
                   onChange={(e) => setFormData({ ...formData, code: e.target.value })}
                   placeholder={language === 'ar' ? 'مثال: EMP-101 / PRESS-01' : 'e.g. EMP-101 / PRESS-01'}
@@ -2278,14 +3055,16 @@ export const MasterDataView: React.FC<MasterDataViewProps> = ({ onNavigate }) =>
                 />
               </div>
 
-              {activeTab !== 'furnaceCars' && (
+              {activeTab !== 'furnaceCars' && activeTab !== 'stages' && activeTab !== 'jobReferences' && (
                 <div>
                   <label className="block text-xs font-bold text-slate-700 mb-1">
-                    {language === 'ar' ? 'الاسم / الوصف *' : 'Name / Description *'}
+                    {activeTab === 'bunkers'
+                      ? (language === 'ar' ? 'الاسم (اختياري)' : 'Name (optional)')
+                      : (language === 'ar' ? 'الاسم / الوصف *' : 'Name / Description *')}
                   </label>
                   <input
                     type="text"
-                    required
+                    required={activeTab !== 'bunkers'}
                     value={formData.name || ''}
                     onChange={(e) => setFormData({ ...formData, name: e.target.value })}
                     placeholder={language === 'ar' ? 'أدخل الاسم' : 'Enter the name'}
@@ -2396,6 +3175,113 @@ export const MasterDataView: React.FC<MasterDataViewProps> = ({ onNavigate }) =>
                       ? 'اختيار عقدة أب في التصفية سيشمل هذه المعدة تلقائيًا. "غير مرتبط" يبقي المعدة صالحة لكن خارج تصفية التسلسل.'
                       : 'Selecting an ancestor node in a filter will include this equipment automatically. "Not linked" keeps the equipment valid but outside hierarchy filtering.')}
               </p>
+            </div>
+          )}
+
+          {/*
+            Operation Master fields. Simple on purpose: no routing, BOM or sync
+            controls. The legacy stage only records the correspondence - it never
+            changes where historical records are stored.
+          */}
+          {activeTab === 'stages' && (
+            <div id="operation-master-form" className="space-y-3">
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 mb-1">{language === 'ar' ? 'الاسم بالعربية *' : 'Name in Arabic *'}</label>
+                  <input
+                    type="text"
+                    required
+                    value={formData.nameAr || ''}
+                    onChange={(e) => setFormData({ ...formData, nameAr: e.target.value })}
+                    placeholder={language === 'ar' ? 'مثال: الفرن الدوار' : 'e.g. الفرن الدوار'}
+                    className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3.5 py-2 text-xs"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 mb-1">{language === 'ar' ? 'الاسم بالإنجليزية' : 'Name in English'}</label>
+                  <input
+                    type="text"
+                    dir="ltr"
+                    value={formData.nameEn || ''}
+                    onChange={(e) => setFormData({ ...formData, nameEn: e.target.value })}
+                    placeholder="e.g. Rotary Kiln"
+                    className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3.5 py-2 text-xs"
+                  />
+                </div>
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 mb-1">{language === 'ar' ? 'المرحلة القديمة المقابلة' : 'Legacy Stage'}</label>
+                  <select
+                    id="operation-legacy-stage"
+                    value={formData.legacyStageKey || ''}
+                    onChange={(e) => setFormData({ ...formData, legacyStageKey: e.target.value })}
+                    className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3.5 py-2 text-xs"
+                  >
+                    <option value="">{language === 'ar' ? '-- بدون (عملية جديدة) --' : '-- None (new operation) --'}</option>
+                    {LEGACY_STAGE_KEYS.map((key) => (
+                      <option key={key} value={key}>{key} · {getStageDisplayName(key, language)}</option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 mb-1">{language === 'ar' ? 'الترتيب الافتراضي' : 'Default Order'}</label>
+                  <input
+                    type="number"
+                    min={0}
+                    step={1}
+                    value={formData.defaultOrder ?? ''}
+                    onChange={(e) => setFormData({ ...formData, defaultOrder: e.target.value })}
+                    className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3.5 py-2 text-xs"
+                  />
+                </div>
+              </div>
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1">{language === 'ar' ? 'مركز التكلفة الافتراضي' : 'Default Cost Center'}</label>
+                <select
+                  id="operation-hierarchy-node"
+                  value={formData.hierarchyNodeId || ''}
+                  onChange={(e) => setFormData({ ...formData, hierarchyNodeId: e.target.value })}
+                  className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3.5 py-2 text-xs"
+                >
+                  <option value="">{language === 'ar' ? '-- بدون --' : '-- None --'}</option>
+                  {hierarchyOptions.map((opt) => (
+                    <option key={opt.id} value={opt.id}>{opt.label}</option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <span className="block text-xs font-bold text-slate-700 mb-1">{language === 'ar' ? 'فئات المعدات المسموح بها' : 'Allowed Equipment Categories'}</span>
+                <div id="operation-equipment-categories" className="flex flex-wrap gap-3">
+                  {OPERATION_EQUIPMENT_CATEGORY_IDS.map((id) => {
+                    const category = getCategory(id);
+                    const selected: string[] = Array.isArray(formData.allowedEquipmentCategoryIds) ? formData.allowedEquipmentCategoryIds : [];
+                    return (
+                      <label key={id} className="flex items-center gap-1.5 text-xs text-slate-700 cursor-pointer">
+                        <input
+                          type="checkbox"
+                          className="w-3.5 h-3.5 accent-amber-500 cursor-pointer"
+                          checked={selected.includes(id)}
+                          onChange={() => setFormData({
+                            ...formData,
+                            allowedEquipmentCategoryIds: selected.includes(id) ? selected.filter((x) => x !== id) : [...selected, id],
+                          })}
+                        />
+                        {category ? categoryLabel(category, language) : id}
+                      </label>
+                    );
+                  })}
+                </div>
+              </div>
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1">{language === 'ar' ? 'الوصف' : 'Description'}</label>
+                <textarea
+                  rows={2}
+                  value={formData.description || ''}
+                  onChange={(e) => setFormData({ ...formData, description: e.target.value })}
+                  className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3.5 py-2 text-xs"
+                />
+              </div>
             </div>
           )}
 
@@ -2521,6 +3407,445 @@ export const MasterDataView: React.FC<MasterDataViewProps> = ({ onNavigate }) =>
                     </option>
                   ))}
                 </select>
+              </div>
+            </div>
+          )}
+
+          {/*
+            Equipment completed in Phase 1 Step 1D. No routing, operation or
+            sync fields: the record is the physical asset; its optional
+            hierarchy link is the shared selector above.
+          */}
+          {(activeTab === 'tubeBallMills' || activeTab === 'rotaryKilns') && (
+            <div id="equipment-master-form" className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1">{language === 'ar' ? 'الموديل' : 'Model'}</label>
+                <input
+                  type="text"
+                  value={formData.model || ''}
+                  onChange={(e) => setFormData({ ...formData, model: e.target.value })}
+                  className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3.5 py-2 text-xs"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1">{language === 'ar' ? 'الحالة التشغيلية' : 'Operating Status'}</label>
+                <select
+                  value={formData.status || 'active'}
+                  onChange={(e) => setFormData({ ...formData, status: e.target.value })}
+                  className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3.5 py-2 text-xs"
+                >
+                  <option value="active">{language === 'ar' ? 'جاهز للعمل' : 'Ready'}</option>
+                  <option value="maintenance">{language === 'ar' ? 'صيانة' : 'Maintenance'}</option>
+                  <option value="inactive">{language === 'ar' ? 'معطل' : 'Inactive'}</option>
+                </select>
+              </div>
+              {activeTab === 'tubeBallMills' && (
+                <div className="col-span-2">
+                  {/* Phase 1 Step 8C-5: Tube and Ball mills are distinct types; unset = not identified. */}
+                  <label className="block text-xs font-bold text-slate-700 mb-1">{language === 'ar' ? 'نوع الطاحونة' : 'Mill type'}</label>
+                  <select
+                    id="tube-ball-mill-kind"
+                    value={formData.millKind || ''}
+                    onChange={(e) => setFormData({ ...formData, millKind: e.target.value || null })}
+                    className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3.5 py-2 text-xs"
+                  >
+                    <option value="">{language === 'ar' ? 'غير محدد' : 'Not identified'}</option>
+                    <option value="TUBE">{language === 'ar' ? 'طاحونة أنبوبية' : 'Tube mill'}</option>
+                    <option value="BALL">{language === 'ar' ? 'طاحونة كرات' : 'Ball mill'}</option>
+                  </select>
+                </div>
+              )}
+              {activeTab === 'rotaryKilns' && (
+                <div className="col-span-2">
+                  <label className="block text-xs font-bold text-slate-700 mb-1">{language === 'ar' ? 'الوصف' : 'Description'}</label>
+                  <textarea
+                    value={formData.description || ''}
+                    onChange={(e) => setFormData({ ...formData, description: e.target.value })}
+                    rows={2}
+                    className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3.5 py-2 text-xs"
+                  />
+                </div>
+              )}
+            </div>
+          )}
+
+          {/*
+            Job Reference (Phase 1 Step 1E). A reference, not a manufacturing
+            order: no routing, quantities or schedule. External (e.g. Odoo)
+            links are external references added by a later integration step -
+            they are not typed in here.
+          */}
+          {activeTab === 'jobReferences' && (
+            <div id="job-reference-form" className="space-y-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <SmartEntitySelect
+                  id="job-reference-product"
+                  label={language === 'ar' ? 'المنتج (اختياري)' : 'Product (optional)'}
+                  entityType="product"
+                  allowAddNew={false}
+                  options={referenceProductOptions}
+                  value={formData.productId || null}
+                  onChange={(id) => setFormData({ ...formData, productId: id })}
+                />
+                <SmartEntitySelect
+                  id="job-reference-customer"
+                  label={language === 'ar' ? 'العميل (اختياري)' : 'Customer (optional)'}
+                  entityType="customer"
+                  allowAddNew={false}
+                  options={referenceCustomerOptions}
+                  value={formData.customerId || null}
+                  onChange={(id) => setFormData({ ...formData, customerId: id })}
+                />
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 mb-1">{language === 'ar' ? 'الحالة *' : 'Status *'}</label>
+                  <select
+                    id="job-reference-status"
+                    value={formData.status || 'ACTIVE'}
+                    onChange={(e) => setFormData({ ...formData, status: e.target.value })}
+                    className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3.5 py-2 text-xs"
+                  >
+                    {JOB_REFERENCE_STATUSES.map((st) => (
+                      <option key={st} value={st}>{st}</option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 mb-1">{language === 'ar' ? 'المصدر *' : 'Source *'}</label>
+                  <input
+                    id="job-reference-source"
+                    type="text"
+                    required
+                    dir="ltr"
+                    value={formData.sourceSystem || ''}
+                    onChange={(e) => setFormData({ ...formData, sourceSystem: e.target.value })}
+                    placeholder="asfour"
+                    className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3.5 py-2 text-xs font-mono"
+                  />
+                </div>
+              </div>
+
+              {/*
+                Execution setup (Phase 1 Step 4). Each selector lists only what is
+                compatible with the choices above it; a stored choice that is no
+                longer listed stays visible and marked, never replaced. "Use
+                Default" stores the resolved version id. Nothing executes here.
+              */}
+              <div id="job-execution-setup" className="border border-indigo-200 bg-indigo-50/40 rounded-xl p-3 space-y-3">
+                <div className="flex items-center justify-between gap-2">
+                  <p className="text-xs font-black text-indigo-900">{language === 'ar' ? 'إعداد التنفيذ' : 'Execution setup'}</p>
+                  {jobSetupLocked && (
+                    <span className="text-[10px] font-bold text-slate-600">{language === 'ar' ? 'مغلق - أمر الشغل مكتمل أو ملغى' : 'Locked - the job is completed or cancelled'}</span>
+                  )}
+                </div>
+                <SmartEntitySelect
+                  id="job-logical-item"
+                  label={language === 'ar' ? 'الصنف المنطقي' : 'Logical item'}
+                  entityType="product"
+                  allowAddNew={false}
+                  disabled={jobSetupLocked}
+                  options={logicalItemOptions}
+                  value={formData.logicalItemId || null}
+                  onChange={(id) => { setJobSetupNotice(null); setFormData({ ...formData, logicalItemId: id }); }}
+                />
+                {[
+                  {
+                    key: 'bomVersionId', id: 'job-bom-version', labelAr: 'إصدار قائمة المواد', labelEn: 'BOM version',
+                    choices: jobBomChoices.map((c) => String(c.version.id)), label: bomVersionLabel,
+                    useDefault: () => resolveDefaultBomVersion(jobSetupScope, jobSetup.boms ?? [], jobSetup.bomVersions ?? [], jobSetup.logicalItems ?? []),
+                    defaultAr: 'استخدام قائمة المواد الافتراضية', defaultEn: 'Use Default BOM',
+                  },
+                  {
+                    key: 'routingVersionId', id: 'job-routing-version', labelAr: 'إصدار المسار', labelEn: 'Routing version',
+                    choices: jobRoutingChoices.map((c) => String(c.version.id)), label: routingVersionLabel,
+                    useDefault: () => resolveDefaultRoutingVersion(jobSetupScope, jobSetup.routings ?? [], jobSetup.routingVersions ?? []),
+                    defaultAr: 'استخدام المسار الافتراضي', defaultEn: 'Use Default Routing',
+                  },
+                ].map((sel) => {
+                  const current = formData[sel.key] ? String(formData[sel.key]) : '';
+                  const stale = current && !sel.choices.includes(current);
+                  return (
+                    <div key={sel.key}>
+                      <label className="block text-xs font-bold text-slate-700 mb-1">{language === 'ar' ? sel.labelAr : sel.labelEn}</label>
+                      <div className="flex items-center gap-2">
+                        <select
+                          id={sel.id}
+                          value={current}
+                          disabled={jobSetupLocked || !formData.logicalItemId}
+                          onChange={(e) => { setJobSetupNotice(null); setFormData({ ...formData, [sel.key]: e.target.value || null }); }}
+                          className="flex-1 bg-white border border-slate-200 rounded-xl px-3 py-2 text-xs disabled:opacity-60"
+                        >
+                          <option value="">{language === 'ar' ? 'بدون' : 'None'}</option>
+                          {sel.choices.map((vid) => <option key={vid} value={vid}>{sel.label(vid)}</option>)}
+                          {stale && <option value={current}>{sel.label(current)} {language === 'ar' ? '(غير متوافق)' : '(not compatible)'}</option>}
+                        </select>
+                        <button
+                          type="button"
+                          disabled={jobSetupLocked || !formData.logicalItemId}
+                          onClick={() => {
+                            const resolved = sel.useDefault();
+                            if (resolved.versionId) {
+                              setJobSetupNotice(null);
+                              setFormData({ ...formData, [sel.key]: resolved.versionId });
+                            } else {
+                              setJobSetupNotice(language === 'ar' ? resolved.messageAr : resolved.messageEn);
+                            }
+                          }}
+                          className="shrink-0 px-2.5 py-2 text-[11px] font-bold text-indigo-800 bg-indigo-100 hover:bg-indigo-200 rounded-xl cursor-pointer disabled:opacity-50"
+                        >
+                          {language === 'ar' ? sel.defaultAr : sel.defaultEn}
+                        </button>
+                      </div>
+                      {stale && <p className="text-[10px] font-bold text-rose-700 mt-1">{language === 'ar' ? 'الاختيار الحالي غير متوافق مع الصنف أو العميل - اختر إصدارًا متوافقًا أو اتركه كما هو إن لم يتغير.' : 'The current choice is not compatible with the item or customer - choose a compatible version, or leave it if unchanged.'}</p>}
+                    </div>
+                  );
+                })}
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 mb-1">{language === 'ar' ? 'الدفعة' : 'Batch'}</label>
+                  <select
+                    id="job-batch"
+                    value={formData.batchId || ''}
+                    disabled={jobSetupLocked || !formData.logicalItemId}
+                    onChange={(e) => setFormData({ ...formData, batchId: e.target.value || null })}
+                    className="w-full bg-white border border-slate-200 rounded-xl px-3 py-2 text-xs disabled:opacity-60"
+                  >
+                    <option value="">{language === 'ar' ? 'بدون' : 'None'}</option>
+                    {jobBatchChoices.map((b) => <option key={b.id} value={b.id}>{batchLabel(b.id)}</option>)}
+                    {formData.batchId && !jobBatchChoices.some((b) => b.id === formData.batchId) && (
+                      <option value={formData.batchId}>{batchLabel(formData.batchId)} {language === 'ar' ? '(غير متوافقة)' : '(not compatible)'}</option>
+                    )}
+                  </select>
+                </div>
+                {jobSetupNotice && <p className="text-[11px] font-bold text-amber-800">{jobSetupNotice}</p>}
+                <div id="job-execution-summary" className="bg-white border border-slate-200 rounded-lg px-3 py-2 text-[11px] text-slate-700 space-y-0.5">
+                  <div><span className="font-bold">{language === 'ar' ? 'الصنف المنطقي' : 'Logical item'}:</span> {formData.logicalItemId ? logicalItemLabel(formData.logicalItemId) : '-'}</div>
+                  <div><span className="font-bold">BOM:</span> {bomVersionLabel(formData.bomVersionId)}</div>
+                  <div><span className="font-bold">{language === 'ar' ? 'المسار' : 'Routing'}:</span> {routingVersionLabel(formData.routingVersionId)}</div>
+                  <div><span className="font-bold">{language === 'ar' ? 'الدفعة' : 'Batch'}:</span> {batchLabel(formData.batchId)}</div>
+                </div>
+              </div>
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1">{language === 'ar' ? 'ملاحظات' : 'Notes'}</label>
+                <textarea
+                  value={formData.notes || ''}
+                  onChange={(e) => setFormData({ ...formData, notes: e.target.value })}
+                  rows={2}
+                  className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3.5 py-2 text-xs"
+                />
+              </div>
+              <p className="text-[10px] text-slate-500">
+                {language === 'ar'
+                  ? 'رقم أمر الشغل مرجع ASFOUR ويمكن أن يكون رقمًا واردًا من العميل أو من نظام خارجي. أرقام الطلبات القديمة في سجلات الإنتاج لا تتغير.'
+                  : 'The job reference code is the ASFOUR reference and may be a number supplied by a customer or an external system. Legacy order numbers on production records are unchanged.'}
+              </p>
+            </div>
+          )}
+
+          {/*
+            Routing header (Phase 1 Step 3). The logical item it belongs to (only
+            ACTIVE logical items are offered - an item without one is registered
+            first in the Products & Materials Overlap Review), an optional
+            customer variant and the default flag. Versions and steps are
+            managed from the row's Versions button.
+          */}
+          {activeTab === 'routings' && (
+            <div id="routing-form" className="space-y-3">
+              <SmartEntitySelect
+                id="routing-logical-item"
+                label={language === 'ar' ? 'الصنف المنطقي *' : 'Logical item *'}
+                entityType="product"
+                allowAddNew={false}
+                required
+                options={logicalItemOptions}
+                value={formData.logicalItemId || null}
+                onChange={(id) => setFormData({ ...formData, logicalItemId: id })}
+                helperText={language === 'ar'
+                  ? 'الأصناف بدون هوية منطقية لا تظهر هنا - سجّلها أو اربطها أولًا من «مراجعة تداخل المنتجات والخامات».'
+                  : 'Items without a logical identity are not listed - register or map them first in the Products & Materials Overlap Review.'}
+              />
+              <SmartEntitySelect
+                id="routing-customer"
+                label={language === 'ar' ? 'العميل (اختياري - بدون عميل = المسار القياسي)' : 'Customer (optional - none = the standard routing)'}
+                entityType="customer"
+                allowAddNew={false}
+                options={referenceCustomerOptions}
+                value={formData.customerId || null}
+                onChange={(id) => setFormData({ ...formData, customerId: id })}
+              />
+              <label className="flex items-center gap-2 text-xs font-bold text-slate-700 cursor-pointer">
+                <input
+                  id="routing-is-default"
+                  type="checkbox"
+                  checked={formData.isDefault === true}
+                  onChange={(e) => setFormData({ ...formData, isDefault: e.target.checked })}
+                  className="w-3.5 h-3.5 accent-amber-500"
+                />
+                {language === 'ar' ? 'المسار الافتراضي لهذا الصنف المنطقي ولهذا العميل' : 'Default routing for this logical item and customer'}
+              </label>
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1">{language === 'ar' ? 'ملاحظات' : 'Notes'}</label>
+                <textarea
+                  value={formData.notes || ''}
+                  onChange={(e) => setFormData({ ...formData, notes: e.target.value })}
+                  rows={2}
+                  className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3.5 py-2 text-xs"
+                />
+              </div>
+            </div>
+          )}
+
+          {/*
+            Bill of Materials header (Phase 1 Step 2). Which item it makes, an
+            optional customer variant and the default flag. Versions and their
+            components are managed from the row's Versions button.
+          */}
+          {activeTab === 'boms' && (
+            <div id="bom-form" className="space-y-3">
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 mb-1">{language === 'ar' ? 'مصدر الصنف *' : 'Item source *'}</label>
+                  <select
+                    id="bom-item-source"
+                    value={formData.itemSource || 'products'}
+                    onChange={(e) => setFormData({ ...formData, itemSource: e.target.value, itemId: null })}
+                    className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3.5 py-2 text-xs"
+                  >
+                    {BOM_ITEM_SOURCES.map((src) => (
+                      <option key={src} value={src}>{src === 'products' ? (language === 'ar' ? 'منتج' : 'Product') : (language === 'ar' ? 'خامة' : 'Material')}</option>
+                    ))}
+                  </select>
+                </div>
+                <div className="sm:col-span-2">
+                  <SmartEntitySelect
+                    id="bom-item"
+                    label={language === 'ar' ? 'الصنف الذي تُصنعه القائمة *' : 'Item this BOM makes *'}
+                    entityType={formData.itemSource === 'materials' ? 'material' : 'product'}
+                    allowAddNew={false}
+                    required
+                    options={formData.itemSource === 'materials' ? referenceMaterialOptions : referenceProductOptions}
+                    value={formData.itemId || null}
+                    onChange={(id) => setFormData({ ...formData, itemId: id })}
+                  />
+                </div>
+              </div>
+              <SmartEntitySelect
+                id="bom-customer"
+                label={language === 'ar' ? 'العميل (اختياري - بدون عميل = القائمة القياسية)' : 'Customer (optional - none = the standard BOM)'}
+                entityType="customer"
+                allowAddNew={false}
+                options={referenceCustomerOptions}
+                value={formData.customerId || null}
+                onChange={(id) => setFormData({ ...formData, customerId: id })}
+              />
+              <label className="flex items-center gap-2 text-xs font-bold text-slate-700 cursor-pointer">
+                <input
+                  id="bom-is-default"
+                  type="checkbox"
+                  checked={formData.isDefault === true}
+                  onChange={(e) => setFormData({ ...formData, isDefault: e.target.checked })}
+                  className="w-3.5 h-3.5 accent-amber-500"
+                />
+                {language === 'ar' ? 'القائمة الافتراضية لهذا الصنف ولهذا العميل' : 'Default BOM for this item and customer'}
+              </label>
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1">{language === 'ar' ? 'ملاحظات' : 'Notes'}</label>
+                <textarea
+                  value={formData.notes || ''}
+                  onChange={(e) => setFormData({ ...formData, notes: e.target.value })}
+                  rows={2}
+                  className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3.5 py-2 text-xs"
+                />
+              </div>
+            </div>
+          )}
+
+          {/* Batch (Phase 1 Step 1E) - identity only; the number is typed by the user and is never part of a product code. */}
+          {activeTab === 'batches' && (
+            <div id="batch-form" className="space-y-3">
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1">{language === 'ar' ? 'رقم الدفعة *' : 'Batch Number *'}</label>
+                <input
+                  id="batch-number"
+                  type="text"
+                  required
+                  value={formData.batchNumber || ''}
+                  onChange={(e) => setFormData({ ...formData, batchNumber: e.target.value })}
+                  placeholder={language === 'ar' ? 'مثال: B2026-001' : 'e.g. B2026-001'}
+                  className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3.5 py-2.5 text-xs font-mono"
+                />
+                <p className="text-[10px] text-slate-500 mt-1">
+                  {language === 'ar'
+                    ? 'يُرفض فقط تكرار نفس رقم الدفعة لنفس المنتج ونفس أمر الشغل.'
+                    : 'Only the same batch number for the same product and the same job reference is refused.'}
+                </p>
+              </div>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <SmartEntitySelect
+                  id="batch-product"
+                  label={language === 'ar' ? 'المنتج (اختياري)' : 'Product (optional)'}
+                  entityType="product"
+                  allowAddNew={false}
+                  options={referenceProductOptions}
+                  value={formData.productId || null}
+                  onChange={(id) => setFormData({ ...formData, productId: id })}
+                />
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 mb-1">{language === 'ar' ? 'أمر الشغل (اختياري)' : 'Job Reference (optional)'}</label>
+                  <select
+                    id="batch-job-reference"
+                    value={formData.jobReferenceId || ''}
+                    onChange={(e) => setFormData({ ...formData, jobReferenceId: e.target.value || null })}
+                    className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3.5 py-2 text-xs"
+                  >
+                    <option value="">{language === 'ar' ? 'بدون' : 'None'}</option>
+                    {referenceJobs.map((j) => (
+                      <option key={j.id} value={j.id}>{j.code}{j.active === false ? (language === 'ar' ? ' (معطل)' : ' (inactive)') : ''}</option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1">{language === 'ar' ? 'ملاحظات' : 'Notes'}</label>
+                <textarea
+                  value={formData.notes || ''}
+                  onChange={(e) => setFormData({ ...formData, notes: e.target.value })}
+                  rows={2}
+                  className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3.5 py-2 text-xs"
+                />
+              </div>
+            </div>
+          )}
+
+          {activeTab === 'bunkers' && (
+            <div id="equipment-bunker-form" className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1">{language === 'ar' ? 'رقم البنكر *' : 'Bunker Number *'}</label>
+                <input
+                  type="text"
+                  required
+                  value={formData.bunkerNumber || ''}
+                  onChange={(e) => setFormData({ ...formData, bunkerNumber: e.target.value })}
+                  className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3.5 py-2 text-xs"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1">{language === 'ar' ? 'المركز (نص)' : 'Center (text)'}</label>
+                <input
+                  type="text"
+                  value={formData.center || ''}
+                  onChange={(e) => setFormData({ ...formData, center: e.target.value })}
+                  className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3.5 py-2 text-xs"
+                />
+              </div>
+              <div className="col-span-2">
+                <label className="block text-xs font-bold text-slate-700 mb-1">{language === 'ar' ? 'ملاحظات' : 'Notes'}</label>
+                <textarea
+                  value={formData.notes || ''}
+                  onChange={(e) => setFormData({ ...formData, notes: e.target.value })}
+                  rows={2}
+                  className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3.5 py-2 text-xs"
+                />
               </div>
             </div>
           )}
@@ -2851,6 +4176,39 @@ export const MasterDataView: React.FC<MasterDataViewProps> = ({ onNavigate }) =>
         onClose={() => setIsQualityReportOpen(false)}
       />
 
+      <ItemOverlapReviewModal
+        isOpen={isItemOverlapOpen}
+        onClose={() => setIsItemOverlapOpen(false)}
+        canEdit={canImportMasterData}
+      />
+
+      <OperationSeedModal
+        isOpen={isOperationSeedOpen}
+        onClose={() => setIsOperationSeedOpen(false)}
+        canSeed={canImportMasterData}
+      />
+
+      <RoutingVersionsModal
+        isOpen={routingForVersions != null}
+        onClose={() => setRoutingForVersions(null)}
+        routing={routingForVersions}
+        canEdit={canImportMasterData}
+        itemLabel={routingForVersions ? logicalItemLabel(routingForVersions.logicalItemId) : ''}
+        operations={referenceOperations}
+        hierarchyIndex={hierarchyNodes.length ? linkHierarchyIndex : null}
+        hierarchyOptions={hierarchyOptions}
+        equipment={routingEquipment}
+      />
+
+      <BomVersionsModal
+        isOpen={bomForVersions != null}
+        onClose={() => setBomForVersions(null)}
+        bom={bomForVersions}
+        canEdit={canImportMasterData}
+        products={referenceProducts}
+        materials={referenceMaterials}
+      />
+
       {/* Cost Center Hierarchy - a separate, additive Master Data section (see the pseudo-tab button above); entirely local/Firestore-independent browsing except for the manually-gated Phase 4B execution action inside it */}
       {/*
         The dedicated Financial Accounts importer. Rendered here, inside Master
@@ -2895,8 +4253,8 @@ export const MasterDataView: React.FC<MasterDataViewProps> = ({ onNavigate }) =>
         onClose={() => setIsReconcileOpen(false)}
         title={language === 'ar' ? 'مطابقة الأكواد مع التسلسل الهرمي' : 'Reconcile Codes with Hierarchy'}
         subtitle={language === 'ar'
-          ? 'مطابقة أكواد المعدات القديمة (المكابس والأفران والطواحين) مع عقد التسلسل الهرمي - عرض فقط، لا يتم تعديل أي بيانات'
-          : 'Matches legacy equipment codes (presses, furnaces, mills) against hierarchy nodes - read-only, nothing is modified'}
+          ? 'مطابقة أكواد المعدات (المكابس والأفران والطواحين الصينية وطواحين الأنابيب والكرات والأفران الدوارة) مع عقد التسلسل الهرمي - عرض فقط، لا يتم تعديل أي بيانات'
+          : 'Matches equipment codes (presses, furnaces, Chinese mills, tube & ball mills, rotary kilns) against hierarchy nodes - read-only, nothing is modified'}
         maxWidth="4xl"
       >
         <div className="space-y-4" dir={isRtl ? 'rtl' : 'ltr'}>
@@ -3064,6 +4422,13 @@ export const MasterDataView: React.FC<MasterDataViewProps> = ({ onNavigate }) =>
       <CostCenterHierarchyPanel
         isOpen={isHierarchyPanelOpen}
         onClose={() => setIsHierarchyPanelOpen(false)}
+      />
+
+      {/* Costing setup (Phase 1 Step 8C) - periods and allocation rules; nothing is calculated */}
+      <CostingSetupPanel
+        isOpen={isCostingSetupOpen}
+        onClose={() => setIsCostingSetupOpen(false)}
+        canEdit={canImportMasterData}
       />
     </div>
   );

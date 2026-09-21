@@ -52,6 +52,17 @@ import {
 } from '../../services/dashboardPeriodPure';
 import { todayLocalIso, resolveNamedMonthRange } from '../../assistant/tools/dateRangeResolver';
 import { filterDataReviewRecords } from '../../services/dataReviewSearchPure';
+// Phase 1 Step 7: read-only standard vs actual quantity variance in the record modal.
+import { QuantityVariancePanel } from './QuantityVariancePanel';
+// Phase 1 Step 8C: read-only job / batch / consumption / output / genealogy traceability.
+import { ProductionTraceabilityPanel } from './ProductionTraceabilityPanel';
+// Phase 1 Step 8C-2: audited correction of references, consumption and outputs after saving.
+import { RecordCorrectionPanel } from './RecordCorrectionPanel';
+import { MASTER_DATA_COLLECTIONS, fetchMasterData } from '../../services/masterDataService';
+import { subJobsOf } from '../../services/jobBatchPure';
+import { listCostingPeriods } from '../../services/costingSetupService';
+// Phase 1 Step 8: read-only unit-of-measure readiness for the records on screen.
+import { UomReadinessPanel } from './UomReadinessPanel';
 import {
   MASTER_DATA_CATEGORIES,
   normaliseSelection,
@@ -156,6 +167,31 @@ export const DataReviewView: React.FC = () => {
    * missing" - and a filter that silently matched nothing would look like the
    * category genuinely having no production, which would be a lie.
    */
+  /*
+   * Phase 1 Step 8C-2 - investigating a period: Period -> Job (with its
+   * sub-jobs) -> Batch -> Operation, beside the existing stage and status
+   * filters. The lists come from the existing masters; choosing a period sets
+   * the existing date range, so the query stays bounded exactly as before.
+   */
+  const [traceJobId, setTraceJobId] = useState<string>('');
+  const [traceBatchId, setTraceBatchId] = useState<string>('');
+  const [traceOperationId, setTraceOperationId] = useState<string>('');
+  const [tracePeriodId, setTracePeriodId] = useState<string>('');
+  const [traceLists, setTraceLists] = useState<{ jobs: any[]; batches: any[]; operations: any[]; periods: any[] }>({ jobs: [], batches: [], operations: [], periods: [] });
+
+  useEffect(() => {
+    let alive = true;
+    Promise.all([
+      fetchMasterData<any>(MASTER_DATA_COLLECTIONS.jobReferences).catch(() => []),
+      fetchMasterData<any>(MASTER_DATA_COLLECTIONS.batches).catch(() => []),
+      fetchMasterData<any>(MASTER_DATA_COLLECTIONS.stages).catch(() => []),
+      listCostingPeriods().catch(() => []),
+    ]).then(([jobs, batches, operations, periods]) => {
+      if (alive) setTraceLists({ jobs: jobs ?? [], batches: batches ?? [], operations: operations ?? [], periods: periods ?? [] });
+    });
+    return () => { alive = false; };
+  }, []);
+
   const [filterCategoryId, setFilterCategoryId] = useState<string>('');
   const [filterCodes, setFilterCodes] = useState<string[]>([]);
   const [filterAll, setFilterAll] = useState<boolean>(true);
@@ -324,9 +360,25 @@ export const DataReviewView: React.FC = () => {
        * verified production field. Reporting calls the same engine, so a total
        * and this list can never disagree about what "Presses" means.
        */
-      return filterProductionRecords(searched, sel);
+      const narrowed = filterProductionRecords(searched, sel);
+      /*
+       * Job / sub-job / batch / operation narrowing, over the same already
+       * fetched set. Choosing a MAIN job includes its sub-jobs, because the
+       * customer's order is the main job and its sub-jobs together.
+       */
+      if (!traceJobId && !traceBatchId && !traceOperationId) return narrowed;
+      const jobIds = traceJobId
+        ? new Set<string>([traceJobId, ...subJobsOf(traceLists.jobs as any, traceJobId).map((j: any) => String(j.id ?? ''))])
+        : null;
+      return narrowed.filter((r) => {
+        const raw = (r.rawData ?? {}) as Record<string, any>;
+        if (jobIds && !jobIds.has(String(raw.jobReferenceId ?? ''))) return false;
+        if (traceBatchId && String(raw.batchId ?? '') !== traceBatchId) return false;
+        if (traceOperationId && String(raw.operationId ?? '') !== traceOperationId) return false;
+        return true;
+      });
     },
-    [records, searchQuery, filterCategoryId, filterCodes, filterAll]
+    [records, searchQuery, filterCategoryId, filterCodes, filterAll, traceJobId, traceBatchId, traceOperationId, traceLists.jobs]
   );
 
   /**
@@ -527,6 +579,77 @@ export const DataReviewView: React.FC = () => {
             className="w-full pl-3 pr-9 py-2 text-xs bg-slate-50 border border-slate-300 rounded-xl focus:ring-2 focus:ring-red-500/20 outline-none"
           />
           <Search className="w-4 h-4 text-slate-400 absolute right-3 top-1/2 -translate-y-1/2" />
+        </div>
+
+        {/*
+          Phase 1 Step 8C-2 - investigating a period: Period, Job (with its
+          sub-jobs), Batch and Operation, beside the existing Stage and Status
+          filters. Choosing a period sets the existing date range, so the read
+          stays bounded exactly as before.
+        */}
+        <div>
+          <select
+            id="data-review-period-filter"
+            value={tracePeriodId}
+            onChange={(e) => {
+              const id = e.target.value;
+              setTracePeriodId(id);
+              const period = traceLists.periods.find((x: any) => String(x.id ?? '') === id);
+              if (period?.startDate && period?.endDate) {
+                setDateSelection({ preset: 'custom', startDate: String(period.startDate), endDate: String(period.endDate) });
+              }
+            }}
+            className="w-full px-3 py-2 text-xs bg-slate-50 border border-slate-300 rounded-xl font-bold text-slate-800 outline-none"
+          >
+            <option value="">كل الفترات (All costing periods)</option>
+            {traceLists.periods.map((p: any) => (
+              <option key={p.id} value={p.id}>{p.code} - {p.name}</option>
+            ))}
+          </select>
+        </div>
+
+        <div>
+          <select
+            id="data-review-job-filter"
+            value={traceJobId}
+            onChange={(e) => { setTraceJobId(e.target.value); setTraceBatchId(''); }}
+            className="w-full px-3 py-2 text-xs bg-slate-50 border border-slate-300 rounded-xl font-bold text-slate-800 outline-none"
+          >
+            <option value="">كل أوامر الشغل (All jobs & sub-jobs)</option>
+            {traceLists.jobs.map((j: any) => (
+              <option key={j.id} value={j.id}>{j.parentJobReferenceId ? '↳ ' : ''}{j.code}</option>
+            ))}
+          </select>
+        </div>
+
+        <div>
+          <select
+            id="data-review-batch-filter"
+            value={traceBatchId}
+            onChange={(e) => setTraceBatchId(e.target.value)}
+            className="w-full px-3 py-2 text-xs bg-slate-50 border border-slate-300 rounded-xl font-bold text-slate-800 outline-none"
+          >
+            <option value="">كل الدفعات (All batches)</option>
+            {traceLists.batches
+              .filter((b: any) => !traceJobId || String(b.jobReferenceId ?? '') === traceJobId || subJobsOf(traceLists.jobs as any, traceJobId).some((sj: any) => String(sj.id ?? '') === String(b.jobReferenceId ?? '')))
+              .map((b: any) => (
+                <option key={b.id} value={b.id}>{b.batchNumber}</option>
+              ))}
+          </select>
+        </div>
+
+        <div>
+          <select
+            id="data-review-operation-filter"
+            value={traceOperationId}
+            onChange={(e) => setTraceOperationId(e.target.value)}
+            className="w-full px-3 py-2 text-xs bg-slate-50 border border-slate-300 rounded-xl font-bold text-slate-800 outline-none"
+          >
+            <option value="">كل العمليات (All operations)</option>
+            {traceLists.operations.map((o: any) => (
+              <option key={o.id} value={o.id}>{o.code} - {o.nameAr ?? o.nameEn ?? ''}</option>
+            ))}
+          </select>
         </div>
 
         {/* Stage Filter */}
@@ -784,6 +907,9 @@ export const DataReviewView: React.FC = () => {
         )}
       </div>
 
+      {/* Unit of measure readiness (Phase 1 Step 8) - read-only, analyses the records shown above */}
+      <UomReadinessPanel records={visibleRecords} />
+
       {/* Record Audit & Review Modal */}
       {selectedRecord && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs animate-in fade-in duration-150">
@@ -843,6 +969,19 @@ export const DataReviewView: React.FC = () => {
                   <span className="font-bold text-red-600 text-sm">{selectedRecord.wasteQuantity || 0} {selectedRecord.unit}</span>
                 </div>
               </div>
+
+              {/* Traceability (Phase 1 Step 8C) - read-only */}
+              <ProductionTraceabilityPanel record={selectedRecord} />
+
+              {/* Audited correction (Phase 1 Step 8C-2) - same rules as entry, behind the existing right */}
+              <RecordCorrectionPanel
+                record={selectedRecord}
+                canCorrect={canEdit}
+                onCorrected={() => { setSelectedRecord(null); void loadRecords(); }}
+              />
+
+              {/* Standard vs Actual quantity variance (Phase 1 Step 7) - read-only */}
+              <QuantityVariancePanel record={selectedRecord} />
 
               {/* Edit / Correction Form */}
               {isEditMode ? (

@@ -3,7 +3,7 @@
  * Complete interface for creating, managing, linking, activating, and deactivating
  * Firebase Authentication users and Granular Permissions in Firestore adminUsers/{uid}.
  */
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { 
   Users, 
   UserPlus, 
@@ -114,6 +114,21 @@ export const UserManagementView: React.FC<UserManagementViewProps> = ({ onNaviga
   const [passwordResetUser, setPasswordResetUser] = useState<AdminUser | null>(null);
   const [isSendingReset, setIsSendingReset] = useState<boolean>(false);
 
+  // PHASE 4E: the adminUsers listener itself has no dependency on
+  // `language` at all - only the localized text of its error message did,
+  // which previously forced `language` into this effect's dependency
+  // array and made every UI language toggle unsubscribe and recreate this
+  // Firestore listener (plus re-run the employees fetch) for no data
+  // reason. A ref keeps the error callback reading the CURRENT language
+  // at the moment an error actually fires, without needing the effect
+  // itself to depend on it - so the listener is now created once per
+  // mount (and once per genuine auth-driven remount), never on a language
+  // change, while the shown error text is unchanged.
+  const languageRef = useRef(language);
+  useEffect(() => {
+    languageRef.current = language;
+  }, [language]);
+
   // Subscribe to Users collection
   useEffect(() => {
     setIsLoading(true);
@@ -124,7 +139,7 @@ export const UserManagementView: React.FC<UserManagementViewProps> = ({ onNaviga
       },
       (error) => {
         console.error('Error fetching users:', error);
-        setActionErrorMessage(language === 'ar' ? 'تعذر تحميل قائمة المستخدمين من قاعدة البيانات.' : 'Could not fetch user accounts.');
+        setActionErrorMessage(languageRef.current === 'ar' ? 'تعذر تحميل قائمة المستخدمين من قاعدة البيانات.' : 'Could not fetch user accounts.');
         setIsLoading(false);
       }
     );
@@ -135,7 +150,7 @@ export const UserManagementView: React.FC<UserManagementViewProps> = ({ onNaviga
       .catch((err) => console.warn('Could not load employees list for linking:', err));
 
     return () => unsubscribe();
-  }, [language]);
+  }, []);
 
   // Quick auto-dismiss for alerts
   useEffect(() => {
@@ -592,7 +607,10 @@ export const UserManagementView: React.FC<UserManagementViewProps> = ({ onNaviga
               </thead>
               <tbody className="divide-y divide-slate-100">
                 {filteredUsers.map((user) => {
-                  const isPrimaryAdmin = user.email.toLowerCase() === SECURITY_ADMIN_EMAIL.toLowerCase();
+                  // user.email is typed as required, but legacy/partial adminUsers Firestore
+                  // documents can lack it - fall back to '' so such a record safely never
+                  // matches the primary admin email instead of crashing this render.
+                  const isPrimaryAdmin = (user.email || '').toLowerCase() === SECURITY_ADMIN_EMAIL.toLowerCase();
                   const userPerms = resolveUserPermissions(user);
                   const activePermCount = countActivePermissions(userPerms);
 
