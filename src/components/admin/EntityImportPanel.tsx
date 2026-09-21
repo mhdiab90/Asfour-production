@@ -14,7 +14,7 @@
  *
  * NOTHING IS WRITTEN UNTIL THE FINAL CONFIRMATION, which states the exact counts.
  */
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { AlertTriangle, CheckCircle2, Loader2, RefreshCw, Upload, X } from 'lucide-react';
 import { Modal } from '../common/Modal';
 import { useLanguage } from '../../i18n/LanguageContext';
@@ -61,6 +61,46 @@ import type { ReferenceIndexes, ReferenceMappingCache, ReferenceResolution } fro
 import { buildImportReferenceIndexes, executeEntityImport, loadImportValidationContext } from '../../services/entityImportService';
 import { buildMasterDataPackageSession, evaluatePackageRows, packageSessionCounts, packageSheetKind } from '../../services/masterDataPackageSessionPure';
 import type { PackageSessionResult } from '../../services/masterDataPackageSessionPure';
+import type { ImportExecutionProgress, ImportFinalResult } from '../../services/entityImportExecutionPure';
+import { ImportProgressPanel } from './ImportProgressPanel';
+
+/*
+ * 3.21.2 - large imports. The last run's progress is kept in this browser as a
+ * checkpoint, so a page closed mid-import is reported on the next visit with how
+ * far it got. It holds counts only - never data - and a re-run is safe by design:
+ * what was written is matched and updated, never duplicated.
+ */
+const LAST_RUN_KEY = 'asfour.entityImport.lastRun';
+interface LastRunCheckpoint {
+  importId: string;
+  sourceFile: string;
+  state: string;
+  phase: string;
+  processed: number;
+  total: number;
+  succeeded: number;
+  failed: number;
+  skipped: number;
+  updatedAt: string;
+}
+function saveLastRun(checkpoint: LastRunCheckpoint): void {
+  try { localStorage.setItem(LAST_RUN_KEY, JSON.stringify(checkpoint)); } catch { /* storage may be unavailable */ }
+}
+function readLastRun(): LastRunCheckpoint | null {
+  try {
+    const raw = localStorage.getItem(LAST_RUN_KEY);
+    return raw ? (JSON.parse(raw) as LastRunCheckpoint) : null;
+  } catch {
+    return null;
+  }
+}
+function clearLastRun(): void {
+  try { localStorage.removeItem(LAST_RUN_KEY); } catch { /* storage may be unavailable */ }
+}
+
+/** Review-table filters: a 30,000-row package is shown a page at a time, never all at once. */
+type RowFilter = 'ALL' | 'BLOCKING' | 'WARNING' | 'WILL_IMPORT' | 'IMPORTED' | 'FAILED' | 'NOT_WRITTEN';
+const ROWS_PER_PAGE = 100;
 
 interface Props {
   isOpen: boolean;
@@ -130,6 +170,20 @@ export const EntityImportPanel: React.FC<Props> = ({ isOpen, onClose }) => {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<{ successCount: number; failedCount: number; droppedBeforeWrite: Array<{ rowId: string; reason: string }> } | null>(null);
+  /** 3.21.2 - the loop's live snapshot while it runs, and its verified final result. */
+  const [progress, setProgress] = useState<ImportExecutionProgress | null>(null);
+  const [finalResult, setFinalResult] = useState<ImportFinalResult | null>(null);
+  const [stopRequested, setStopRequested] = useState(false);
+  const stopRef = useRef(false);
+  /** A single guard against a second import starting while one runs. */
+  const runningRef = useRef(false);
+  const [uploadStatus, setUploadStatus] = useState<string | null>(null);
+  const [lastRun, setLastRun] = useState<LastRunCheckpoint | null>(() => {
+    const saved = readLastRun();
+    return saved && (saved.state === 'IMPORTING' || saved.state === 'VERIFYING') ? saved : null;
+  });
+  const [rowFilter, setRowFilter] = useState<RowFilter>('ALL');
+  const [page, setPage] = useState(0);
   const [editingRowId, setEditingRowId] = useState<string | null>(null);
   const [editField, setEditField] = useState('');
   const [editValue, setEditValue] = useState('');
@@ -178,6 +232,37 @@ export const EntityImportPanel: React.FC<Props> = ({ isOpen, onClose }) => {
     const next = evaluatePackageRows(packageSession, session.rows);
     if (next.some((row, i) => row !== session.rows[i])) setSession({ ...session, rows: next });
   }, [mode, packageSession, session]);
+
+  /** While an import runs, leaving or reloading the page asks first. */
+  const importing = progress !== null && (progress.state === 'IMPORTING' || progress.state === 'VERIFYING');
+  useEffect(() => {
+    if (!importing) return;
+    const guard = (e: BeforeUnloadEvent) => {
+      e.preventDefault();
+      e.returnValue = '';
+    };
+    window.addEventListener('beforeunload', guard);
+    return () => window.removeEventListener('beforeunload', guard);
+  }, [importing]);
+
+  const filteredRows = useMemo(() => {
+    if (!session) return [];
+    const keep = (r: ImportRow) => {
+      switch (rowFilter) {
+        case 'BLOCKING': return r.errors.length > 0;
+        case 'WARNING': return r.warnings.length > 0 && !r.warningsAccepted;
+        case 'WILL_IMPORT': return isRowWritable(r);
+        case 'IMPORTED': return r.status === 'IMPORTED';
+        case 'FAILED': return r.status === 'FAILED';
+        case 'NOT_WRITTEN': return r.status !== 'IMPORTED' && r.selection === 'INCLUDED';
+        default: return true;
+      }
+    };
+    return rowFilter === 'ALL' ? session.rows : session.rows.filter(keep);
+  }, [session, rowFilter]);
+  const pageCount = Math.max(1, Math.ceil(filteredRows.length / ROWS_PER_PAGE));
+  const currentPage = Math.min(page, pageCount - 1);
+  const pageRows = filteredRows.slice(currentPage * ROWS_PER_PAGE, (currentPage + 1) * ROWS_PER_PAGE);
 
   /** The package counts from the rows as they stand now - what the import would actually do. */
   const packageCounts = useMemo(
@@ -372,7 +457,11 @@ export const EntityImportPanel: React.FC<Props> = ({ isOpen, onClose }) => {
       const mixSheets: typeof productSheets = [];
       const exceptionSheets: typeof productSheets = [];
       const unknown: string[] = [];
-      for (const file of Array.from(files)) {
+      const fileList = Array.from(files);
+      for (const [fileIndex, file] of fileList.entries()) {
+        setUploadStatus(isAr ? `جارٍ قراءة الملف ${fileIndex + 1} من ${fileList.length}: ${file.name}` : `Reading file ${fileIndex + 1} of ${fileList.length}: ${file.name}`);
+        // One file at a time, handing the browser a turn in between, so the page stays responsive.
+        await new Promise<void>((resolve) => setTimeout(resolve, 0));
         for (const sheetName of await listImportSheetNames(file)) {
           const rows = await parseImportFile(file, sheetName);
           if (!rows.length) continue;
@@ -388,6 +477,8 @@ export const EntityImportPanel: React.FC<Props> = ({ isOpen, onClose }) => {
         throw new Error(isAr ? 'لم يتم التعرف على أي ورقة من حزمة البيانات الأساسية.' : 'No Master Data package sheet was recognised.');
       }
       // What ASFOUR already holds decides CREATE vs UPDATE for every row.
+      setUploadStatus(isAr ? 'جارٍ تحميل البيانات الأساسية الحالية وبناء المعاينة...' : 'Loading the current master data and building the preview...');
+      await new Promise<void>((resolve) => setTimeout(resolve, 0));
       const ctx = await loadImportValidationContext();
       const idx = await buildImportReferenceIndexes(ctx);
       setContext(ctx);
@@ -404,6 +495,10 @@ export const EntityImportPanel: React.FC<Props> = ({ isOpen, onClose }) => {
       });
       setPackageSession(built);
       setWorkbook(null);
+      setProgress(null);
+      setFinalResult(null);
+      setPage(0);
+      setRowFilter('ALL');
       setSession(createImportSession({
         importId: built.importSessionId,
         sourceFile: Array.from(files).map((f) => f.name).join(', '),
@@ -416,6 +511,7 @@ export const EntityImportPanel: React.FC<Props> = ({ isOpen, onClose }) => {
     } catch (err: any) {
       setError(String(err?.message ?? err));
     } finally {
+      setUploadStatus(null);
       setBusy(false);
     }
   };
@@ -522,21 +618,58 @@ export const EntityImportPanel: React.FC<Props> = ({ isOpen, onClose }) => {
   };
 
   const execute = async () => {
-    if (!session) return;
+    if (!session || runningRef.current) return;
     // A package BOM's status is re-derived one last time, so the confirmed count is the written count.
     const toRun = mode === 'package' && packageSession ? { ...session, rows: evaluatePackageRows(packageSession, session.rows) } : session;
     if (!window.confirm(importConfirmation(toRun, isAr ? 'ar' : 'en'))) return;
+    runningRef.current = true;
+    stopRef.current = false;
+    setStopRequested(false);
     setBusy(true);
     setError(null);
+    setResult(null);
+    setFinalResult(null);
+    setLastRun(null);
+    const packageRun = mode === 'package';
+    const checkpoint = (p: ImportExecutionProgress) => saveLastRun({
+      importId: toRun.importId, sourceFile: toRun.sourceFile, state: p.state, phase: p.phase,
+      processed: p.processed, total: p.total, succeeded: p.succeeded, failed: p.failed, skipped: p.skipped, updatedAt: now(),
+    });
     try {
-      const outcome = await executeEntityImport(toRun, context, { indexes, mappingCache, user, at: now, language: isAr ? 'ar' : 'en', canEdit: canImport });
+      const outcome = await executeEntityImport(toRun, context, {
+        indexes, mappingCache, user, at: now, language: isAr ? 'ar' : 'en', canEdit: canImport,
+        // Batches keep the page responsive; the loop reports after each one.
+        batchSize: 250,
+        // Only the de-duplicated Master Data package writes a few rows at once; every
+        // other import keeps its strict one-row-at-a-time order.
+        concurrency: packageRun ? 4 : 1,
+        // A lost connection or a refused permission stops the run instead of failing 30,000 rows one by one.
+        maxConsecutiveFailures: packageRun ? 25 : undefined,
+        shouldStop: () => stopRef.current,
+        onProgress: (p) => {
+          setProgress(p);
+          checkpoint(p);
+        },
+      });
       setSession(outcome.session);
       setResult({ successCount: outcome.successCount, failedCount: outcome.failedCount, droppedBeforeWrite: outcome.droppedBeforeWrite });
+      setFinalResult(outcome.final);
+      saveLastRun({
+        importId: toRun.importId, sourceFile: toRun.sourceFile, state: outcome.final.outcome, phase: outcome.final.stoppedIn ?? 'DONE',
+        processed: outcome.final.processed, total: outcome.final.total, succeeded: outcome.final.succeeded, failed: outcome.final.failed, skipped: outcome.final.skipped, updatedAt: now(),
+      });
     } catch (err: any) {
+      // The loop itself never throws; anything here is outside it. The screen stays usable.
       setError(String(err?.message ?? err));
     } finally {
+      runningRef.current = false;
       setBusy(false);
     }
+  };
+
+  const requestStop = () => {
+    stopRef.current = true;
+    setStopRequested(true);
   };
 
   const reprocessFailed = () => {
@@ -544,6 +677,8 @@ export const EntityImportPanel: React.FC<Props> = ({ isOpen, onClose }) => {
     // The same import id, the same rows - only the failed ones return to review.
     setSession({ ...session, rows: session.rows.map((r) => (r.status === 'FAILED' ? revalidate(prepareRowForReprocess(r)) : r)) });
     setResult(null);
+    setFinalResult(null);
+    setProgress(null);
   };
 
   const cell = 'px-2 py-1.5 align-top';
@@ -564,11 +699,32 @@ export const EntityImportPanel: React.FC<Props> = ({ isOpen, onClose }) => {
           </p>
         )}
         {error && <p className="bg-rose-50 border border-rose-200 rounded-xl px-3 py-2 font-bold text-rose-800">{error}</p>}
+        {lastRun && !progress && (
+          <div id="entity-import-last-run" className="bg-amber-50 border border-amber-300 rounded-xl px-3 py-2 text-amber-950 space-y-1">
+            <p className="font-bold">
+              {isAr
+                ? `استيراد سابق (${lastRun.importId}) لم يكتمل: توقف عند ${lastRun.processed.toLocaleString('ar-EG')} من ${lastRun.total.toLocaleString('ar-EG')} سجل (نجح ${lastRun.succeeded.toLocaleString('ar-EG')}، فشل ${lastRun.failed.toLocaleString('ar-EG')}).`
+                : `A previous import (${lastRun.importId}) did not finish: it stopped at ${lastRun.processed.toLocaleString()} of ${lastRun.total.toLocaleString()} records (${lastRun.succeeded.toLocaleString()} successful, ${lastRun.failed.toLocaleString()} failed).`}
+            </p>
+            <p>
+              {isAr
+                ? 'ما كُتب محفوظ. للاستئناف بأمان: ارفع نفس الحزمة مرة أخرى واستورد - السجلات الموجودة تُحدَّث ولا تتكرر.'
+                : 'What was written is kept. To resume safely, upload the same package again and import - existing records are updated, never duplicated.'}
+            </p>
+            <button type="button" onClick={() => { clearLastRun(); setLastRun(null); }} className="px-2 py-1 rounded-lg bg-white border border-amber-300 font-bold cursor-pointer">{isAr ? 'تم' : 'Dismiss'}</button>
+          </div>
+        )}
+        {uploadStatus && (
+          <p id="entity-import-upload-status" className="bg-sky-50 border border-sky-200 rounded-xl px-3 py-2 font-bold text-sky-900 flex items-center gap-1.5" aria-live="polite">
+            <Loader2 className="w-3.5 h-3.5 animate-spin" />{uploadStatus}
+          </p>
+        )}
 
         <div className="flex flex-wrap items-center gap-2">
           <select
             id="entity-import-mode"
             value={mode}
+            disabled={busy}
             onChange={(e) => { setMode(e.target.value as 'sheet' | 'workbook'); setSession(null); setWorkbook(null); setResult(null); setPackageSession(null); }}
             className="px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl font-bold"
           >
@@ -585,6 +741,7 @@ export const EntityImportPanel: React.FC<Props> = ({ isOpen, onClose }) => {
                 type="file"
                 accept=".xlsx,.xls"
                 multiple
+                disabled={busy}
                 className="hidden"
                 onChange={(e) => {
                   // Copied before the input is cleared, so choosing the same files again always re-reads them.
@@ -651,7 +808,7 @@ export const EntityImportPanel: React.FC<Props> = ({ isOpen, onClose }) => {
                   {label}: <span className="font-bold">{(packageCounts ?? packageSession.counts)[key] ?? 0}</span>
                 </span>
               ))}
-              <button type="button" onClick={acceptAllWarnings} className="px-2 py-1 rounded-lg bg-amber-50 border border-amber-200 font-bold cursor-pointer">
+              <button type="button" onClick={acceptAllWarnings} disabled={busy} className="px-2 py-1 rounded-lg bg-amber-50 border border-amber-200 font-bold cursor-pointer disabled:opacity-50">
                 {isAr ? 'قبول كل التحذيرات' : 'Accept all warnings'}
               </button>
             </div>
@@ -734,23 +891,19 @@ export const EntityImportPanel: React.FC<Props> = ({ isOpen, onClose }) => {
               ))}
             </div>
 
-            {result && (
-              <div className="p-3 rounded-xl border border-emerald-200 bg-emerald-50 text-emerald-900 space-y-1">
-                <p className="font-bold flex items-center gap-1.5">
-                  <CheckCircle2 className="w-4 h-4" />
-                  {isAr ? `تم استيراد ${result.successCount} سجل، وفشل ${result.failedCount}.` : `${result.successCount} imported, ${result.failedCount} failed.`}
-                </p>
-                {result.droppedBeforeWrite.length > 0 && (
-                  <p className="text-amber-900">
-                    {isAr ? 'سطور استُبعدت قبل الكتابة بعد إعادة التحقق:' : 'Rows dropped by the final revalidation:'} {result.droppedBeforeWrite.map((d) => d.rowId).join('، ')}
-                  </p>
-                )}
-                {result.failedCount > 0 && (
-                  <button id="entity-import-reprocess" type="button" onClick={reprocessFailed} className="inline-flex items-center gap-1.5 px-3 py-1.5 font-bold bg-white border border-emerald-300 rounded-lg cursor-pointer">
-                    <RefreshCw className="w-3.5 h-3.5" />{isAr ? 'إعادة مراجعة السطور الفاشلة' : 'Review failed rows again'}
-                  </button>
-                )}
-              </div>
+            {/* 3.21.2 - READY / IMPORTING / VERIFYING / COMPLETED / COMPLETED WITH ERRORS / INTERRUPTED, from the loop's own numbers */}
+            <ImportProgressPanel
+              isAr={isAr}
+              progress={finalResult ? null : progress}
+              final={finalResult}
+              readyCount={busy ? undefined : summary.willImport}
+              onStop={importing ? requestStop : undefined}
+              stopRequested={stopRequested}
+            />
+            {result && result.failedCount > 0 && !busy && (
+              <button id="entity-import-reprocess" type="button" onClick={reprocessFailed} className="inline-flex items-center gap-1.5 px-3 py-1.5 font-bold bg-white border border-emerald-300 rounded-lg cursor-pointer">
+                <RefreshCw className="w-3.5 h-3.5" />{isAr ? 'إعادة مراجعة السطور الفاشلة' : 'Review failed rows again'}
+              </button>
             )}
 
             {workbook && (
@@ -897,6 +1050,31 @@ export const EntityImportPanel: React.FC<Props> = ({ isOpen, onClose }) => {
               </div>
             )}
 
+            <div id="entity-import-rows-pager" className="flex flex-wrap items-center gap-2">
+              <select
+                value={rowFilter}
+                onChange={(e) => { setRowFilter(e.target.value as RowFilter); setPage(0); }}
+                className="px-2 py-1 bg-slate-50 border border-slate-200 rounded-lg font-bold"
+              >
+                <option value="ALL">{isAr ? 'كل السطور' : 'All rows'}</option>
+                <option value="BLOCKING">{isAr ? 'مانعة' : 'Blocking'}</option>
+                <option value="WARNING">{isAr ? 'تحذيرات غير مقبولة' : 'Warnings not accepted'}</option>
+                <option value="WILL_IMPORT">{isAr ? 'سيتم استيرادها' : 'Will import'}</option>
+                <option value="IMPORTED">{isAr ? 'تم استيرادها' : 'Imported'}</option>
+                <option value="FAILED">{isAr ? 'فشلت' : 'Failed'}</option>
+                <option value="NOT_WRITTEN">{isAr ? 'لم تُكتب' : 'Not written'}</option>
+              </select>
+              <span className="text-slate-600">
+                {isAr
+                  ? `${filteredRows.length.toLocaleString('ar-EG')} سطر - صفحة ${currentPage + 1} من ${pageCount}`
+                  : `${filteredRows.length.toLocaleString()} rows - page ${currentPage + 1} of ${pageCount}`}
+              </span>
+              <button type="button" disabled={currentPage === 0} onClick={() => setPage(currentPage - 1)} className="px-2 py-1 rounded-lg border border-slate-200 bg-white font-bold cursor-pointer disabled:opacity-40">{isAr ? 'السابق' : 'Previous'}</button>
+              <button type="button" disabled={currentPage >= pageCount - 1} onClick={() => setPage(currentPage + 1)} className="px-2 py-1 rounded-lg border border-slate-200 bg-white font-bold cursor-pointer disabled:opacity-40">{isAr ? 'التالي' : 'Next'}</button>
+            </div>
+
+            {/* Locked while an import runs: a row cannot change under the running import. */}
+            <fieldset disabled={busy} className="min-w-0">
             <div className="overflow-x-auto max-h-[420px] overflow-y-auto border border-slate-200 rounded-xl">
               <table id="entity-import-rows" className="w-full text-[11px] min-w-[900px]">
                 <thead className="bg-slate-50 sticky top-0 z-10 text-slate-600">
@@ -911,7 +1089,7 @@ export const EntityImportPanel: React.FC<Props> = ({ isOpen, onClose }) => {
                   </tr>
                 </thead>
                 <tbody>
-                  {session.rows.map((row) => {
+                  {pageRows.map((row) => {
                     const payload = rowPayload(row);
                     return (
                       <tr key={row.rowId} className={`border-t border-slate-100 ${isRowWritable(row) ? '' : 'bg-slate-50/60'}`}>
@@ -921,7 +1099,7 @@ export const EntityImportPanel: React.FC<Props> = ({ isOpen, onClose }) => {
                           <span className={`px-1.5 py-0.5 rounded border font-bold ${STATUS_TONE[row.status] ?? ''}`}>{row.status}</span>
                           <div className="text-[10px] text-slate-500 mt-0.5">{row.selection}</div>
                         </td>
-                        <td className={`${cell} font-mono max-w-[280px] truncate`} title={JSON.stringify(payload)}>{JSON.stringify(payload)}</td>
+                        <td className={`${cell} font-mono max-w-[280px] truncate`} title={JSON.stringify(payload).slice(0, 2000)}>{JSON.stringify(payload).slice(0, 400)}</td>
                         <td className={cell}>
                           {(resolutions[row.rowId] ?? []).filter((r) => r.status !== 'EMPTY').map((r, i) => (
                             <div key={`r${i}`} className="mb-1">
@@ -980,6 +1158,7 @@ export const EntityImportPanel: React.FC<Props> = ({ isOpen, onClose }) => {
                 </tbody>
               </table>
             </div>
+            </fieldset>
 
             <div className="flex items-center justify-between gap-2">
               <p className="flex items-center gap-1.5 text-slate-600">
@@ -994,7 +1173,9 @@ export const EntityImportPanel: React.FC<Props> = ({ isOpen, onClose }) => {
                 className="inline-flex items-center gap-1.5 px-4 py-2 font-extrabold text-slate-950 bg-amber-400 hover:bg-amber-500 rounded-xl cursor-pointer disabled:opacity-50"
               >
                 {busy && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
-                {isAr ? `استيراد ${summary.willImport} سجل` : `Import ${summary.willImport} records`}
+                {importing
+                  ? (isAr ? 'جارٍ الاستيراد...' : 'Importing...')
+                  : (isAr ? `استيراد ${summary.willImport} سجل` : `Import ${summary.willImport} records`)}
               </button>
             </div>
           </>

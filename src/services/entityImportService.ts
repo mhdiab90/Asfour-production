@@ -40,6 +40,7 @@ import { describeBomChange, describeBomVersionChange } from './bomPure';
 import { describeRoutingChange } from './routingPure';
 import { describeImportSession, describeRowOutcome, rowPayload } from './entityImportPure';
 import { executeImportRows } from './entityImportExecutionPure';
+import type { ExecuteRowsOptions, ImportFinalResult } from './entityImportExecutionPure';
 import type { ImportRow, ImportSession } from './entityImportPure';
 import type { ImportValidationContext } from './importEntityValidationPure';
 import { buildReferenceIndexes, describeResolution } from './referenceResolutionPure';
@@ -57,6 +58,13 @@ export interface ImportExecutionOptions {
   canEdit: boolean;
   /** The status imported production records are created with. */
   productionStatus?: RecordStatus;
+  /** 3.21.2 - batching, live progress, stop request and failure guard (see entityImportExecutionPure). */
+  batchSize?: ExecuteRowsOptions['batchSize'];
+  concurrency?: ExecuteRowsOptions['concurrency'];
+  onProgress?: ExecuteRowsOptions['onProgress'];
+  yieldToUi?: ExecuteRowsOptions['yieldToUi'];
+  shouldStop?: ExecuteRowsOptions['shouldStop'];
+  maxConsecutiveFailures?: ExecuteRowsOptions['maxConsecutiveFailures'];
 }
 
 export interface ImportExecutionResult {
@@ -69,6 +77,8 @@ export interface ImportExecutionResult {
   remainingBlockingCount: number;
   /** Rows dropped by the final revalidation, with the reason. */
   droppedBeforeWrite: Array<{ rowId: string; reason: string }>;
+  /** The verified final result the screen shows as it is - never recomputed there. */
+  final: ImportFinalResult;
 }
 
 
@@ -289,7 +299,7 @@ export async function executeEntityImport(
    * entityImportExecutionPure so it can be tested without Firestore. Every write
    * still goes through writeRow and the existing services below.
    */
-  const { rows, droppedBeforeWrite } = await executeImportRows(
+  const { rows, droppedBeforeWrite, result: final } = await executeImportRows(
     session,
     context,
     options,
@@ -317,5 +327,6 @@ export async function executeEntityImport(
     correctedCount: rows.filter((r) => r.correctedRowData && Object.keys(r.correctedRowData).length > 0).length,
     remainingBlockingCount: rows.filter((r) => r.status === 'BLOCKING').length,
     droppedBeforeWrite,
+    final,
   };
 }

@@ -37,7 +37,7 @@ const DEPLOYMENT_ID_INJECTED = typeof __BUILD_DEPLOYMENT_ID__ === 'string' ? __B
 
 export const CURRENT_APP_VERSION: AppVersionInfo = {
   /** Set by the automatic release planner from the classified change set - see releasePlannerPure.ts. */
-  version: '3.21.1',
+  version: '3.21.2',
   buildId: BUILD_ID_INJECTED,
   buildTimestamp: BUILD_TIMESTAMP_INJECTED,
   gitCommit: COMMIT_SHA_INJECTED,
@@ -46,6 +46,16 @@ export const CURRENT_APP_VERSION: AppVersionInfo = {
   environment: 'production',
   releaseDate: '2026-08-22',
   changelog: [
+    {
+      version: '3.21.2',
+      date: '2026-09-21',
+      highlights: [
+        'مؤشر تقدم حي لاستيراد حزمة البيانات الأساسية: النسبة، شريط التقدم، عدد السجلات المعالجة، المرحلة الحالية، والناجح والفاشل والمتخطى',
+        'الاستيراد على دفعات بثلاث مراحل (المنتجات والخامات، ربط الاعتماديات، قوائم المواد) دون تجميد المتصفح',
+        'رسالة نهائية واضحة: اكتمل بنجاح، اكتمل مع أخطاء (مع قائمة الأخطاء وأسبابها)، أو توقف (مع إمكانية الاستئناف الآمن بدون تكرار)',
+        'جدول المراجعة يعرض صفحة واحدة مع تصفية الحالات بدل آلاف السطور دفعة واحدة'
+      ]
+    },
     {
       version: '3.21.1',
       date: '2026-09-21',
