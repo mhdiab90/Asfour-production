@@ -14,7 +14,7 @@
  *
  * NOTHING IS WRITTEN UNTIL THE FINAL CONFIRMATION, which states the exact counts.
  */
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { AlertTriangle, CheckCircle2, Loader2, RefreshCw, Upload, X } from 'lucide-react';
 import { Modal } from '../common/Modal';
 import { useLanguage } from '../../i18n/LanguageContext';
@@ -59,7 +59,7 @@ import type { ImportValidationContext } from '../../services/importEntityValidat
 import { approveReferenceMapping } from '../../services/referenceResolutionPure';
 import type { ReferenceIndexes, ReferenceMappingCache, ReferenceResolution } from '../../services/referenceResolutionPure';
 import { buildImportReferenceIndexes, executeEntityImport, loadImportValidationContext } from '../../services/entityImportService';
-import { buildMasterDataPackageSession, packageSheetKind } from '../../services/masterDataPackageSessionPure';
+import { buildMasterDataPackageSession, evaluatePackageRows, packageSessionCounts, packageSheetKind } from '../../services/masterDataPackageSessionPure';
 import type { PackageSessionResult } from '../../services/masterDataPackageSessionPure';
 
 interface Props {
@@ -164,6 +164,26 @@ export const EntityImportPanel: React.FC<Props> = ({ isOpen, onClose }) => {
   const user = adminUser?.email ?? adminUser?.uid ?? 'unknown';
   const now = () => new Date().toISOString();
   const summary = useMemo(() => (session ? summariseSession(session) : null), [session]);
+
+  /*
+   * Master Data package: a BOM's status follows the rows it depends on. Whenever
+   * the session changes (a warning accepted, a row excluded, a correction), every
+   * BOM row is re-derived by the SAME rules the import applies before writing -
+   * so the preview never shows as importable a BOM the import would drop.
+   * evaluatePackageRows returns unchanged rows as the same objects, so this
+   * settles after one pass.
+   */
+  useEffect(() => {
+    if (mode !== 'package' || !packageSession || !session) return;
+    const next = evaluatePackageRows(packageSession, session.rows);
+    if (next.some((row, i) => row !== session.rows[i])) setSession({ ...session, rows: next });
+  }, [mode, packageSession, session]);
+
+  /** The package counts from the rows as they stand now - what the import would actually do. */
+  const packageCounts = useMemo(
+    () => (packageSession && session ? packageSessionCounts(packageSession.staged, session.rows, packageSession.exceptions) : null),
+    [packageSession, session],
+  );
 
   /** Resolve the row's business codes, then validate it - one pipeline for every row. */
   const check = (row: ImportRow, ctx: ImportValidationContext, idx: ReferenceIndexes, cache: ReferenceMappingCache) => {
@@ -343,7 +363,7 @@ export const EntityImportPanel: React.FC<Props> = ({ isOpen, onClose }) => {
   };
 
   /** The whole package at once: each file's sheets are recognised by their own columns. */
-  const onPackage = async (files: FileList) => {
+  const onPackage = async (files: FileList | File[]) => {
     setBusy(true);
     setError(null);
     setResult(null);
@@ -379,6 +399,8 @@ export const EntityImportPanel: React.FC<Props> = ({ isOpen, onClose }) => {
         mixSheets,
         exceptionSheets,
         existing: { products: ctx.products, materials: ctx.materials, boms: ctx.boms, bomVersions: ctx.bomVersions },
+        // The same context the import revalidates against (customers, logical items...).
+        validationContext: ctx,
       });
       setPackageSession(built);
       setWorkbook(null);
@@ -501,11 +523,13 @@ export const EntityImportPanel: React.FC<Props> = ({ isOpen, onClose }) => {
 
   const execute = async () => {
     if (!session) return;
-    if (!window.confirm(importConfirmation(session, isAr ? 'ar' : 'en'))) return;
+    // A package BOM's status is re-derived one last time, so the confirmed count is the written count.
+    const toRun = mode === 'package' && packageSession ? { ...session, rows: evaluatePackageRows(packageSession, session.rows) } : session;
+    if (!window.confirm(importConfirmation(toRun, isAr ? 'ar' : 'en'))) return;
     setBusy(true);
     setError(null);
     try {
-      const outcome = await executeEntityImport(session, context, { indexes, mappingCache, user, at: now, language: isAr ? 'ar' : 'en', canEdit: canImport });
+      const outcome = await executeEntityImport(toRun, context, { indexes, mappingCache, user, at: now, language: isAr ? 'ar' : 'en', canEdit: canImport });
       setSession(outcome.session);
       setResult({ successCount: outcome.successCount, failedCount: outcome.failedCount, droppedBeforeWrite: outcome.droppedBeforeWrite });
     } catch (err: any) {
@@ -545,7 +569,7 @@ export const EntityImportPanel: React.FC<Props> = ({ isOpen, onClose }) => {
           <select
             id="entity-import-mode"
             value={mode}
-            onChange={(e) => { setMode(e.target.value as 'sheet' | 'workbook'); setSession(null); setWorkbook(null); setResult(null); }}
+            onChange={(e) => { setMode(e.target.value as 'sheet' | 'workbook'); setSession(null); setWorkbook(null); setResult(null); setPackageSession(null); }}
             className="px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl font-bold"
           >
             <option value="sheet">{isAr ? 'ورقة واحدة لكل كيان' : 'One sheet per entity'}</option>
@@ -562,7 +586,12 @@ export const EntityImportPanel: React.FC<Props> = ({ isOpen, onClose }) => {
                 accept=".xlsx,.xls"
                 multiple
                 className="hidden"
-                onChange={(e) => { const f = e.target.files; if (f && f.length) void onPackage(f); }}
+                onChange={(e) => {
+                  // Copied before the input is cleared, so choosing the same files again always re-reads them.
+                  const f = e.target.files ? Array.from(e.target.files) : [];
+                  e.target.value = '';
+                  if (f.length) void onPackage(f);
+                }}
               />
             </label>
           )}
@@ -601,8 +630,16 @@ export const EntityImportPanel: React.FC<Props> = ({ isOpen, onClose }) => {
                 ['products', isAr ? 'منتجات' : 'Products'],
                 ['productsToCreate', isAr ? 'جديدة' : 'To create'],
                 ['productsToUpdate', isAr ? 'تحديث' : 'To update'],
+                ['productsWillImport', isAr ? 'منتجات ستُستورد' : 'Products to import'],
                 ['materials', isAr ? 'خامات' : 'Materials'],
+                ['materialsToCreate', isAr ? 'خامات جديدة' : 'Materials to create'],
+                ['materialsToUpdate', isAr ? 'خامات للتحديث' : 'Materials to update'],
+                ['materialsWillImport', isAr ? 'خامات ستُستورد' : 'Materials to import'],
                 ['boms', isAr ? 'قوائم مواد' : 'BOMs'],
+                ['bomsValid', isAr ? 'قوائم صالحة' : 'BOMs valid'],
+                ['bomsBlockedByData', isAr ? 'قوائم بها خطأ بيانات' : 'BOMs blocked by data'],
+                ['bomsWaitingForItems', isAr ? 'قوائم تنتظر أصنافها' : 'BOMs waiting for their items'],
+                ['bomsWillImport', isAr ? 'قوائم ستُستورد' : 'BOMs to import'],
                 ['bomComponents', isAr ? 'مكوّنات' : 'Components'],
                 ['ready', isAr ? 'جاهز' : 'Ready'],
                 ['skippedDuplicates', isAr ? 'مكرر (متخطى)' : 'Duplicates (skipped)'],
@@ -611,7 +648,7 @@ export const EntityImportPanel: React.FC<Props> = ({ isOpen, onClose }) => {
                 ['exceptions', isAr ? 'استثناءات' : 'Exceptions'],
               ] as const).map(([key, label]) => (
                 <span key={key} className="px-2 py-1 rounded-lg bg-slate-50 border border-slate-200">
-                  {label}: <span className="font-bold">{packageSession.counts[key] ?? 0}</span>
+                  {label}: <span className="font-bold">{(packageCounts ?? packageSession.counts)[key] ?? 0}</span>
                 </span>
               ))}
               <button type="button" onClick={acceptAllWarnings} className="px-2 py-1 rounded-lg bg-amber-50 border border-amber-200 font-bold cursor-pointer">

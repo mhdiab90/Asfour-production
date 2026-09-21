@@ -537,26 +537,87 @@ type Stored = Record<string, unknown> & { id?: string };
  * The existing record this row updates: the same ASFOUR code first, then the
  * same Odoo external reference. Nothing is matched by name.
  */
+/**
+ * Lookup tables over one list of existing records, built once per list and
+ * re-built if the list grows. Every table keeps the FIRST record in list order
+ * for a key - exactly what the linear `find` / first-of-`filter` it replaces
+ * returned - so matching is unchanged; only a 16,000-record package stops being
+ * quadratic.
+ */
+interface RecordIndex {
+  length: number;
+  /** normalised `code` OR `productCode` -> first record carrying it. */
+  byItemCode: Map<string, Stored>;
+  /** normalised `code` only -> first record. */
+  byCode: Map<string, Stored>;
+  /** `system` + external id -> first record carrying that reference. */
+  byRef: Map<string, Stored>;
+  /** bomId + normalised version code -> first version. */
+  byVersion: Map<string, Stored>;
+}
+const recordIndexCache = new WeakMap<readonly Stored[], RecordIndex>();
+const refKey = (system: unknown, externalId: unknown) => `${text(system)}\u0000${text(externalId)}`;
+
+function indexOf(list: readonly Stored[]): RecordIndex {
+  const cached = recordIndexCache.get(list);
+  if (cached && cached.length === list.length) return cached;
+  const index: RecordIndex = { length: list.length, byItemCode: new Map(), byCode: new Map(), byRef: new Map(), byVersion: new Map() };
+  const first = <K>(map: Map<K, Stored>, key: K, record: Stored) => { if (!map.has(key)) map.set(key, record); };
+  for (const record of list) {
+    const code = normalizeCode(text(record.code));
+    const productCode = normalizeCode(text(record.productCode));
+    if (code) { first(index.byItemCode, code, record); first(index.byCode, code, record); }
+    if (productCode) first(index.byItemCode, productCode, record);
+    for (const ref of Array.isArray(record.externalRefs) ? (record.externalRefs as ExternalReference[]) : []) {
+      if (text(ref.externalId)) first(index.byRef, refKey(ref.system, ref.externalId), record);
+    }
+    if (text(record.bomId)) first(index.byVersion, `${text(record.bomId)}\u0000${normalizeCode(text(record.versionCode))}`, record);
+  }
+  recordIndexCache.set(list, index);
+  return index;
+}
+
 export function findExistingMasterRecord(
   existing: readonly Stored[] | null | undefined,
   payload: Record<string, unknown>,
 ): { record: Stored | null; matchedBy: 'CODE' | 'EXTERNAL_REFERENCE' | 'NONE' } {
-  const list = existing ?? [];
+  const index = indexOf(existing ?? []);
   const code = normalizeCode(text(payload.code));
   if (code) {
-    const byCode = list.filter((r) => normalizeCode(text(r.code)) === code || normalizeCode(text(r.productCode)) === code);
-    if (byCode.length === 1) return { record: byCode[0], matchedBy: 'CODE' };
-    if (byCode.length > 1) return { record: byCode[0], matchedBy: 'CODE' };
+    const byCode = index.byItemCode.get(code);
+    if (byCode) return { record: byCode, matchedBy: 'CODE' };
   }
   const refs = Array.isArray(payload.externalRefs) ? (payload.externalRefs as ExternalReference[]) : [];
   for (const ref of refs) {
     const id = text(ref.externalId);
     if (!id) continue;
-    const byRef = list.find((r) => (Array.isArray(r.externalRefs) ? (r.externalRefs as ExternalReference[]) : [])
-      .some((x) => text(x.system) === text(ref.system) && text(x.externalId) === id));
+    const byRef = index.byRef.get(refKey(ref.system, id));
     if (byRef) return { record: byRef, matchedBy: 'EXTERNAL_REFERENCE' };
   }
   return { record: null, matchedBy: 'NONE' };
+}
+
+/** Deterministic JSON: object keys sorted, so equal data compares equal whatever its key order. */
+function stableJson(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(stableJson).join(',')}]`;
+  if (value && typeof value === 'object') {
+    return `{${Object.keys(value as Record<string, unknown>).sort().map((k) => `${JSON.stringify(k)}:${stableJson((value as Record<string, unknown>)[k])}`).join(',')}}`;
+  }
+  return JSON.stringify(value ?? null);
+}
+
+/**
+ * The part of an update patch that would actually change the stored record. An
+ * empty result means the write is a NO-OP and is skipped - so re-running the
+ * same package rewrites nothing it already holds.
+ */
+export function changedFieldsOnly(current: Record<string, unknown> | null | undefined, patch: Record<string, unknown>): Record<string, unknown> {
+  if (!current) return { ...patch };
+  const changed: Record<string, unknown> = {};
+  for (const [field, value] of Object.entries(patch)) {
+    if (stableJson(current[field]) !== stableJson(value)) changed[field] = value;
+  }
+  return changed;
 }
 
 /** The fields an existing master record may receive from the package - never its code. */
@@ -613,16 +674,15 @@ export function findExistingBom(
   existing: readonly Stored[] | null | undefined,
   input: { odooBomId: string | null; code: string },
 ): { record: Stored | null; matchedBy: 'EXTERNAL_REFERENCE' | 'CODE' | 'NONE' } {
-  const list = existing ?? [];
+  const index = indexOf(existing ?? []);
   const odooId = text(input.odooBomId);
   if (odooId) {
-    const byRef = list.find((r) => (Array.isArray(r.externalRefs) ? (r.externalRefs as ExternalReference[]) : [])
-      .some((x) => text(x.system) === 'odoo' && text(x.externalId) === odooId));
+    const byRef = index.byRef.get(refKey('odoo', odooId));
     if (byRef) return { record: byRef, matchedBy: 'EXTERNAL_REFERENCE' };
   }
   const code = normalizeCode(text(input.code));
   if (code) {
-    const byCode = list.find((r) => normalizeCode(text(r.code)) === code);
+    const byCode = index.byCode.get(code);
     if (byCode) return { record: byCode, matchedBy: 'CODE' };
   }
   return { record: null, matchedBy: 'NONE' };
@@ -634,5 +694,5 @@ export function findExistingBomVersion(
   bomId: string,
   versionCode: string = PACKAGE_BOM_VERSION_CODE,
 ): Stored | null {
-  return (existing ?? []).find((v) => text(v.bomId) === text(bomId) && normalizeCode(text(v.versionCode)) === normalizeCode(versionCode)) ?? null;
+  return indexOf(existing ?? []).byVersion.get(`${text(bomId)}\u0000${normalizeCode(versionCode)}`) ?? null;
 }

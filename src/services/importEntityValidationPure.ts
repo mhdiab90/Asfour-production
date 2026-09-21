@@ -82,8 +82,77 @@ export interface ImportValidationResult {
   resolvedPayload?: Record<string, unknown>;
 }
 
-const idSet = (list: readonly Stored[] | null | undefined) => (list ? new Set(list.map((r) => String(r.id ?? ''))) : null);
+/**
+ * The ids of a list, built once per list: an import validates thousands of rows
+ * against the same master-data arrays, and rebuilding a 16,000-id set for every
+ * row made a package preview quadratic. The cache is keyed by the array itself
+ * and re-checked against its length, so a list that grows is re-read.
+ */
+const idSetCache = new WeakMap<readonly Stored[], { length: number; ids: Set<string> }>();
+const idSet = (list: readonly Stored[] | null | undefined) => {
+  if (!list) return null;
+  const cached = idSetCache.get(list);
+  if (cached && cached.length === list.length) return cached.ids;
+  const ids = new Set(list.map((r) => String(r.id ?? '')));
+  idSetCache.set(list, { length: list.length, ids });
+  return ids;
+};
 const text = (value: unknown) => (typeof value === 'string' ? value.trim() : value == null ? '' : String(value).trim());
+
+/*
+ * The only existing records the BOM validators can react to, found by index
+ * rather than by scanning every BOM / version for every row:
+ *   validateBomForSave         a record with the SAME code (duplicate), a record
+ *                              marked default (the default-holder rule), and the
+ *                              record being edited;
+ *   validateBomVersionForSave  the versions of the SAME BOM.
+ * Candidates keep their original list order, so every check returns exactly what
+ * it returned over the full list. Keyed by the list; the lists are append-only
+ * (stored records, or this run's pending rows pushed one by one), so a list that
+ * grew is indexed from where the index stopped.
+ */
+const bomCodeKey = (value: unknown) => text(value).toUpperCase().replace(/\s+/g, '');
+interface BomListIndex { length: number; position: Map<Stored, number>; byCode: Map<string, Stored[]>; defaults: Stored[]; byId: Map<string, Stored>; byBomId: Map<string, Stored[]> }
+const bomListIndexCache = new WeakMap<readonly Stored[], BomListIndex>();
+function bomListIndex(list: readonly Stored[]): BomListIndex {
+  let index = bomListIndexCache.get(list);
+  if (!index || index.length > list.length) {
+    index = { length: 0, position: new Map(), byCode: new Map(), defaults: [], byId: new Map(), byBomId: new Map() };
+    bomListIndexCache.set(list, index);
+  }
+  const push = <K>(map: Map<K, Stored[]>, key: K, record: Stored) => {
+    const at = map.get(key);
+    if (at) at.push(record);
+    else map.set(key, [record]);
+  };
+  for (let i = index.length; i < list.length; i++) {
+    const record = list[i];
+    index.position.set(record, i);
+    push(index.byCode, bomCodeKey(record.code), record);
+    if (record.isDefault === true) index.defaults.push(record);
+    const id = String(record.id ?? '');
+    if (id && !index.byId.has(id)) index.byId.set(id, record);
+    const bomId = text(record.bomId);
+    if (bomId) push(index.byBomId, bomId, record);
+  }
+  index.length = list.length;
+  return index;
+}
+function candidatesOf(list: readonly Stored[], code: unknown, editingId: string | null): Stored[] {
+  const index = bomListIndex(list);
+  const picked = new Set<Stored>([...(index.byCode.get(bomCodeKey(code)) ?? []), ...index.defaults]);
+  const self = editingId ? index.byId.get(editingId) : undefined;
+  if (self) picked.add(self);
+  return [...picked].sort((a, b) => (index.position.get(a) ?? 0) - (index.position.get(b) ?? 0));
+}
+/** Stored records first, then this run's pending rows - the order the full concatenation had. */
+function bomCandidates(stored: readonly Stored[] | null | undefined, pending: readonly Stored[] | undefined, code: unknown, editingId: string | null): Stored[] {
+  return [...candidatesOf(stored ?? [], code, editingId), ...(pending?.length ? candidatesOf(pending, code, editingId) : [])];
+}
+function versionCandidates(stored: readonly Stored[] | null | undefined, pending: readonly Stored[] | undefined, bomId: unknown): Stored[] {
+  const of = (list: readonly Stored[]) => bomListIndex(list).byBomId.get(text(bomId)) ?? [];
+  return [...of(stored ?? []), ...(pending?.length ? of(pending) : [])];
+}
 
 /** Units on a row: approved passes, a legacy spelling warns, anything else blocks. */
 function unitIssues(field: string, value: unknown): { errors: ImportIssue[]; warnings: ImportIssue[]; normalized: string | null } {
@@ -164,7 +233,9 @@ export function resolveAndValidateImportRow(
 export function validateImportRow(kind: ImportEntityKind, payload: Record<string, unknown>, context: ImportValidationContext = {}): ImportValidationResult {
   const errors: ImportIssue[] = [];
   const warnings: ImportIssue[] = [];
-  const existing = (list: readonly Stored[] | null | undefined) => [...(list ?? []), ...(context.pendingSameKind ?? [])];
+  // The same array when nothing is pending, so per-list lookups are built once for a whole preview.
+  const existing = (list: readonly Stored[] | null | undefined): readonly Stored[] =>
+    context.pendingSameKind?.length ? [...(list ?? []), ...context.pendingSameKind] : (list ?? []);
 
   switch (kind) {
     case 'jobReferences': {
@@ -211,7 +282,11 @@ export function validateImportRow(kind: ImportEntityKind, payload: Record<string
        */
       const bomDraft = (payload.bom ?? {}) as Record<string, unknown>;
       const versionDraft = (payload.version ?? {}) as Record<string, unknown>;
-      const bomCheck = validateBomForSave(existing(context.boms), bomDraft, {
+      // An UPDATE is checked as an edit of the record it matched, so an existing
+      // BOM is never reported as a duplicate of itself when a package is re-run.
+      const bomEditingId = text(payload.existingBomId) || null;
+      const bomCheck = validateBomForSave(bomCandidates(context.boms, context.pendingSameKind, bomDraft.code, bomEditingId), bomDraft, {
+        editingId: bomEditingId,
         knownItems: { products: idSet(context.products), materials: idSet(context.materials) },
         knownCustomerIds: idSet(context.customers),
         logicalItems: context.logicalItems ?? [],
@@ -228,7 +303,9 @@ export function validateImportRow(kind: ImportEntityKind, payload: Record<string
       warnings.push(...basis.warnings);
       // The BOM this version belongs to is the row's own BOM - existing or about to be written.
       const bomForVersion = { ...bomPayloadForSave(bomDraft), id: text(payload.existingBomId) || 'PENDING' };
-      const versionCheck = validateBomVersionForSave(existing(context.bomVersions), { ...versionDraft, bomId: bomForVersion.id }, {
+      const versionCheck = validateBomVersionForSave(versionCandidates(context.bomVersions, context.pendingSameKind, bomForVersion.id), { ...versionDraft, bomId: bomForVersion.id }, {
+        // The package's V1 that already exists is the same version - never a second one.
+        editingId: text(payload.existingVersionId) || null,
         knownItems: { products: idSet(context.products), materials: idSet(context.materials) },
         bom: bomForVersion,
         logicalItems: context.logicalItems ?? [],
@@ -239,7 +316,9 @@ export function validateImportRow(kind: ImportEntityKind, payload: Record<string
         errors,
         warnings,
         normalized: {
-          bom: bomPayloadForSave(bomDraft),
+          // bomPayloadForSave keeps the editable BOM fields only; the package's Odoo
+          // BOM id rides along as an external reference, never as an ASFOUR id.
+          bom: { ...bomPayloadForSave(bomDraft), externalRefs: Array.isArray(bomDraft.externalRefs) ? bomDraft.externalRefs : [] },
           version: bomVersionPayloadForSave({ ...versionDraft, bomId: bomForVersion.id }),
           existingBomId: text(payload.existingBomId) || null,
           existingVersionId: text(payload.existingVersionId) || null,

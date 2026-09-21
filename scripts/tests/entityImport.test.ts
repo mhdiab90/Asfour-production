@@ -376,9 +376,12 @@ test('S1. imports go through the existing write paths only - no second engine, n
 test('S2. the final execution revalidates, isolates each row, and writes nothing that became invalid', () => {
   const service = readCode(SERVICE);
   // Phase 1 Step 8C-3: the same final revalidation, now resolving the row's business codes first.
-  assert.ok(/const recheck = resolveAndValidateImportRow\(row\.entityKind, rowPayload\(row\), \{ \.\.\.context, pendingSameKind \}, options\.indexes, options\.mappingCache\);/.test(service), 'revalidated against the rows already written');
-  assert.ok(/if \(!isRowWritable\(current\)\) \{[\s\S]{0,200}droppedBeforeWrite\.push/.test(service));
-  assert.ok(/try \{[\s\S]{0,400}catch \(err: any\) \{[\s\S]{0,200}applyRowResult\(current, \{ ok: false/.test(service), 'one row fails alone');
+  // The loop lives in entityImportExecutionPure (testable without Firestore); the service passes writeRow to it.
+  assert.ok(/executeImportRows\([\s\S]{0,120}writeRow\(row, rowContext, options\)/.test(service), 'the service runs the shared loop with its own writer');
+  const loop = readCode('src/services/entityImportExecutionPure.ts');
+  assert.ok(/const recheck = resolveAndValidateImportRow\(row\.entityKind, payload, \{ \.\.\.rowContext, pendingSameKind \}, options\.indexes, options\.mappingCache\);/.test(loop), 'revalidated against the rows already written');
+  assert.ok(/if \(!isRowWritable\(current\)\) \{[\s\S]{0,200}droppedBeforeWrite\.push/.test(loop));
+  assert.ok(/try \{[\s\S]{0,1600}catch \(err: any\) \{[\s\S]{0,200}applyRowResult\(current, \{ ok: false/.test(loop), 'one row fails alone');
   for (const field of ['successCount', 'failedCount', 'skippedCount', 'excludedCount', 'correctedCount', 'remainingBlockingCount']) {
     assert.ok(service.includes(field), field);
   }
@@ -386,7 +389,9 @@ test('S2. the final execution revalidates, isolates each row, and writes nothing
 
 test('S3. the review UI keeps the source row, states the counts, and never writes before the confirmation', () => {
   const panel = readCode(PANEL);
-  assert.ok(/importConfirmation\(session, isAr \? 'ar' : 'en'\)/.test(panel) && /window\.confirm\(/.test(panel));
+  // The confirmation states the counts of exactly the session that is then executed.
+  assert.ok(/importConfirmation\(toRun, isAr \? 'ar' : 'en'\)/.test(panel) && /window\.confirm\(/.test(panel));
+  assert.ok(/executeEntityImport\(toRun, context/.test(panel), 'what is confirmed is what runs');
   assert.ok(/executeEntityImport\(/.test(panel));
   assert.ok(/hasPermission\('excel\.import'\)/.test(panel), 'the existing import right');
   for (const id of ['entity-import-panel', 'entity-import-rows', 'entity-import-execute', 'entity-import-reprocess']) assert.ok(panel.includes(`id="${id}"`), id);

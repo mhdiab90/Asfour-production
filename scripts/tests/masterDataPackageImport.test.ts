@@ -103,6 +103,17 @@ const build = (input: { products?: any[]; mixes?: any[]; exceptions?: any[]; exi
     existing: input.existing ?? { products: [], materials: [], boms: [], bomVersions: [] },
   });
 
+/**
+ * What the reviewer does before importing: accept every row's warnings. The BOM
+ * rows are then re-derived by the same function the panel runs, so a BOM that
+ * waited for its package items becomes importable exactly when they are.
+ */
+const reviewed = (result: any) => {
+  const rows = session.evaluatePackageRows(result, result.staged.map((s: any) =>
+    (s.row.warnings.length > 0 && !s.row.warningsAccepted ? entity.acceptRowWarnings(s.row, { user: 'reviewer', at: 'T' }) : s.row)));
+  return { ...result, staged: result.staged.map((s: any, i: number) => ({ ...s, row: rows[i] })), counts: session.packageSessionCounts(result.staged, rows, result.exceptions) };
+};
+
 const rowOf = (result: any, kind: string, code?: string) =>
   result.staged.find((s: any) => s.kind === kind && (!code || String((s.row.normalizedData as any)?.code ?? (s.row.normalizedData as any)?.bom?.code ?? '') === code));
 
@@ -219,10 +230,10 @@ test('6. the two reject outputs are scrap outputs in Ton - never purchased raw m
 test('7. the three decided mixes output Ton, never Piece', () => {
   assert.deepEqual([...pkg.DECIDED_BOM_OUTPUT_TON], ['LCC-S9006', 'LCC8004', 'LCC-S8005']);
   for (const code of pkg.DECIDED_BOM_OUTPUT_TON) {
-    const result = build({
+    const result = reviewed(build({
       products: [productRow({ 'Product Code': code }), productRow({ 'Product Code': 'MAT-1', ItemKind: 'RAW_MATERIAL' })],
       mixes: [mixRow({ 'BOM Reference': code, 'Product Code': code, 'BOM Output UOM': 'pc' })],
-    });
+    }));
     const bom = rowOf(result, 'bomPackage');
     assert.equal(bom.row.normalizedData.version.basisUnit, 'طن', code);
     assert.ok(bom.row.warnings.some((w: any) => /Ton by a recorded decision/.test(w.messageEn)));
@@ -270,10 +281,10 @@ test('9. a case-only duplicate is SKIPPED, never blocking and never merged', () 
 // ==================================================
 
 test('10. a mix becomes one BOM with one version and its components, in the file\'s own order', () => {
-  const result = build({
+  const result = reviewed(build({
     products: [productRow(), productRow({ 'Product Code': 'MAT-1', 'Product Name': 'Clay', ItemKind: 'RAW_MATERIAL' }), productRow({ 'Product Code': 'MAT-2', 'Product Name': 'Sand', ItemKind: 'RAW_MATERIAL' })],
     mixes: [mixRow(), mixRow({ 'Component Code': 'MAT-2', 'Component Name': 'Sand', 'Component Quantity': '0.4' })],
-  });
+  }));
   const bom = rowOf(result, 'bomPackage');
   const n = bom.row.normalizedData;
   assert.deepEqual([n.bom.code, n.bom.name], ['BHA6001', 'Bricks High Alumina 60%']);
@@ -285,22 +296,28 @@ test('10. a mix becomes one BOM with one version and its components, in the file
   assert.ok(/Activation is a separate human-approved step/.test(n.version.notes));
   assert.equal(n.odooBomId, '__export__.mrp_bom_1', 'the Odoo BOM id is preserved');
   assert.deepEqual([n.version.basisQuantity, n.version.basisUnit], [1, 'طن']);
-  assert.deepEqual(n.version.components.map((c: any) => [c.lineId, c.sequence, c.itemCode, c.quantity, c.unit]), [
-    ['L1', 1, 'MAT-1', 0.6, 'طن'],
-    ['L2', 2, 'MAT-2', 0.4, 'طن'],
+  // The source row names each component by code, in the file's order ...
+  assert.deepEqual(bom.row.originalRowData.version.components.map((c: any) => [c.lineId, c.sequence, c.itemCode]), [['L1', 1, 'MAT-1'], ['L2', 2, 'MAT-2']]);
+  // ... and what is written (the validator's normalised form) carries the item it resolved to - here the
+  // package's own materials, as pending tokens until their ids exist.
+  assert.deepEqual(n.version.components.map((c: any) => [c.lineId, c.sequence, c.itemId, c.quantity, c.unit]), [
+    ['L1', 1, session.packageItemToken('materials', 'MAT-1'), 0.6, 'طن'],
+    ['L2', 2, session.packageItemToken('materials', 'MAT-2'), 0.4, 'طن'],
   ]);
-  assert.equal(n.version.components[0].componentType, undefined, 'the package states no BASE / ADDITIVE split');
+  assert.equal(bom.row.originalRowData.version.components[0].componentType, undefined, 'the package states no BASE / ADDITIVE split');
+  // The BOM model's own normal form reads an absent type as BASE (Step 7A) - its documented default, not a package value.
+  assert.equal(n.version.components[0].componentType, 'BASE');
   assert.equal(bom.componentCount, 2);
 });
 
 test('11. one BOM split across two part files stays ONE BOM', () => {
-  const result = session.buildMasterDataPackageSession({
+  const result = reviewed(session.buildMasterDataPackageSession({
     importSessionId: 'MDP-TEST',
     productSheets: [sheet([productRow(), productRow({ 'Product Code': 'MAT-1', ItemKind: 'RAW_MATERIAL' }), productRow({ 'Product Code': 'MAT-2', ItemKind: 'RAW_MATERIAL' })])],
     mixSheets: [sheet([mixRow()], 'Part1.xlsx'), sheet([mixRow({ 'Component Code': 'MAT-2', 'Component Quantity': '0.4' })], 'Part2.xlsx')],
     exceptionSheets: [],
     existing: { products: [], materials: [], boms: [], bomVersions: [] },
-  });
+  }));
   const boms = result.staged.filter((s: any) => s.kind === 'bomPackage');
   assert.equal(boms.length, 1, 'not two BOMs');
   assert.equal(boms[0].row.normalizedData.version.components.length, 2, 'its components are joined');
@@ -316,13 +333,13 @@ test('12. a component that resolves to nothing blocks its own BOM and creates no
 });
 
 test('13. a BOM component with no unit is a validation issue, never a guess - and other BOMs still import', () => {
-  const result = build({
+  const result = reviewed(build({
     products: [productRow(), productRow({ 'Product Code': 'MAT-1', ItemKind: 'RAW_MATERIAL' })],
     mixes: [
       mixRow({ 'BOM Reference': 'GOOD', 'BOM Odoo ID': 'bom-good', 'Product Code': 'BHA6001' }),
       mixRow({ 'BOM Reference': 'BAD', 'BOM Odoo ID': 'bom-bad', 'Product Code': 'BHA6001', 'Resolved Component UOM': '', 'Original Source UOM': '' }),
     ],
-  });
+  }));
   const good = result.staged.find((s: any) => s.kind === 'bomPackage' && s.row.rowId.includes('bom-good'));
   const bad = result.staged.find((s: any) => s.kind === 'bomPackage' && s.row.rowId.includes('bom-bad'));
   assert.equal(good.row.errors.length, 0, 'a bad row never blocks a good one');
@@ -358,7 +375,7 @@ test('15. an existing product is also matched by its Odoo reference, never by na
 test('16. running the same package twice creates nothing new', () => {
   const products = [productRow(), productRow({ 'Product Code': 'MAT-1', 'Product Name': 'Clay', ItemKind: 'RAW_MATERIAL', 'Odoo External ID': '__export__.product_product_9' })];
   const mixes = [mixRow()];
-  const first = build({ products, mixes });
+  const first = reviewed(build({ products, mixes }));
   const writtenProducts = first.staged.filter((s: any) => s.kind === 'products').map((s: any, i: number) => ({ id: `p${i}`, ...s.row.normalizedData }));
   const writtenMaterials = first.staged.filter((s: any) => s.kind === 'materials').map((s: any, i: number) => ({ id: `m${i}`, ...s.row.normalizedData }));
   const writtenBoms = first.staged.filter((s: any) => s.kind === 'bomPackage').map((s: any, i: number) => ({ id: `b${i}`, ...s.row.normalizedData.bom }));
@@ -375,7 +392,7 @@ test('16. running the same package twice creates nothing new', () => {
 test('17. the write path upserts through the existing services and never deletes', () => {
   const service = readCode('src/services/entityImportService.ts');
   assert.ok(/case 'products':\s*case 'materials': \{/.test(service));
-  assert.ok(/updateMasterDataItem\(collectionName, String\(existingId\), patch\)/.test(service), 'an existing record is updated');
+  assert.ok(/const changes = changedFieldsOnly\(current, patch\);[\s\S]{0,120}updateMasterDataItem\(collectionName, String\(existingId\), changes\)/.test(service), 'an existing record is updated - only what changed');
   assert.ok(/createMasterDataItem\(collectionName, record\)/.test(service), 'a new record uses the existing audited service');
   assert.ok(/UPDATABLE_MASTER_FIELDS/.test(service), 'only the allowed fields are updated');
   assert.equal(/deleteDoc|removeMasterDataItem|destructive/.test(service), false, 'nothing is deleted');

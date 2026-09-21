@@ -266,7 +266,7 @@ test('27. every mapping decision is auditable: field, value, entity, method, sta
 test('P. the dictionaries are built once per session, and the panel resolves through the one pipeline', () => {
   const service = readCode(SERVICE);
   assert.ok(/export async function buildImportReferenceIndexes\(/.test(service));
-  assert.ok(/resolveAndValidateImportRow\(row\.entityKind, rowPayload\(row\), \{ \.\.\.context, pendingSameKind \}, options\.indexes, options\.mappingCache\)/.test(service), 'the final revalidation resolves too');
+  assert.ok(/resolveAndValidateImportRow\(row\.entityKind, payload, \{ \.\.\.rowContext, pendingSameKind \}, options\.indexes, options\.mappingCache\)/.test(readCode('src/services/entityImportExecutionPure.ts')), 'the final revalidation resolves too');
   const panel = readCode(PANEL);
   assert.ok(/buildImportReferenceIndexes\(ctx, stageType\)/.test(panel));
   assert.ok(/approveReferenceMapping\(mappingCache, resolution\.entity, resolution\.sourceValue, targetId\)/.test(panel), 'approving once applies to the whole import');

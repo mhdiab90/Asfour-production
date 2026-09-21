@@ -1,18 +1,9 @@
 {
   "_doc": "Release Manifest precursor. Describes WHAT is being released so the gate checks a committed declaration rather than whatever flags an operator typed. commitSha/buildId/deploymentId are left null until a release is cut - the gate fills the comparison from the build itself, and only enforces a field that is set here. This is NOT the Change Registry: no change IDs, no Firestore, no UI.",
-  "version": "3.21.0",
-  "releaseId": "REL-2026-0023",
+  "version": "3.21.1",
+  "releaseId": "REL-2026-0024",
   "changeIds": [
-    "MOD-0028",
-    "MOD-0029",
-    "MOD-0030",
-    "MOD-0031",
-    "MOD-0032",
-    "DB-0033",
-    "PERF-0034",
-    "SEC-0035",
-    "AI-0036",
-    "UI-0037"
+    "FIX-0038"
   ],
   "commitSha": null,
   "buildId": null,
@@ -52,7 +43,8 @@
     "odoo-import-open-btn",
     "stage_tunnel_kiln",
     "costingPeriods",
-    "translation-manager"
+    "translation-manager",
+    "bomsWaitingForItems"
   ],
   "_markerNotes": {
     "ai-provider-management": "AI Provider Management route - absent means the AI Assistant closure was dropped",
@@ -89,7 +81,8 @@
     "odoo-import-open-btn": "The three-file Odoo historical import entry point - absent means the Odoo import was dropped",
     "stage_tunnel_kiln": "The tunnel kiln stage collection - absent means the three new production areas were dropped",
     "costingPeriods": "The costing setup collection - absent means costing periods and allocation setup were dropped",
-    "translation-manager": "The Translation Manager route - absent means translation governance was dropped"
+    "translation-manager": "The Translation Manager route - absent means translation governance was dropped",
+    "bomsWaitingForItems": "The Master Data Package \"BOMs waiting for their items\" count - absent means the preview no longer shows package dependencies and the 3.21.1 preview/execution fix was dropped"
   },
   "tests": [
     "buildIdentity",
@@ -135,11 +128,13 @@
     "costingFoundation",
     "productionQueryBounds",
     "chineseMillsImportHistory",
-    "stageRecordQueryBounds"
+    "stageRecordQueryBounds",
+    "masterDataPackageDependency"
   ],
   "deployCommand": "firebase deploy --only hosting --project asfourproduction-70e6e",
   "treeClean": true,
   "_changeNotes": {
+    "FIX-0038": "Master Data Package import dependency fix (3.21.0 defect). A BOM whose product or components are created by the SAME package carried a blank item id: the preview showed it ready and the final pre-write validation dropped it (\"rows excluded before write\"). Now a package-created item is referenced by a pending package-item token (never an id, never written); the preview validates every BOM with the SAME validator the write uses, over the existing items plus the package items, and a BOM whose package item will not be written (blocked, skipped, excluded or warnings not accepted) is BLOCKING with that reason. The single approved import writes products and materials first, binds each token to the ASFOUR id its write returned, then revalidates and writes the BOM (entityImportExecutionPure). Also fixed on the same path: the Odoo BOM id external reference was dropped by normalisation; an existing BOM and its V1 were flagged as duplicates of themselves on re-import; unchanged records are no longer rewritten (NO-OP); lookups are indexed (the real package preview/execution went from over 10 minutes to seconds); re-selecting the same files re-reads them. Real package: 15,872 products + 221 materials + 14,073 BOMs importable in one run, 0 dropped before write; 29 BOMs stay BLOCKING by the unchanged BOM rules (24 with a line quantity <= 0, 5 with an item listed twice) and never block the others. No business rule, BOM validation rule, Firestore rule, schema or permission changed; nothing was imported",
     "UI-0037": "Translation governance and print styling. A Translation Manager and a Language Audit screen (gated by the new translation.manage permission) read and write translationOverrides, whose rule already exists; LanguageContext merges the overrides for signed-in users. The header, sidebar, mobile navigation and footer are hidden when printing. No production, Master Data or costing behaviour changed",
     "AI-0036": "AI Assistant through the assistant gateway. The AI Assistant screen now drives the same AssistantGateway / tool registry / permission checks as the Global Assistant, and the old client-side aiService was removed. A real provider is reached only through the separately deployed Cloudflare Worker in cloudflare/ai-gateway (NOT deployed by this release); VITE_AI_PROVIDER defaults to the local mock, so nothing calls an external model until that gateway is configured. Suggested Analytics is reachable from the sidebar. No API key is shipped in the bundle",
     "SEC-0035": "Backup integrity before restore. The previous restore preview treated every checksum as valid (a trailing \"|| true\"). Restores now verify the file fingerprint (SHA-256, or the legacy CHK- checksum for older backups) and STOP on a mismatch; a backup with no checksum needs an explicit allowance. Collection counts use getCountFromServer instead of reading every document. No backup format, data or rule changed",
@@ -170,8 +165,8 @@
     "UI-0010": "Financial Accounts import opens a dedicated Master Data importer instead of the Historical Excel Import screen: the action no longer navigates to the bulk-entry route (which App.tsx renders as DataImportView); a new in-place modal reuses the existing financialAccounts schema, XLSX reader, row validation, duplicate detection and chunked commit, adds sheet selection and parent/cycle relationship checks, and keeps partial import so invalid rows never block valid ones",
     "DB-0009": "Category-first Master Data over an extensible registry; Financial Accounts master data with Excel import and hierarchical editing (new financialAccounts collection and its Firestore rule); one shared generic hierarchy resolver reused by Master Data, Production Review and production aggregation; hierarchical cost-centre editing with cycle, self-parent and unknown-parent protection"
   },
-  "previousVersion": "3.20.0",
-  "versionBump": "MINOR",
-  "classificationConfidence": "MEDIUM",
-  "previousReleaseId": "REL-2026-0022"
+  "previousVersion": "3.21.0",
+  "versionBump": "PATCH",
+  "classificationConfidence": "HIGH",
+  "previousReleaseId": "REL-2026-0023"
 }

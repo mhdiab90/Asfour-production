@@ -37,7 +37,7 @@ const DEPLOYMENT_ID_INJECTED = typeof __BUILD_DEPLOYMENT_ID__ === 'string' ? __B
 
 export const CURRENT_APP_VERSION: AppVersionInfo = {
   /** Set by the automatic release planner from the classified change set - see releasePlannerPure.ts. */
-  version: '3.21.0',
+  version: '3.21.1',
   buildId: BUILD_ID_INJECTED,
   buildTimestamp: BUILD_TIMESTAMP_INJECTED,
   gitCommit: COMMIT_SHA_INJECTED,
@@ -46,6 +46,17 @@ export const CURRENT_APP_VERSION: AppVersionInfo = {
   environment: 'production',
   releaseDate: '2026-08-22',
   changelog: [
+    {
+      version: '3.21.1',
+      date: '2026-09-21',
+      highlights: [
+        'إصلاح استيراد حزمة البيانات الأساسية: قوائم المواد التي تستخدم منتجات أو خامات من نفس الحزمة تُستورد في نفس عملية الاستيراد',
+        'المعاينة تطابق التنفيذ: نفس قواعد التحقق قبل الموافقة وقبل الكتابة - لا سطور تُستبعد بشكل مفاجئ',
+        'قوائم المواد ذات البيانات الخاطئة (كمية صفر أو مكوّن مكرر) تظهر كمانعة في المعاينة مع السبب، ولا تمنع غيرها',
+        'حفظ مرجع قائمة المواد في أودو كمرجع خارجي، وإعادة استيراد نفس الحزمة لا تنشئ ولا تعيد كتابة شيء',
+        'تسريع كبير لمعاينة وتنفيذ الحزم الكبيرة'
+      ]
+    },
     {
       version: '3.21.0',
       date: '2026-09-21',

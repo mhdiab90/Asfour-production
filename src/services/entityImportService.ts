@@ -21,7 +21,7 @@
  * logAuditAction. Nothing here writes a second audit store.
  */
 import { MASTER_DATA_COLLECTIONS, createMasterDataItem, fetchMasterData, updateMasterDataItem } from './masterDataService';
-import { UPDATABLE_MASTER_FIELDS } from './masterDataPackagePure';
+import { UPDATABLE_MASTER_FIELDS, changedFieldsOnly } from './masterDataPackagePure';
 import { externalReferencesPatch, readExternalReferences, upsertExternalReference } from './externalReferencesPure';
 import { BOM_VERSION_COLLECTION } from './bomPure';
 import { ROUTING_VERSION_COLLECTION } from './routingPure';
@@ -38,17 +38,9 @@ import { createStageRecord } from './stageRecordService';
 import { createProductionRecord } from './productionService';
 import { describeBomChange, describeBomVersionChange } from './bomPure';
 import { describeRoutingChange } from './routingPure';
-import {
-  applyRowResult,
-  applyValidation,
-  describeImportSession,
-  describeRowOutcome,
-  isRowWritable,
-  planImport,
-  rowPayload,
-} from './entityImportPure';
+import { describeImportSession, describeRowOutcome, rowPayload } from './entityImportPure';
+import { executeImportRows } from './entityImportExecutionPure';
 import type { ImportRow, ImportSession } from './entityImportPure';
-import { resolveAndValidateImportRow } from './importEntityValidationPure';
 import type { ImportValidationContext } from './importEntityValidationPure';
 import { buildReferenceIndexes, describeResolution } from './referenceResolutionPure';
 import type { ReferenceIndexes, ReferenceMappingCache } from './referenceResolutionPure';
@@ -185,8 +177,10 @@ async function writeRow(row: ImportRow, context: ImportValidationContext, option
           for (const ref of incoming) refs = upsertExternalReference(refs, ref).refs;
           Object.assign(patch, externalReferencesPatch(refs));
         }
-        if (Object.keys(patch).length > 0) {
-          await updateMasterDataItem(collectionName, String(existingId), patch);
+        // Only what differs is written; an item that already matches the package is a NO-OP.
+        const changes = changedFieldsOnly(current, patch);
+        if (Object.keys(changes).length > 0) {
+          await updateMasterDataItem(collectionName, String(existingId), changes);
         }
         return String(existingId);
       }
@@ -202,7 +196,11 @@ async function writeRow(row: ImportRow, context: ImportValidationContext, option
         let refs = readExternalReferences(current ?? {});
         for (const ref of (Array.isArray(bomDraft.externalRefs) ? bomDraft.externalRefs : [])) refs = upsertExternalReference(refs, ref).refs;
         const { code: _code, ...updatable } = bomDraft;
-        await updateMasterDataItem(MASTER_DATA_COLLECTIONS.boms, bomId, { ...updatable, ...externalReferencesPatch(refs) });
+        // Only what differs is written; a BOM header that already matches is a NO-OP.
+        const changes = changedFieldsOnly(current, { ...updatable, ...externalReferencesPatch(refs) });
+        if (Object.keys(changes).length > 0) {
+          await updateMasterDataItem(MASTER_DATA_COLLECTIONS.boms, bomId, changes);
+        }
       } else {
         bomId = String(await createMasterDataItem(MASTER_DATA_COLLECTIONS.boms, bomDraft) ?? '');
         if (!bomId) throw new Error('The BOM could not be created.');
@@ -284,44 +282,29 @@ export async function executeEntityImport(
   context: ImportValidationContext,
   options: ImportExecutionOptions,
 ): Promise<ImportExecutionResult> {
-  const droppedBeforeWrite: Array<{ rowId: string; reason: string }> = [];
-  const { willImport } = planImport(session);
-  const eligible = new Set(willImport.map((r) => r.rowId));
-  // Rows of this same file that were written already, so an in-file duplicate is caught.
-  const pendingSameKind: Array<Record<string, unknown> & { id?: string }> = [];
-  const rows: ImportRow[] = [];
-
-  for (const row of session.rows) {
-    if (!eligible.has(row.rowId)) {
-      rows.push(row);
-      continue;
-    }
-    // Final revalidation - business codes resolved again, with everything written so far in this run.
-    const recheck = resolveAndValidateImportRow(row.entityKind, rowPayload(row), { ...context, pendingSameKind }, options.indexes, options.mappingCache);
-    let current = applyValidation(row, recheck, { user: options.user, at: options.at() });
-    if (!isRowWritable(current)) {
-      droppedBeforeWrite.push({ rowId: current.rowId, reason: current.errors.map((e) => (options.language === 'ar' ? e.messageAr : e.messageEn)).join(' | ') || 'no longer eligible' });
-      rows.push(current);
-      continue;
-    }
-    try {
-      const id = await writeRow(current, context, options);
-      current = applyRowResult(current, { ok: true, id: id ?? null }, { user: options.user, at: options.at() });
-      if (id) pendingSameKind.push({ ...(current.normalizedData ?? {}), id });
-    } catch (err: any) {
-      // This row alone fails; every other row continues.
-      current = applyRowResult(current, { ok: false, error: String(err?.message ?? err) }, { user: options.user, at: options.at() });
-    }
-    // One audit line per row, naming every business identifier and how it resolved.
-    const resolutionTrail = (recheck.resolutions ?? []).filter((r) => r.status !== 'EMPTY').map(describeResolution);
-    logAuditAction(
-      current.status === 'IMPORTED' ? 'CREATE' : 'UPDATE',
-      'importAuditTrail',
-      session.importId,
-      `${describeRowOutcome(session, current)}${resolutionTrail.length ? ` | references: ${resolutionTrail.join('; ')}` : ''}`,
-    ).catch(() => {});
-    rows.push(current);
-  }
+  /*
+   * The loop itself - final revalidation, row isolation, and the Master Data
+   * package's dependency order (products and materials first, their new ids bound
+   * into the BOMs before those are revalidated and written) - lives in
+   * entityImportExecutionPure so it can be tested without Firestore. Every write
+   * still goes through writeRow and the existing services below.
+   */
+  const { rows, droppedBeforeWrite } = await executeImportRows(
+    session,
+    context,
+    options,
+    (row, rowContext) => writeRow(row, rowContext, options),
+    (current, recheck) => {
+      // One audit line per row, naming every business identifier and how it resolved.
+      const resolutionTrail = (recheck.resolutions ?? []).filter((r) => r.status !== 'EMPTY').map(describeResolution);
+      logAuditAction(
+        current.status === 'IMPORTED' ? 'CREATE' : 'UPDATE',
+        'importAuditTrail',
+        session.importId,
+        `${describeRowOutcome(session, current)}${resolutionTrail.length ? ` | references: ${resolutionTrail.join('; ')}` : ''}`,
+      ).catch(() => {});
+    },
+  );
 
   const next: ImportSession = { ...session, rows };
   logAuditAction('BULK_IMPORT', 'importAuditTrail', session.importId, describeImportSession(next)).catch(() => {});

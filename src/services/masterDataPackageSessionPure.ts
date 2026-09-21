@@ -32,13 +32,27 @@
  *                                 never deleted.
  *   BLOCKING                      a genuine data error (a missing code or name, a
  *                                 BOM component that resolves to nothing).
+ *
+ * ITEMS DEFINED BY THE SAME PACKAGE (the 3.21.0 defect this closes). A BOM may
+ * point at a product or material that the package itself creates, which has no
+ * ASFOUR id before it is written. Such a reference is carried as a PENDING
+ * PACKAGE-ITEM TOKEN (`pending-package-item:<kind>:<CODE>`) - clearly not an id,
+ * never persisted. The preview validates every BOM with the SAME validator the
+ * write uses, over an in-memory context of the existing items plus the package's
+ * own items under those tokens; and a BOM whose package item will not be written
+ * (blocked, skipped, excluded or with warnings not accepted) is BLOCKING with that
+ * reason. The execution writes products and materials first, binds each token to
+ * the id the write returned, and only then revalidates and writes the BOM - so
+ * what the preview calls importable is exactly what the import writes.
  */
 import type { ImportRow } from './entityImportPure';
-import { applyValidation, createImportRow, setRowSelection, type ImportIssue } from './entityImportPure';
+import { applyValidation, createImportRow, isRowWritable, rowPayload, setRowSelection, type ImportIssue } from './entityImportPure';
+import { resolveAndValidateImportRow, type ImportValidationContext, type ImportValidationResult } from './importEntityValidationPure';
 import {
   PACKAGE_BOM_VERSION_CODE,
   findExistingBom,
   findExistingBomVersion,
+  findExistingMasterRecord,
   isExceptionsSheet,
   isMixesSheet,
   isProductMasterSheet,
@@ -78,6 +92,72 @@ export interface PackageStagedRow {
   matchedBy: string;
   /** For a BOM row: how many components it carries. */
   componentCount?: number;
+  /**
+   * For a BOM row: the package's own structural findings (a BOM repeated inside
+   * the package, a code that resolves to nothing). The shared BOM validators and
+   * the dependency check are added to these on every evaluation.
+   */
+  baseIssues?: { errors: ImportIssue[]; warnings: ImportIssue[] };
+}
+
+// ==================================================================================
+// Pending package-item tokens
+// ==================================================================================
+
+/** Marks an item the package defines but ASFOUR does not hold yet. Never an id, never written. */
+export const PACKAGE_ITEM_TOKEN_PREFIX = 'pending-package-item:';
+
+export type PackageItemKind = 'products' | 'materials';
+
+/** The key a package item is known by within one run: its kind and its normalised code. */
+export function packageItemKey(kind: PackageItemKind, code: string): string {
+  return `${kind}:${normalizeCode(code)}`;
+}
+
+export function packageItemToken(kind: PackageItemKind, code: string): string {
+  return `${PACKAGE_ITEM_TOKEN_PREFIX}${packageItemKey(kind, code)}`;
+}
+
+export function isPackageItemToken(value: unknown): value is string {
+  return typeof value === 'string' && value.startsWith(PACKAGE_ITEM_TOKEN_PREFIX);
+}
+
+/** Every pending token a BOM payload refers to: its product, then its components. */
+export function packageItemTokensOf(payload: Record<string, unknown>): string[] {
+  const bom = (payload.bom ?? {}) as Record<string, unknown>;
+  const version = (payload.version ?? {}) as Record<string, unknown>;
+  const components = Array.isArray(version.components) ? (version.components as Array<Record<string, unknown>>) : [];
+  const tokens = [bom.itemId, ...components.map((c) => c.itemId)].filter(isPackageItemToken);
+  return [...new Set(tokens)];
+}
+
+/**
+ * Replaces every pending token of a BOM payload with the ASFOUR id its package
+ * item received when it was written in this run. A token with no id yet is
+ * reported, never guessed and never written.
+ */
+export function bindPackageItemReferences(
+  payload: Record<string, unknown>,
+  idsByKey: ReadonlyMap<string, string>,
+): { payload: Record<string, unknown>; unresolved: string[] } {
+  const unresolved: string[] = [];
+  const bind = (value: unknown): unknown => {
+    if (!isPackageItemToken(value)) return value;
+    const key = value.slice(PACKAGE_ITEM_TOKEN_PREFIX.length);
+    const id = idsByKey.get(key);
+    if (!id) {
+      if (!unresolved.includes(key)) unresolved.push(key);
+      return value;
+    }
+    return id;
+  };
+  const bom = { ...((payload.bom ?? {}) as Record<string, unknown>) };
+  bom.itemId = bind(bom.itemId);
+  const version = { ...((payload.version ?? {}) as Record<string, unknown>) };
+  if (Array.isArray(version.components)) {
+    version.components = (version.components as Array<Record<string, unknown>>).map((c) => ({ ...c, itemId: bind(c.itemId) }));
+  }
+  return { payload: { ...payload, bom, version }, unresolved };
 }
 
 /** Who and when a package decision is recorded as - deterministic, so a re-run is identical. */
@@ -106,11 +186,25 @@ export interface PackageSessionInput {
     boms?: readonly Stored[] | null;
     bomVersions?: readonly Stored[] | null;
   };
+  /**
+   * The rest of the context the shared validators read (customers, logical
+   * items...), exactly as the import loads it. Optional: without it the BOM
+   * validators see only `existing`.
+   */
+  validationContext?: ImportValidationContext;
 }
 
 export interface PackageSessionResult {
   importSessionId: string;
   staged: PackageStagedRow[];
+  /**
+   * The in-memory context the preview validates BOMs against: the existing items
+   * plus every item the package creates, under its pending token. Used only to
+   * validate - never written, and never passed to the execution.
+   */
+  previewContext: ImportValidationContext;
+  /** Each pending token -> the row id of the package row that creates that item. */
+  itemRowIds: Record<string, string>;
   exceptions: PackageException[];
   counts: Record<string, number>;
   /** Units the package uses that ASFOUR does not approve - reported, never guessed. */
@@ -135,13 +229,14 @@ function findItem(
   code: string,
   products: readonly Stored[] | null | undefined,
   materials: readonly Stored[] | null | undefined,
-  packageItems: Map<string, { itemSource: 'products' | 'materials'; itemId: string | null }>,
-): { itemSource: 'products' | 'materials'; itemId: string | null } | null {
+  packageItems: Map<string, { itemSource: 'products' | 'materials'; itemId: string }>,
+): { itemSource: 'products' | 'materials'; itemId: string } | null {
   const key = normalizeCode(code);
   if (!key) return null;
-  const product = (products ?? []).find((p) => normalizeCode(String(p.code ?? '')) === key || normalizeCode(String(p.productCode ?? '')) === key);
+  // Indexed lookups (first match in list order, as before): products by code or productCode, materials by code.
+  const product = findExistingMasterRecord(products, { code }).record;
   if (product) return { itemSource: 'products', itemId: String(product.id ?? '') };
-  const material = (materials ?? []).find((m) => normalizeCode(String(m.code ?? '')) === key);
+  const material = findExistingBom(materials, { odooBomId: null, code }).record;
   if (material) return { itemSource: 'materials', itemId: String(material.id ?? '') };
   return packageItems.get(key) ?? null;
 }
@@ -154,8 +249,14 @@ export function buildMasterDataPackageSession(input: PackageSessionInput): Packa
   const staged: PackageStagedRow[] = [];
   const unitProblems = new Map<string, number>();
 
-  /** Every item the package itself defines, so a BOM can point at an item created in the same run. */
-  const packageItems = new Map<string, { itemSource: 'products' | 'materials'; itemId: string | null }>();
+  /**
+   * Every item the package itself defines, so a BOM can point at an item created
+   * in the same run - under its pending token, never a blank id.
+   */
+  const packageItems = new Map<string, { itemSource: 'products' | 'materials'; itemId: string }>();
+  const itemRowIds: Record<string, string> = {};
+  /** The package's new items as the preview validators see them. */
+  const pendingItems: { products: Stored[]; materials: Stored[] } = { products: [], materials: [] };
 
   // --- products and materials ------------------------------------------------------------
   const productRows: PackageProductRow[] = [];
@@ -187,7 +288,7 @@ export function buildMasterDataPackageSession(input: PackageSessionInput): Packa
         `Duplicate code after normalisation (letter case): "${item.payload.code}" equals "${duplicate.payload.code}" at row ${duplicate.sourceRow}. The first record is kept and this row is SKIPPED / DUPLICATE - nothing is merged and no second product is created.`));
     } else if (code) {
       seenCodes.set(code, item);
-      packageItems.set(code, { itemSource: item.kind, itemId: null });
+      packageItems.set(code, { itemSource: item.kind, itemId: packageItemToken(item.kind, String(item.payload.code)) });
     }
     if (item.deferral?.reason === 'UNSUPPORTED_UOM') {
       const unit = item.deferral.detail;
@@ -200,6 +301,16 @@ export function buildMasterDataPackageSession(input: PackageSessionInput): Packa
       createImportRow(item.kind, item.sourceRow, validated.payload, `${item.kind}:${item.payload.code || item.sourceRow}:${item.sourceRow}`),
       { errors: [...errors, ...validated.errors], warnings: [...warnings, ...validated.warnings], normalized: errors.length || validated.errors.length ? null : validated.payload },
     );
+    if (code && !duplicate) {
+      const token = packageItemToken(item.kind, String(item.payload.code));
+      itemRowIds[token] = row.rowId;
+      // Only an item ASFOUR does not hold yet needs a pending identity; an
+      // existing one is referenced by its own id (findItem prefers it).
+      if (validated.payload.upsertAction === 'CREATE') {
+        const { existingId: _existingId, upsertAction: _upsertAction, matchedBy: _matchedBy, ...record } = validated.payload;
+        pendingItems[item.kind].push({ ...record, id: token });
+      }
+    }
     if (deferral) {
       // A duplicate is skipped; an unsupported unit is excluded and deferred.
       // Both keep their source row, their reason and their place in the review.
@@ -307,10 +418,9 @@ export function buildMasterDataPackageSession(input: PackageSessionInput): Packa
       odooBomId: bom.bomOdooId,
     };
 
-    const row = applyValidation(
-      createImportRow('bomPackage', bom.sourceRow, payload, `bomPackage:${bom.bomKey || bom.sourceRow}`),
-      { errors, warnings, normalized: errors.length ? null : payload },
-    );
+    // Validated below, once every package item is known: the builder's own
+    // findings, the shared BOM validators and the dependency check together.
+    const row = createImportRow('bomPackage', bom.sourceRow, payload, `bomPackage:${bom.bomKey || bom.sourceRow}`);
     staged.push({
       row,
       kind: 'bomPackage',
@@ -320,35 +430,31 @@ export function buildMasterDataPackageSession(input: PackageSessionInput): Packa
       upsertAction: existingBom.record ? 'UPDATE' : 'CREATE',
       matchedBy: existingBom.matchedBy,
       componentCount: components.length,
+      baseIssues: { errors, warnings },
     });
   }
 
+  const base = input.validationContext ?? {};
+  const previewContext: ImportValidationContext = {
+    ...base,
+    products: [...(input.existing.products ?? base.products ?? []), ...pendingItems.products],
+    materials: [...(input.existing.materials ?? base.materials ?? []), ...pendingItems.materials],
+    boms: input.existing.boms ?? base.boms ?? [],
+    bomVersions: input.existing.bomVersions ?? base.bomVersions ?? [],
+  };
+  const evaluated = evaluatePackageRows({ staged, previewContext, itemRowIds }, staged.map((s) => s.row));
+  evaluated.forEach((row, i) => { staged[i] = { ...staged[i], row }; });
+
   const exceptions = input.exceptionSheets.flatMap((sheet) => readExceptionsSheet(sheet.rows));
 
-  const counts: Record<string, number> = {
-    productSourceRows: productRows.length,
-    products: staged.filter((s) => s.kind === 'products').length,
-    materials: staged.filter((s) => s.kind === 'materials').length,
-    productsToCreate: staged.filter((s) => s.kind === 'products' && s.upsertAction === 'CREATE').length,
-    productsToUpdate: staged.filter((s) => s.kind === 'products' && s.upsertAction === 'UPDATE').length,
-    materialsToCreate: staged.filter((s) => s.kind === 'materials' && s.upsertAction === 'CREATE').length,
-    materialsToUpdate: staged.filter((s) => s.kind === 'materials' && s.upsertAction === 'UPDATE').length,
-    boms: staged.filter((s) => s.kind === 'bomPackage').length,
-    bomsToCreate: staged.filter((s) => s.kind === 'bomPackage' && s.upsertAction === 'CREATE').length,
-    bomsToUpdate: staged.filter((s) => s.kind === 'bomPackage' && s.upsertAction === 'UPDATE').length,
-    bomComponents: staged.reduce((n, s) => n + (s.componentCount ?? 0), 0),
-    blocking: staged.filter((s) => s.row.errors.length > 0).length,
-    skippedDuplicates: staged.filter((s) => s.deferral?.reason === 'DUPLICATE_CODE').length,
-    deferredUnsupportedUom: staged.filter((s) => s.deferral?.reason === 'UNSUPPORTED_UOM').length,
-    warnings: staged.filter((s) => s.row.warnings.length > 0).length,
-    ready: staged.filter((s) => s.row.errors.length === 0).length,
-    exceptions: exceptions.length,
-    blockingExceptions: exceptions.filter((e) => e.blocking).length,
-  };
+  const counts = packageSessionCounts(staged, staged.map((s) => s.row), exceptions);
+  counts.productSourceRows = productRows.length;
 
   return {
     importSessionId: input.importSessionId,
     staged,
+    previewContext,
+    itemRowIds,
     exceptions,
     counts,
     unresolvedUnits: [...unitProblems.entries()].map(([unit, rows]) => ({ unit, rows })).sort((a, b) => b.rows - a.rows),
@@ -362,6 +468,150 @@ export function buildMasterDataPackageSession(input: PackageSessionInput): Packa
       sourceFile: s.provenance.sourceFile,
       sourceRow: s.provenance.sourceRow,
     })),
+  };
+}
+
+// ==================================================================================
+// Evaluation - the preview's BOM status, by the same rules the write uses
+// ==================================================================================
+
+/** The dependency issue's field, so a count can tell "waits for an item" from bad data. */
+export const PACKAGE_DEPENDENCY_FIELD = 'packageDependency';
+
+/** One cache per preview context: the BOM validators are pure, so a payload is validated once. */
+const bomValidationCache = new WeakMap<object, WeakMap<object, ImportValidationResult>>();
+
+function validateBomPayload(context: ImportValidationContext, row: ImportRow): ImportValidationResult {
+  let perContext = bomValidationCache.get(context);
+  if (!perContext) {
+    perContext = new WeakMap();
+    bomValidationCache.set(context, perContext);
+  }
+  // A corrected row is a new payload; an untouched row reuses its frozen source object.
+  const key = (row.correctedRowData ?? row.originalRowData) as object;
+  const cached = perContext.get(key);
+  if (cached) return cached;
+  // The very function the execution's final revalidation calls.
+  const result = resolveAndValidateImportRow('bomPackage', rowPayload(row), context, {});
+  perContext.set(key, result);
+  return result;
+}
+
+function whyNotWritten(row: ImportRow | undefined): { ar: string; en: string } {
+  if (!row) return { ar: 'صفه غير موجود', en: 'its row is missing' };
+  if (row.selection === 'SKIPPED') return { ar: 'صفه متخطى', en: 'its row is skipped' };
+  if (row.selection === 'EXCLUDED') return { ar: 'صفه مستبعد', en: 'its row is excluded' };
+  if (row.status === 'FAILED') return { ar: 'فشلت كتابته', en: 'its write failed' };
+  if (row.errors.length > 0) return { ar: 'صفه به خطأ مانع', en: 'its row has a blocking error' };
+  if (row.warnings.length > 0 && !row.warningsAccepted) return { ar: 'تحذيراته لم تُقبل بعد', en: 'its warnings are not accepted yet' };
+  return { ar: 'لن يُكتب', en: 'it will not be written' };
+}
+
+function sameIssues(a: readonly ImportIssue[], b: readonly ImportIssue[]): boolean {
+  return a.length === b.length && a.every((x, i) => x.field === b[i].field && x.messageEn === b[i].messageEn);
+}
+
+/**
+ * The preview status of every BOM row, re-derived from the rows as they stand:
+ *   1. the builder's own findings (a repeated BOM, a code that resolves to nothing);
+ *   2. the SAME shared validator the execution runs before writing, over the
+ *      in-memory context of existing items plus the package's items;
+ *   3. the dependency rule - a BOM that points at a package item which will NOT
+ *      be written is BLOCKING, with the item and the reason.
+ * Rows already imported or failed are left as they are. A row whose outcome does
+ * not change is returned as the same object, so re-running this is cheap and a
+ * caller can tell nothing moved.
+ */
+export function evaluatePackageRows(
+  result: Pick<PackageSessionResult, 'staged' | 'previewContext' | 'itemRowIds'>,
+  rows: readonly ImportRow[],
+): ImportRow[] {
+  const byId = new Map(rows.map((r) => [r.rowId, r]));
+  const stagedById = new Map(result.staged.map((s) => [s.row.rowId, s]));
+  const displayCode = new Map<string, string>();
+  for (const [token, rowId] of Object.entries(result.itemRowIds)) {
+    displayCode.set(token, String((stagedById.get(rowId)?.row.originalRowData as Record<string, unknown> | undefined)?.code ?? token));
+  }
+  const writable = new Set<string>();
+  for (const [token, rowId] of Object.entries(result.itemRowIds)) {
+    const row = byId.get(rowId);
+    if (row && (isRowWritable(row) || row.status === 'IMPORTED')) writable.add(token);
+  }
+
+  return rows.map((row) => {
+    if (row.entityKind !== 'bomPackage' || row.status === 'IMPORTED' || row.status === 'FAILED') return row;
+    const baseIssues = stagedById.get(row.rowId)?.baseIssues ?? { errors: [], warnings: [] };
+    const validation = validateBomPayload(result.previewContext, row);
+
+    const dependency: ImportIssue[] = [];
+    for (const token of packageItemTokensOf(rowPayload(row))) {
+      if (writable.has(token)) continue;
+      const itemRowId = result.itemRowIds[token];
+      const why = whyNotWritten(itemRowId ? byId.get(itemRowId) : undefined);
+      const code = displayCode.get(token) ?? token;
+      dependency.push(issue(PACKAGE_DEPENDENCY_FIELD,
+        `تعتمد قائمة المواد على الصنف "${code}" من نفس الحزمة، ولن يُكتب لأن ${why.ar}. اقبل ذلك الصف أو صححه، أو استبعد هذه القائمة.`,
+        `This BOM depends on item "${code}" from this package, which will not be written because ${why.en}. Accept or fix that row, or exclude this BOM.`));
+    }
+
+    // The builder already reports a code that resolves to nothing; the validator's
+    // "select the item" for the same blank id would only repeat it.
+    const baseFields = new Set(baseIssues.errors.map((e) => e.field));
+    const repeatsBase = (e: ImportIssue) => {
+      if (e.field === 'bom.itemId') return baseFields.has('productCode');
+      const line = e.field === 'version.components.itemId' ? /^Line (\d+): select the item\.$/.exec(e.messageEn) : null;
+      return line !== null && baseFields.has(`components.${line[1]}.itemId`);
+    };
+    const validatorErrors = validation.errors.filter((e) => !repeatsBase(e));
+    const errors = [...baseIssues.errors, ...dependency, ...validatorErrors];
+    const warnings = [...baseIssues.warnings, ...validation.warnings.filter((w) => !baseIssues.warnings.some((b) => b.messageEn === w.messageEn))];
+    if (sameIssues(row.errors, errors) && sameIssues(row.warnings, warnings) && (errors.length > 0 || row.normalizedData)) return row;
+    return applyValidation(row, { errors, warnings, normalized: errors.length ? null : validation.normalized ?? null });
+  });
+}
+
+/**
+ * The package counts, from the rows as they stand now - so the preview and the
+ * approved import count the same thing. "Waiting for items" is a BOM whose only
+ * problem is a package item that will not be written (for example, its warnings
+ * are not accepted yet); "blocked by data" is a BOM with an error of its own.
+ */
+export function packageSessionCounts(
+  staged: readonly Pick<PackageStagedRow, 'row' | 'kind' | 'deferral' | 'upsertAction' | 'componentCount'>[],
+  rows: readonly ImportRow[],
+  exceptions: readonly PackageException[] = [],
+): Record<string, number> {
+  const byId = new Map(rows.map((r) => [r.rowId, r]));
+  const current = staged.map((s) => ({ ...s, row: byId.get(s.row.rowId) ?? s.row }));
+  const of = (kind: PackageStagedRow['kind']) => current.filter((s) => s.kind === kind);
+  const boms = of('bomPackage');
+  const dataErrors = (r: ImportRow) => r.errors.some((e) => e.field !== PACKAGE_DEPENDENCY_FIELD);
+  return {
+    productSourceRows: of('products').length + of('materials').length,
+    products: of('products').length,
+    materials: of('materials').length,
+    productsToCreate: of('products').filter((s) => s.upsertAction === 'CREATE').length,
+    productsToUpdate: of('products').filter((s) => s.upsertAction === 'UPDATE').length,
+    materialsToCreate: of('materials').filter((s) => s.upsertAction === 'CREATE').length,
+    materialsToUpdate: of('materials').filter((s) => s.upsertAction === 'UPDATE').length,
+    productsWillImport: of('products').filter((s) => isRowWritable(s.row)).length,
+    materialsWillImport: of('materials').filter((s) => isRowWritable(s.row)).length,
+    boms: boms.length,
+    bomsToCreate: boms.filter((s) => s.upsertAction === 'CREATE').length,
+    bomsToUpdate: boms.filter((s) => s.upsertAction === 'UPDATE').length,
+    bomsValid: boms.filter((s) => s.row.errors.length === 0).length,
+    bomsBlockedByData: boms.filter((s) => dataErrors(s.row)).length,
+    bomsWaitingForItems: boms.filter((s) => s.row.errors.length > 0 && !dataErrors(s.row)).length,
+    bomsWillImport: boms.filter((s) => isRowWritable(s.row)).length,
+    bomComponents: current.reduce((n, s) => n + (s.componentCount ?? 0), 0),
+    blocking: current.filter((s) => s.row.errors.length > 0).length,
+    skippedDuplicates: current.filter((s) => s.deferral?.reason === 'DUPLICATE_CODE').length,
+    deferredUnsupportedUom: current.filter((s) => s.deferral?.reason === 'UNSUPPORTED_UOM').length,
+    warnings: current.filter((s) => s.row.warnings.length > 0).length,
+    ready: current.filter((s) => s.row.errors.length === 0).length,
+    willImport: current.filter((s) => isRowWritable(s.row)).length,
+    exceptions: exceptions.length,
+    blockingExceptions: exceptions.filter((e) => e.blocking).length,
   };
 }
 
