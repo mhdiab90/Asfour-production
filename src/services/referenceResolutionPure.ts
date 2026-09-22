@@ -110,6 +110,9 @@ export function readReferenceValue(row: Record<string, unknown>, canonicalField:
   const aliases = REFERENCE_FIELD_ALIASES[canonicalField] ?? [canonicalField];
   const wanted = new Set(aliases.map(aliasKey));
   for (const [key, value] of Object.entries(row)) {
+    // A business code is a scalar. An object or list under an alias name (a BOM
+    // row's `version` object, a nested cell) is structure, never a code to look up.
+    if (value !== null && typeof value === 'object') continue;
     if (wanted.has(aliasKey(key))) return value;
   }
   return undefined;

@@ -1,9 +1,9 @@
 {
   "_doc": "Release Manifest precursor. Describes WHAT is being released so the gate checks a committed declaration rather than whatever flags an operator typed. commitSha/buildId/deploymentId are left null until a release is cut - the gate fills the comparison from the build itself, and only enforces a field that is set here. This is NOT the Change Registry: no change IDs, no Firestore, no UI.",
-  "version": "3.21.2",
-  "releaseId": "REL-2026-0025",
+  "version": "3.21.3",
+  "releaseId": "REL-2026-0026",
   "changeIds": [
-    "FIX-0039"
+    "FIX-0040"
   ],
   "commitSha": null,
   "buildId": null,
@@ -45,7 +45,8 @@
     "costingPeriods",
     "translation-manager",
     "bomsWaitingForItems",
-    "entity-import-progress"
+    "entity-import-progress",
+    "entity-import-close"
   ],
   "_markerNotes": {
     "ai-provider-management": "AI Provider Management route - absent means the AI Assistant closure was dropped",
@@ -84,7 +85,8 @@
     "costingPeriods": "The costing setup collection - absent means costing periods and allocation setup were dropped",
     "translation-manager": "The Translation Manager route - absent means translation governance was dropped",
     "bomsWaitingForItems": "The Master Data Package \"BOMs waiting for their items\" count - absent means the preview no longer shows package dependencies and the 3.21.1 preview/execution fix was dropped",
-    "entity-import-progress": "The live import progress panel - absent means a large import runs again without visible progress or a verified final result"
+    "entity-import-progress": "The live import progress panel - absent means a large import runs again without visible progress or a verified final result",
+    "entity-import-close": "The \"Close window\" button of a finished or stopped import - absent means the import window lost its final close state"
   },
   "tests": [
     "buildIdentity",
@@ -132,11 +134,13 @@
     "chineseMillsImportHistory",
     "stageRecordQueryBounds",
     "masterDataPackageDependency",
-    "importProgress"
+    "importProgress",
+    "masterDataPackageRealIndexes"
   ],
   "deployCommand": "firebase deploy --only hosting --project asfourproduction-70e6e",
   "treeClean": true,
   "_changeNotes": {
+    "FIX-0040": "Master Data Package final re-check fix (3.21.2 wrote 222 of 30,166 rows). Two defects in the final pre-write re-check, which - unlike the preview - resolved business codes against the Firestore reference indexes: (1) each product row's OWN productCode was looked up as a reference to another product, so every new product was rejected (\"No record matches\", or \"suggestions must be approved manually\" for close codes), and every BOM depending on it was then dropped; (2) the BOM row's top-level `version` object matched the `version` alias of bomVersionCode and was looked up as an existing BOM version. Fix: resolveAndValidateImportRow runs no business-code resolution for the self-identified package kinds (products, materials, bomPackage) - their identity and resolved ids / pending tokens are already on the row - so the preview and the final re-check now run identical rules; and readReferenceValue reads only scalar values, so an object under an alias name is never taken as a code (a real version code is still read). Resolution is unchanged for every other kind. The summary strip is relabelled as totals of all runs in the window, the final panel as this run's result; a finished or stopped import shows its closing message and a \"Close window\" button and never closes by itself. Replayed on the real package with real indexes and a recording writer: 15,872 products + 221 materials + 14,073 BOMs written, 0 not written, 0 failed; the 29 blocked BOMs and 85 skipped duplicates unchanged; a re-run over the state 3.21.2 left updates its 221 materials and 1 product and creates nothing twice. No business rule, validation rule, Firestore rule, schema or permission changed; nothing was imported",
     "FIX-0039": "Large Master Data Package import: live progress, batches and a verified final result. The ~30,000-row import previously ran as one uninterrupted await chain with no feedback, and the review table rendered every row (with its payload serialised twice) on every change - enough to leave the browser white. The execution loop (entityImportExecutionPure) now runs in three dependency phases (Products & Materials -> Resolving Dependencies -> BOMs) in batches of 250, reports a progress snapshot and yields to the browser after each batch, writes up to 4 package rows at once (every other import stays strictly one at a time), stops between batches on request or after 25 consecutive failed writes, never throws, and returns its own verified final result (counts by kind, failures and dropped rows with reasons, phases completed, verification). The percentage is floor(processed / total), clamped, and 100 only after every phase ran and the verification passed. The screen shows READY / IMPORTING / VERIFYING / COMPLETED / COMPLETED WITH ERRORS / INTERRUPTED from those numbers only, locks the rows while running, guards against leaving the page, keeps a counts-only checkpoint of an interrupted run, and pages the review table (100 rows, filterable). Resuming is re-running the same package: existing records are matched and updated, never duplicated. No business rule, validation rule, Firestore rule, schema or permission changed; nothing was imported",
     "FIX-0038": "Master Data Package import dependency fix (3.21.0 defect). A BOM whose product or components are created by the SAME package carried a blank item id: the preview showed it ready and the final pre-write validation dropped it (\"rows excluded before write\"). Now a package-created item is referenced by a pending package-item token (never an id, never written); the preview validates every BOM with the SAME validator the write uses, over the existing items plus the package items, and a BOM whose package item will not be written (blocked, skipped, excluded or warnings not accepted) is BLOCKING with that reason. The single approved import writes products and materials first, binds each token to the ASFOUR id its write returned, then revalidates and writes the BOM (entityImportExecutionPure). Also fixed on the same path: the Odoo BOM id external reference was dropped by normalisation; an existing BOM and its V1 were flagged as duplicates of themselves on re-import; unchanged records are no longer rewritten (NO-OP); lookups are indexed (the real package preview/execution went from over 10 minutes to seconds); re-selecting the same files re-reads them. Real package: 15,872 products + 221 materials + 14,073 BOMs importable in one run, 0 dropped before write; 29 BOMs stay BLOCKING by the unchanged BOM rules (24 with a line quantity <= 0, 5 with an item listed twice) and never block the others. No business rule, BOM validation rule, Firestore rule, schema or permission changed; nothing was imported",
     "UI-0037": "Translation governance and print styling. A Translation Manager and a Language Audit screen (gated by the new translation.manage permission) read and write translationOverrides, whose rule already exists; LanguageContext merges the overrides for signed-in users. The header, sidebar, mobile navigation and footer are hidden when printing. No production, Master Data or costing behaviour changed",
@@ -169,8 +173,8 @@
     "UI-0010": "Financial Accounts import opens a dedicated Master Data importer instead of the Historical Excel Import screen: the action no longer navigates to the bulk-entry route (which App.tsx renders as DataImportView); a new in-place modal reuses the existing financialAccounts schema, XLSX reader, row validation, duplicate detection and chunked commit, adds sheet selection and parent/cycle relationship checks, and keeps partial import so invalid rows never block valid ones",
     "DB-0009": "Category-first Master Data over an extensible registry; Financial Accounts master data with Excel import and hierarchical editing (new financialAccounts collection and its Firestore rule); one shared generic hierarchy resolver reused by Master Data, Production Review and production aggregation; hierarchical cost-centre editing with cycle, self-parent and unknown-parent protection"
   },
-  "previousVersion": "3.21.1",
+  "previousVersion": "3.21.2",
   "versionBump": "PATCH",
   "classificationConfidence": "HIGH",
-  "previousReleaseId": "REL-2026-0024"
+  "previousReleaseId": "REL-2026-0025"
 }

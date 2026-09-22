@@ -206,6 +206,18 @@ function withLineIdentity(payload: Record<string, unknown>): Record<string, unkn
  * A row that already carries ids resolves to itself, so nothing that worked before
  * changes.
  */
+/**
+ * Master Data package rows (3.21.3). A product or material row's `code` /
+ * `productCode` is its OWN identity, not a reference to another record, and a
+ * `bomPackage` row already carries its resolved item ids (or pending package-item
+ * tokens bound by the dependency-aware execution). Business-code resolution is
+ * therefore never run on them: resolving a new product's own code against the
+ * existing products rejected it ("No record matches"), and the BOM row's `version`
+ * object was read as a BOM version code. The preview and the final re-check both
+ * come here, so they now apply exactly the same rules to these rows.
+ */
+export const SELF_IDENTIFIED_IMPORT_KINDS: readonly ImportEntityKind[] = ['products', 'materials', 'bomPackage'];
+
 export function resolveAndValidateImportRow(
   kind: ImportEntityKind,
   payload: Record<string, unknown>,
@@ -213,7 +225,9 @@ export function resolveAndValidateImportRow(
   indexes: ReferenceIndexes,
   cache?: ReferenceMappingCache,
 ): ImportValidationResult {
-  const { payload: resolved, resolutions } = resolveRowReferences(kind, payload, indexes, { cache });
+  const { payload: resolved, resolutions } = SELF_IDENTIFIED_IMPORT_KINDS.includes(kind)
+    ? { payload: { ...payload }, resolutions: [] as ReferenceResolution[] }
+    : resolveRowReferences(kind, payload, indexes, { cache });
   const resolvedPayload = withLineIdentity(resolved);
   const referenceIssues = resolutionIssues(resolutions);
   const validation = validateImportRow(kind, resolvedPayload, context);

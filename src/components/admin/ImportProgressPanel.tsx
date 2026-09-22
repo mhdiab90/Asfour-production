@@ -142,9 +142,32 @@ export interface ImportProgressPanelProps {
   readyCount?: number;
   onStop?: () => void;
   stopRequested?: boolean;
+  /** Closes the import window. Offered only once a final result is shown - the window never closes by itself. */
+  onClose?: () => void;
 }
 
-export const ImportProgressPanel: React.FC<ImportProgressPanelProps> = ({ isAr, progress, final, readyCount, onStop, stopRequested }) => {
+/**
+ * The closing message of a finished or stopped run (3.21.3), chosen ONLY from the
+ * authoritative final result: success is never claimed unless the outcome is
+ * COMPLETED.
+ */
+export function closingMessage(outcome: ImportFinalResult['outcome'], isAr: boolean): { icon: string; title: string; lines: string[] } {
+  if (outcome === 'COMPLETED') {
+    return isAr
+      ? { icon: '✅', title: 'انتهت عملية الاستيراد', lines: ['تمت معالجة جميع السجلات ووصلت العملية إلى 100%.', 'يمكنك الآن إغلاق هذه النافذة بأمان.'] }
+      : { icon: '✅', title: 'The import has finished', lines: ['Every record was processed and the import reached 100%.', 'You can now close this window safely.'] };
+  }
+  if (outcome === 'COMPLETED_WITH_ERRORS') {
+    return isAr
+      ? { icon: '⚠️', title: 'انتهت عملية الاستيراد مع وجود أخطاء', lines: ['انتهت عملية المعالجة ووصلت إلى 100%، ولكن توجد سجلات لم يتم استيرادها.', 'راجع النتيجة والتفاصيل قبل إغلاق النافذة.'] }
+      : { icon: '⚠️', title: 'The import has finished with errors', lines: ['Processing finished and reached 100%, but some records were not imported.', 'Review the result and the details before closing the window.'] };
+  }
+  return isAr
+    ? { icon: '⏸️', title: 'توقفت عملية الاستيراد', lines: ['تم حفظ نتائج السجلات التي تمت معالجتها حتى لحظة التوقف.', 'راجع السبب قبل إغلاق النافذة.'] }
+    : { icon: '⏸️', title: 'The import has stopped', lines: ['The results of every record processed up to the stop are kept.', 'Review the reason before closing the window.'] };
+}
+
+export const ImportProgressPanel: React.FC<ImportProgressPanelProps> = ({ isAr, progress, final, readyCount, onStop, stopRequested, onClose }) => {
   // --- Final result -------------------------------------------------------------------------
   if (final) {
     const ok = final.outcome === 'COMPLETED';
@@ -155,12 +178,25 @@ export const ImportProgressPanel: React.FC<ImportProgressPanelProps> = ({ isAr, 
       : partial ? (isAr ? 'اكتمل الاستيراد مع أخطاء' : 'IMPORT COMPLETED WITH ERRORS')
         : (isAr ? 'توقف الاستيراد' : 'IMPORT INTERRUPTED');
     const notPlannedTotal = Object.values(final.notPlanned).reduce((a, b) => a + b, 0);
+    const closing = closingMessage(final.outcome, isAr);
     return (
       <div id="entity-import-final" data-outcome={final.outcome} className={`p-3 rounded-xl border-2 ${tone} space-y-2`}>
+        <div id="entity-import-closing" className="rounded-lg bg-white/70 border border-slate-200 px-3 py-2 flex flex-wrap items-center justify-between gap-2">
+          <div>
+            <p className="font-extrabold text-sm">{closing.icon} {closing.title}</p>
+            {closing.lines.map((line) => <p key={line} className="text-slate-800">{line}</p>)}
+          </div>
+          {onClose && (
+            <button id="entity-import-close" type="button" onClick={onClose} className="px-4 py-2 rounded-xl bg-slate-900 text-white font-extrabold cursor-pointer hover:bg-slate-700">
+              {isAr ? 'إغلاق النافذة' : 'Close window'}
+            </button>
+          )}
+        </div>
         <div className="flex items-center justify-between gap-2">
-          <p className="font-extrabold text-sm flex items-center gap-1.5">
+            <p className="font-extrabold text-sm flex items-center gap-1.5">
             {ok ? <CheckCircle2 className="w-5 h-5 text-emerald-600" /> : partial ? <AlertTriangle className="w-5 h-5 text-amber-600" /> : <OctagonX className="w-5 h-5 text-rose-600" />}
             {headline}
+            <span className="text-[10px] font-bold text-slate-600">{isAr ? '- نتيجة هذه العملية' : '- this run'}</span>
           </p>
           <span className="text-2xl font-black">{final.percent}%</span>
         </div>

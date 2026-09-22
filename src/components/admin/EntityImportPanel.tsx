@@ -883,7 +883,8 @@ export const EntityImportPanel: React.FC<Props> = ({ isOpen, onClose }) => {
                 ['total', isAr ? 'الإجمالي' : 'Total'], ['selected', isAr ? 'المحدد' : 'Selected'], ['ready', isAr ? 'جاهز' : 'Ready'],
                 ['corrected', isAr ? 'مصحح' : 'Corrected'], ['warnings', isAr ? 'تحذيرات' : 'Warnings'], ['blocking', isAr ? 'مانع' : 'Blocking'],
                 ['skipped', isAr ? 'متخطى' : 'Skipped'], ['excluded', isAr ? 'مستبعد' : 'Excluded'], ['willImport', isAr ? 'سيتم استيراده' : 'Will import'],
-                ['imported', isAr ? 'تم استيراده' : 'Imported'], ['failed', isAr ? 'فشل' : 'Failed'],
+                // Session totals: every run made in this window. The run's own result is the panel below.
+                ['imported', isAr ? 'مستورد (كل عمليات هذه النافذة)' : 'Imported (all runs in this window)'], ['failed', isAr ? 'فاشل (كل عمليات هذه النافذة)' : 'Failed (all runs in this window)'],
               ] as const).map(([k, label]) => (
                 <span key={k} className="px-2 py-1 rounded-lg bg-slate-50 border border-slate-200">
                   {label}: <span className="font-bold">{summary[k]}</span>
@@ -899,6 +900,7 @@ export const EntityImportPanel: React.FC<Props> = ({ isOpen, onClose }) => {
               readyCount={busy ? undefined : summary.willImport}
               onStop={importing ? requestStop : undefined}
               stopRequested={stopRequested}
+              onClose={finalResult && !busy ? onClose : undefined}
             />
             {result && result.failedCount > 0 && !busy && (
               <button id="entity-import-reprocess" type="button" onClick={reprocessFailed} className="inline-flex items-center gap-1.5 px-3 py-1.5 font-bold bg-white border border-emerald-300 rounded-lg cursor-pointer">
