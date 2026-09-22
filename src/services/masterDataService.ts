@@ -14,7 +14,9 @@ import {
   query, 
   where, 
   onSnapshot, 
-  serverTimestamp 
+  serverTimestamp,
+  getDocsFromServer,
+  limit
 } from 'firebase/firestore';
 import { db, auth, handleFirestoreError, OperationType } from '../config/firebase';
 import { safeAddDoc, safeUpdateDoc } from '../utils/firestoreSanitizer';
@@ -187,10 +189,32 @@ export function subscribeMasterData<T>(
   );
 }
 
+/**
+ * The awaited steps of one master-data write (3.21.5). An optional `onStep`
+ * callback is told which step is starting, so a caller that bounds the whole
+ * write (the Master Data import) can say exactly what it was waiting for when
+ * the server did not answer. It observes only - no step is skipped or reordered.
+ */
+export type MasterDataWriteStep = 'DUPLICATE_LOOKUP' | 'FIRESTORE_WRITE' | 'CACHE_CLEANUP' | 'AUDIT_WRITE';
+export interface MasterDataWriteOptions {
+  onStep?: (step: MasterDataWriteStep) => void;
+}
+
+/**
+ * A read-only, one-document check that the Firestore backend itself answers
+ * (3.21.5). It asks the server, never the local cache, so it is a real test of
+ * the path the writes use; the caller bounds it with its own timeout. Nothing is
+ * written and no cache is touched.
+ */
+export async function probeMasterDataBackend(): Promise<void> {
+  await getDocsFromServer(query(collection(db, 'products'), limit(1)));
+}
+
 // Add Item
 export async function createMasterDataItem<T extends Record<string, any>>(
   collectionName: string,
-  data: T
+  data: T,
+  options: MasterDataWriteOptions = {}
 ): Promise<string | undefined> {
   let itemData: any = { ...data };
 
@@ -238,6 +262,7 @@ export async function createMasterDataItem<T extends Record<string, any>>(
 
   // Validate duplicate code if code exists
   if (itemData.code) {
+    options.onStep?.('DUPLICATE_LOOKUP');
     const isDuplicate = await checkCodeDuplicate(collectionName, itemData.code);
     if (isDuplicate) {
       throw new Error(`الكود "${itemData.code}" موجود بالفعل في قاعدة البيانات. يرجى استخدام كود مختلف.`);
@@ -254,8 +279,11 @@ export async function createMasterDataItem<T extends Record<string, any>>(
   };
 
   try {
+    options.onStep?.('FIRESTORE_WRITE');
     const docRef = await safeAddDoc(collection(db, collectionName), payload);
+    options.onStep?.('CACHE_CLEANUP');
     await invalidateCachedCollection(currentCacheUserScope(), collectionName);
+    options.onStep?.('AUDIT_WRITE');
     await logAuditAction('CREATE', collectionName, docRef.id, `إضافة سجل جديد بكود: ${itemData.code || docRef.id}`);
     return docRef.id;
   } catch (error) {
@@ -267,7 +295,8 @@ export async function createMasterDataItem<T extends Record<string, any>>(
 export async function updateMasterDataItem<T extends Record<string, any>>(
   collectionName: string,
   id: string,
-  data: Partial<T>
+  data: Partial<T>,
+  options: MasterDataWriteOptions = {}
 ): Promise<void> {
   let itemData: any = { ...data };
 
@@ -307,6 +336,7 @@ export async function updateMasterDataItem<T extends Record<string, any>>(
   itemData = enrichWithNormalizedFields(tabName, itemData);
 
   if (itemData.code) {
+    options.onStep?.('DUPLICATE_LOOKUP');
     const isDuplicate = await checkCodeDuplicate(collectionName, itemData.code, id);
     if (isDuplicate) {
       throw new Error(`الكود "${itemData.code}" مسجل بالفعل لعنصر آخر.`);
@@ -321,8 +351,11 @@ export async function updateMasterDataItem<T extends Record<string, any>>(
 
   try {
     const docRef = doc(db, collectionName, id);
+    options.onStep?.('FIRESTORE_WRITE');
     await safeUpdateDoc(docRef, payload);
+    options.onStep?.('CACHE_CLEANUP');
     await invalidateCachedCollection(currentCacheUserScope(), collectionName);
+    options.onStep?.('AUDIT_WRITE');
     await logAuditAction('UPDATE', collectionName, id, `تعديل بيانات السجل: ${itemData.code || id}`);
   } catch (error) {
     handleFirestoreError(error, OperationType.UPDATE, `${collectionName}/${id}`);

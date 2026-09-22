@@ -652,6 +652,15 @@ export const EntityImportPanel: React.FC<Props> = ({ isOpen, onClose }) => {
         maxConsecutiveFailures: packageRun ? 25 : undefined,
         shouldStop: () => stopRef.current,
         stopSignal: stopControllerRef.current.signal,
+        // 3.21.5 - recorded on every timeout, so a stall can be diagnosed afterwards.
+        environment: () => ({
+          online: typeof navigator === 'undefined' ? null : navigator.onLine !== false,
+          visibility: typeof document === 'undefined' ? null : document.visibilityState,
+        }),
+        describeSource: (row) => {
+          const provenance = packageSession?.staged.find((s) => s.row.rowId === row.rowId)?.provenance;
+          return provenance ? { file: provenance.sourceFile, row: provenance.sourceRow } : { row: row.sourceRowNumber };
+        },
         onProgress: (p) => {
           setProgress(p);
           checkpoint(p);

@@ -392,8 +392,8 @@ test('16. running the same package twice creates nothing new', () => {
 test('17. the write path upserts through the existing services and never deletes', () => {
   const service = readCode('src/services/entityImportService.ts');
   assert.ok(/case 'products':\s*case 'materials': \{/.test(service));
-  assert.ok(/const changes = changedFieldsOnly\(current, patch\);[\s\S]{0,120}updateMasterDataItem\(collectionName, String\(existingId\), changes\)/.test(service), 'an existing record is updated - only what changed');
-  assert.ok(/createMasterDataItem\(collectionName, record\)/.test(service), 'a new record uses the existing audited service');
+  assert.ok(/const changes = changedFieldsOnly\(current, patch\);[\s\S]{0,120}updateMasterDataItem\(collectionName, String\(existingId\), changes, steps\)/.test(service), 'an existing record is updated - only what changed');
+  assert.ok(/createMasterDataItem\(collectionName, record, steps\)/.test(service), 'a new record uses the existing audited service');
   assert.ok(/UPDATABLE_MASTER_FIELDS/.test(service), 'only the allowed fields are updated');
   assert.equal(/deleteDoc|removeMasterDataItem|destructive/.test(service), false, 'nothing is deleted');
   assert.equal(/patch\.code\s*=/.test(service), false, 'an existing code is never rewritten');

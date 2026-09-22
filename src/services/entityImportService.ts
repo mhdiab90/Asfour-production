@@ -20,7 +20,7 @@
  * AUDIT. The session and every row decision go to the existing audit log through
  * logAuditAction. Nothing here writes a second audit store.
  */
-import { MASTER_DATA_COLLECTIONS, createMasterDataItem, fetchMasterData, updateMasterDataItem } from './masterDataService';
+import { MASTER_DATA_COLLECTIONS, createMasterDataItem, fetchMasterData, probeMasterDataBackend, updateMasterDataItem } from './masterDataService';
 import { UPDATABLE_MASTER_FIELDS, changedFieldsOnly } from './masterDataPackagePure';
 import { externalReferencesPatch, readExternalReferences, upsertExternalReference } from './externalReferencesPure';
 import { BOM_VERSION_COLLECTION } from './bomPure';
@@ -48,6 +48,8 @@ import type { ReferenceIndexes, ReferenceMappingCache } from './referenceResolut
 import type { ProductionStageType, RecordStatus } from '../types';
 
 export interface ImportExecutionOptions {
+  /** 3.21.5 - a read-only backend check; defaults to probeMasterDataBackend. */
+  probe?: ExecuteRowsOptions['probe'];
   /** Step 8C-3: the session's code dictionaries and its approved mappings. */
   indexes: ReferenceIndexes;
   mappingCache?: ReferenceMappingCache;
@@ -68,6 +70,10 @@ export interface ImportExecutionOptions {
   /** 3.21.4 - no record is waited for forever, and a stop is honoured while a write is pending. */
   recordTimeoutMs?: ExecuteRowsOptions['recordTimeoutMs'];
   stopSignal?: ExecuteRowsOptions['stopSignal'];
+  /** 3.21.5 - the browser's online / visibility signals, recorded on every timeout. */
+  environment?: ExecuteRowsOptions['environment'];
+  /** 3.21.5 - where a row came from (file / row), recorded on every timeout. */
+  describeSource?: ExecuteRowsOptions['describeSource'];
 }
 
 export interface ImportExecutionResult {
@@ -162,8 +168,10 @@ export async function buildImportReferenceIndexes(context: ImportValidationConte
 }
 
 /** Writes ONE row through its existing service and returns the new document id. */
-async function writeRow(row: ImportRow, context: ImportValidationContext, options: ImportExecutionOptions): Promise<string | undefined> {
+async function writeRow(row: ImportRow, context: ImportValidationContext, options: ImportExecutionOptions, track?: (step: string) => void): Promise<string | undefined> {
   const data = (row.normalizedData ?? rowPayload(row)) as Record<string, any>;
+  // 3.21.5 - each awaited step is reported, so a timed-out record says what it was waiting for.
+  const steps = { onStep: track };
   switch (row.entityKind) {
     /*
      * Master Data package (Step 8E) - UPSERTS. An item already in ASFOUR is
@@ -193,11 +201,11 @@ async function writeRow(row: ImportRow, context: ImportValidationContext, option
         // Only what differs is written; an item that already matches the package is a NO-OP.
         const changes = changedFieldsOnly(current, patch);
         if (Object.keys(changes).length > 0) {
-          await updateMasterDataItem(collectionName, String(existingId), changes);
+          await updateMasterDataItem(collectionName, String(existingId), changes, steps);
         }
         return String(existingId);
       }
-      return createMasterDataItem(collectionName, record);
+      return createMasterDataItem(collectionName, record, steps);
     }
     case 'bomPackage': {
       // One BOM and its single version, written together - a version cannot exist before its BOM has an id.
@@ -212,16 +220,17 @@ async function writeRow(row: ImportRow, context: ImportValidationContext, option
         // Only what differs is written; a BOM header that already matches is a NO-OP.
         const changes = changedFieldsOnly(current, { ...updatable, ...externalReferencesPatch(refs) });
         if (Object.keys(changes).length > 0) {
-          await updateMasterDataItem(MASTER_DATA_COLLECTIONS.boms, bomId, changes);
+          await updateMasterDataItem(MASTER_DATA_COLLECTIONS.boms, bomId, changes, steps);
         }
       } else {
-        bomId = String(await createMasterDataItem(MASTER_DATA_COLLECTIONS.boms, bomDraft) ?? '');
+        bomId = String(await createMasterDataItem(MASTER_DATA_COLLECTIONS.boms, bomDraft, steps) ?? '');
         if (!bomId) throw new Error('The BOM could not be created.');
         logAuditAction('CREATE', MASTER_DATA_COLLECTIONS.boms, bomId, describeBomChange(null, bomDraft)).catch(() => {});
       }
       // The package's version already exists: nothing is rewritten, so re-running
       // the same package never duplicates or overwrites a reviewed version.
       if (String(data.existingVersionId ?? '')) return bomId;
+      track?.('BOM_VERSION_WRITE');
       const versionId = await createBomVersion(context.bomVersions ?? [], { ...versionDraft, bomId }, {
         knownItems: {
           products: context.products ? new Set(context.products.map((p) => String(p.id ?? ''))) : null,
@@ -305,8 +314,9 @@ export async function executeEntityImport(
   const { rows, droppedBeforeWrite, result: final } = await executeImportRows(
     session,
     context,
-    options,
-    (row, rowContext) => writeRow(row, rowContext, options),
+    // 3.21.5 - the loop checks the real backend before blaming a record for a silent server.
+    { ...options, probe: options.probe ?? probeMasterDataBackend },
+    (row, rowContext, track) => writeRow(row, rowContext, options, track),
     (current, recheck) => {
       // One audit line per row, naming every business identifier and how it resolved.
       const resolutionTrail = (recheck.resolutions ?? []).filter((r) => r.status !== 'EMPTY').map(describeResolution);

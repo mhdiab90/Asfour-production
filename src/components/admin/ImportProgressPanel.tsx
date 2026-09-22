@@ -75,6 +75,46 @@ export function heartbeatState(p: Pick<ImportExecutionProgress, 'lastProgressAt'
   return { idleMs, waiting, lastProgress, connection, online, stop, waitingText: waiting ? (isAr ? 'في انتظار الخادم...' : 'Waiting for the server...') : null };
 }
 
+const STEP_NAMES: Record<string, { ar: string; en: string }> = {
+  PREPARING: { ar: 'التحضير', en: 'preparing' },
+  DUPLICATE_LOOKUP: { ar: 'فحص تكرار الكود', en: 'duplicate-code lookup' },
+  FIRESTORE_WRITE: { ar: 'الكتابة على الخادم', en: 'Firestore write' },
+  CACHE_CLEANUP: { ar: 'تنظيف الذاكرة المحلية', en: 'local cache cleanup' },
+  AUDIT_WRITE: { ar: 'سجل التدقيق', en: 'audit write' },
+  BOM_VERSION_WRITE: { ar: 'كتابة إصدار قائمة المواد', en: 'BOM version write' },
+};
+export const stepName = (step: string | null | undefined, isAr: boolean) => (step ? (isAr ? STEP_NAMES[step]?.ar : STEP_NAMES[step]?.en) ?? step : '-');
+
+/**
+ * The connection lines of a running import (3.21.5), from the loop's own snapshot:
+ * whether the backend is being checked or has been lost, how long the run has been
+ * paused, the last backend answer, the last successful write and the step the
+ * latest write is in. Null while the connection is fine and nothing is pending.
+ */
+export function connectionLines(
+  p: Pick<ImportExecutionProgress, 'connection' | 'pausedSince' | 'pausedMs' | 'lastBackendResponseAt' | 'lastWriteAt' | 'pendingStep' | 'lastProgressAt'>,
+  nowMs: number,
+  isAr: boolean,
+) {
+  const ago = (t: number | null) => (t === null ? (isAr ? 'لا يوجد بعد' : 'none yet') : isAr ? `منذ ${formatElapsed(nowMs - t, isAr)}` : `${formatElapsed(nowMs - t, isAr)} ago`);
+  const paused = p.pausedSince !== null ? nowMs - p.pausedSince : 0;
+  const state = p.connection === 'LOST'
+    ? (isAr ? `الاتصال بالخادم مفقود - الاستيراد متوقف مؤقتًا منذ ${formatElapsed(paused, isAr)} ويُعاد الفحص تلقائيًا` : `Connection lost — paused for ${formatElapsed(paused, isAr)}, checking the server again automatically`)
+    : p.connection === 'CHECKING'
+      ? (isAr ? 'الاتصال: جارٍ الفحص...' : 'Connection: checking...')
+      : null;
+  return {
+    waiting: p.connection !== 'OK',
+    title: p.connection !== 'OK' ? (isAr ? 'في انتظار الخادم...' : 'Waiting for the server...') : null,
+    state,
+    lastSuccessfulProgress: isAr ? `آخر تقدم ناجح: ${ago(p.lastProgressAt)}` : `Last successful progress: ${ago(p.lastProgressAt)}`,
+    lastWrite: isAr ? `آخر كتابة ناجحة: ${ago(p.lastWriteAt)}` : `Last successful write: ${ago(p.lastWriteAt)}`,
+    lastBackend: isAr ? `آخر رد من الخادم: ${ago(p.lastBackendResponseAt)}` : `Last server response: ${ago(p.lastBackendResponseAt)}`,
+    pending: isAr ? `العملية الجارية: ${stepName(p.pendingStep, isAr)}` : `Current operation: ${stepName(p.pendingStep, isAr)}`,
+    pausedTotal: p.pausedMs + paused,
+  };
+}
+
 /** The browser's online / offline signal, live. */
 function useOnline(): boolean {
   const [online, setOnline] = useState(() => (typeof navigator === 'undefined' ? true : navigator.onLine !== false));
@@ -183,8 +223,18 @@ function IssueList({ id, title, issues, isAr }: { id: string; title: string; iss
             {shown.map((f) => (
               <tr key={f.rowId} className="border-t border-slate-100 align-top">
                 <td className="px-2 py-1 whitespace-nowrap">{kindName(f.kind, isAr)}</td>
-                <td className="px-2 py-1 font-mono whitespace-nowrap">{f.code || f.rowId}</td>
-                <td className="px-2 py-1 text-rose-800">{f.reason}</td>
+                <td className="px-2 py-1 font-mono whitespace-nowrap">{f.code || f.rowId}{f.sourceFile ? <div className="text-[10px] text-slate-500">{f.sourceFile}{f.sourceRow !== undefined ? ` #${f.sourceRow}` : ''}</div> : null}</td>
+                <td className="px-2 py-1 text-rose-800">
+                  {f.reason}
+                  {f.step && (
+                    <div className="text-[10px] text-slate-600">
+                      {isAr ? 'الخطوة' : 'Step'}: {stepName(f.step, isAr)}
+                      {f.startedAt !== undefined && f.timedOutAt !== undefined ? ` · ${new Date(f.startedAt).toLocaleTimeString()} → ${new Date(f.timedOutAt).toLocaleTimeString()}` : ''}
+                      {f.online !== undefined && f.online !== null ? ` · ${f.online ? (isAr ? 'متصل' : 'online') : (isAr ? 'غير متصل' : 'offline')}` : ''}
+                      {f.visibility ? ` · ${isAr ? 'الصفحة' : 'page'} ${f.visibility}` : ''}
+                    </div>
+                  )}
+                </td>
               </tr>
             ))}
           </tbody>
@@ -285,6 +335,13 @@ export const ImportProgressPanel: React.FC<ImportProgressPanelProps> = ({ isAr, 
         {final.error && (
           <p className="font-bold text-rose-800">{isAr ? 'السبب: ' : 'Reason: '}{final.error}</p>
         )}
+        {(final.connectionPauses?.length ?? 0) > 0 && (
+          <p id="entity-import-final-pauses" className="text-slate-800">
+            {isAr
+              ? `توقف الاستيراد مؤقتًا ${fmt(final.connectionPauses.length, isAr)} مرة لانقطاع الاتصال بالخادم (${formatElapsed(final.pausedMs, isAr)} إجمالًا)، ${final.connectionPauses.every((p) => p.recovered) ? 'وعاد الاتصال في كل مرة.' : 'ولم يعد الاتصال في آخر مرة.'}`
+              : `The import paused ${final.connectionPauses.length} time(s) for a lost server connection (${formatElapsed(final.pausedMs, isAr)} in total); ${final.connectionPauses.every((p) => p.recovered) ? 'the connection came back each time.' : 'the connection did not come back the last time.'}`}
+          </p>
+        )}
         {final.outcome === 'INTERRUPTED' && (
           <p className="text-slate-800">
             {isAr
@@ -316,6 +373,7 @@ export const ImportProgressPanel: React.FC<ImportProgressPanelProps> = ({ isAr, 
     const percent = progressPercent(progress);
     const verifying = progress.state === 'VERIFYING';
     const beat = heartbeatState(progress, now, online, Boolean(stopRequested || progress.stopRequested), isAr);
+    const conn = connectionLines(progress, now, isAr);
     return (
       <div id="entity-import-progress" data-state={progress.state} className="p-3 rounded-xl border-2 border-indigo-300 bg-indigo-50 space-y-2" aria-live="polite">
         <div className="flex items-center justify-between gap-2">
@@ -334,7 +392,20 @@ export const ImportProgressPanel: React.FC<ImportProgressPanelProps> = ({ isAr, 
             {isAr ? `المرحلة ${progress.phaseNumber} من ${progress.phaseCount} - ${PHASE_NAMES[progress.phase].ar}` : `Phase ${progress.phaseNumber} of ${progress.phaseCount} — ${PHASE_NAMES[progress.phase].en}`}
           </p>
         )}
-        <p id="entity-import-progress-action" className="text-slate-700">{beat.waitingText ?? actionMessage(progress, isAr)}</p>
+        <p id="entity-import-progress-action" className="text-slate-700">{conn.title ?? beat.waitingText ?? actionMessage(progress, isAr)}</p>
+        {conn.waiting && (
+          <div id="entity-import-connection" data-connection={progress.connection} className="rounded-lg border-2 border-amber-400 bg-amber-50 px-3 py-2 text-amber-950 space-y-0.5">
+            <p className="font-extrabold">{conn.state}</p>
+            <p>{conn.lastSuccessfulProgress}</p>
+            <p>{isAr ? 'لا تبدأ سجلات جديدة حتى يرد الخادم. لن يُعاد إرسال السجل الذي لم يُرد عليه في هذه العملية.' : 'No new record starts until the server answers. A record that got no answer is not re-sent in this run.'}</p>
+          </div>
+        )}
+        <div id="entity-import-diagnostics" className="flex flex-wrap gap-x-3 gap-y-0.5 text-[10px] text-slate-600">
+          <span>{conn.lastWrite}</span>
+          <span>{conn.lastBackend}</span>
+          <span>{conn.pending}</span>
+          {conn.pausedTotal > 0 && <span>{isAr ? `إجمالي التوقف المؤقت: ${formatElapsed(conn.pausedTotal, isAr)}` : `Paused in total: ${formatElapsed(conn.pausedTotal, isAr)}`}</span>}
+        </div>
         <div id="entity-import-heartbeat" data-waiting={beat.waiting ? 'yes' : 'no'} className={`flex flex-wrap items-center gap-2 rounded-lg px-2 py-1 border ${beat.waiting ? 'bg-amber-50 border-amber-300 text-amber-950 font-bold' : 'bg-white border-slate-200 text-slate-700'}`}>
           <span>{beat.lastProgress}</span>
           <span className={`inline-flex items-center gap-1 ${beat.online ? 'text-emerald-700' : 'text-rose-700 font-bold'}`} title={isAr ? 'إشارة المتصفح فقط - لا تثبت أن الخادم متاح' : 'The browser\'s signal only - it does not prove the server is reachable'}>

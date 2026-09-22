@@ -42,6 +42,20 @@
  * batch starts. Progress is also reported at most every `heartbeatMs` between
  * batches, with the time of the last recorded outcome, so a stall is visible.
  *
+ * CONNECTION-AWARE (3.21.5). In production a silent network stall timed out
+ * group after group of 4 records until the failure guard ended the run. Now,
+ * after any group in which a record timed out, the loop asks the backend itself
+ * (`probe`: a bounded, read-only server read). If the backend does not answer,
+ * the run PAUSES in CONNECTION LOST - no new record starts, the timeouts do not
+ * consume the failure guard, and the probe is repeated every `probeIntervalMs`
+ * until the server answers (the run resumes with the next record), the user
+ * stops (INTERRUPTED), or `maxPauseMs` passes (INTERRUPTED). A timed-out record
+ * stays OUTCOME UNKNOWN and is never retried in the same run. If the backend
+ * DOES answer while writes keep timing out, those count toward the guard.
+ * Every timeout records the step it was waiting for (duplicate lookup, write,
+ * cache cleanup, audit, BOM version), its times, and the browser's online and
+ * visibility signals.
+ *
  * THE RESULT IS THE LOOP'S OWN. Counts, the phases completed, the verification
  * and the percentage come from here - the screen never computes them itself.
  *
@@ -64,6 +78,22 @@ export const STOP_GRACE_MS = 5_000;
 export const PROGRESS_HEARTBEAT_MS = 1_000;
 /** The prefix of every outcome-unknown row message, so it is never mistaken for a confirmed failure. */
 export const OUTCOME_UNKNOWN_PREFIX = 'OUTCOME UNKNOWN';
+/** How long one backend probe may take before it counts as "no answer". */
+export const CONNECTION_PROBE_TIMEOUT_MS = 15_000;
+/** How often a paused run asks the backend again. */
+export const CONNECTION_PROBE_INTERVAL_MS = 10_000;
+/** The longest a run waits for the backend to come back before it stops as INTERRUPTED. */
+export const CONNECTION_MAX_PAUSE_MS = 30 * 60_000;
+
+/** The awaited step of a record's write that was running when it timed out. */
+export type ImportWriteStep = 'PREPARING' | 'DUPLICATE_LOOKUP' | 'FIRESTORE_WRITE' | 'CACHE_CLEANUP' | 'AUDIT_WRITE' | 'BOM_VERSION_WRITE' | string;
+export type ConnectionState = 'OK' | 'CHECKING' | 'LOST';
+
+/** What the browser says about itself at a moment - informational, never proof of reachability. */
+export interface ImportEnvironmentSignal {
+  online: boolean | null;
+  visibility: string | null;
+}
 
 export interface ExecuteRowsOptions {
   indexes: ReferenceIndexes;
@@ -93,10 +123,22 @@ export interface ExecuteRowsOptions {
   heartbeatMs?: number;
   /** The clock (ms). Default Date.now - injectable for tests. */
   clock?: () => number;
+  /** A bounded, read-only check that the backend answers. Without it, timeouts count toward the guard (3.21.4 behaviour). */
+  probe?: () => Promise<unknown>;
+  probeTimeoutMs?: number;
+  probeIntervalMs?: number;
+  maxPauseMs?: number;
+  /** The browser's online / visibility signals, recorded on every timeout. */
+  environment?: () => ImportEnvironmentSignal;
+  /** Where a row came from, recorded on every timeout. */
+  describeSource?: (row: ImportRow) => { file?: string; row?: number } | null;
 }
 
-/** Writes one row through its existing service; returns the ASFOUR id it wrote or updated. */
-export type ImportRowWriter = (row: ImportRow, context: ImportValidationContext) => Promise<string | undefined>;
+/**
+ * Writes one row through its existing service; returns the ASFOUR id it wrote or
+ * updated. `track` is told which awaited step starts, so a timeout can name it.
+ */
+export type ImportRowWriter = (row: ImportRow, context: ImportValidationContext, track: (step: ImportWriteStep) => void) => Promise<string | undefined>;
 
 /** Called after every attempted write, with the row's outcome and its final validation. */
 export type ImportRowObserver = (row: ImportRow, recheck: ImportValidationResult) => void;
@@ -143,6 +185,18 @@ export interface ImportExecutionProgress {
   inFlight: number;
   /** A stop was requested and is being honoured. */
   stopRequested: boolean;
+  /** 3.21.5 - OK, CHECKING (probing the backend) or LOST (paused, waiting for the server). */
+  connection: ConnectionState;
+  /** When the current pause began (clock ms), or null. */
+  pausedSince: number | null;
+  /** Total time spent paused for the connection so far. */
+  pausedMs: number;
+  /** The last time the backend answered anything (a write or a probe). */
+  lastBackendResponseAt: number | null;
+  /** The last successful write. */
+  lastWriteAt: number | null;
+  /** The step the most recently started write is in. */
+  pendingStep: ImportWriteStep | null;
   /** The kind being processed, and the position within the running phase. */
   currentKind: string | null;
   phaseProcessed: number;
@@ -160,6 +214,15 @@ export interface ImportRowIssue {
   kind: string;
   code: string;
   reason: string;
+  /** 3.21.5 - timeout diagnostics (outcome-unknown rows only). */
+  phase?: string;
+  step?: ImportWriteStep;
+  startedAt?: number;
+  timedOutAt?: number;
+  online?: boolean | null;
+  visibility?: string | null;
+  sourceFile?: string;
+  sourceRow?: number;
 }
 
 export interface ImportFinalResult {
@@ -184,6 +247,9 @@ export interface ImportFinalResult {
   verification: { ok: boolean; issues: string[] };
   /** The phase the run was in when it stopped, and why. */
   stoppedIn: ImportExecutionPhase | null;
+  /** 3.21.5 - every pause for a lost connection, and the total paused time. */
+  connectionPauses: Array<{ startedAt: number; endedAt: number; probes: number; recovered: boolean }>;
+  pausedMs: number;
   error: string | null;
   resumable: boolean;
 }
@@ -275,6 +341,13 @@ export async function executeImportRows(
   const heartbeatMs = Math.max(0, options.heartbeatMs ?? PROGRESS_HEARTBEAT_MS);
   const clock = options.clock ?? Date.now;
   const stopWanted = () => Boolean(options.stopSignal?.aborted) || Boolean(options.shouldStop?.());
+  const probe = options.probe;
+  const probeTimeoutMs = Math.max(1, options.probeTimeoutMs ?? CONNECTION_PROBE_TIMEOUT_MS);
+  const probeIntervalMs = Math.max(0, options.probeIntervalMs ?? CONNECTION_PROBE_INTERVAL_MS);
+  const maxPauseMs = Math.max(0, options.maxPauseMs ?? CONNECTION_MAX_PAUSE_MS);
+  const environment = (): ImportEnvironmentSignal => {
+    try { return options.environment?.() ?? { online: null, visibility: null }; } catch { return { online: null, visibility: null }; }
+  };
 
   const droppedBeforeWrite: Array<{ rowId: string; reason: string }> = [];
   const eligible = new Set(planImport(session).willImport.map((r) => r.rowId));
@@ -323,6 +396,12 @@ export async function executeImportRows(
     lastProgressAt: clock(),
     inFlight: 0,
     stopRequested: false,
+    connection: 'OK',
+    pausedSince: null,
+    pausedMs: 0,
+    lastBackendResponseAt: null,
+    lastWriteAt: null,
+    pendingStep: null,
     currentKind: null,
     phaseProcessed: 0,
     phaseTotal: 0,
@@ -340,6 +419,11 @@ export async function executeImportRows(
   let stopReason: string | null = null;
   let stoppedWithPendingWrites = 0;
   let lastEmitAt = clock();
+  /** Timeouts in the group now running - they decide whether the backend is checked. */
+  let groupTimeouts = 0;
+  /** Timeouts while the backend DID answer the probe - a slow server, counted toward the guard. */
+  let unknownWhileReachable = 0;
+  const connectionPauses: Array<{ startedAt: number; endedAt: number; probes: number; recovered: boolean }> = [];
 
   const snapshot = (): ImportExecutionProgress => ({
     ...progress,
@@ -418,9 +502,14 @@ export async function executeImportRows(
         throw new Error('A pending package-item reference was not bound to an ASFOUR id.');
       }
       progress.inFlight++;
+      const tracker: { step: ImportWriteStep; startedAt: number } = { step: 'PREPARING', startedAt: clock() };
+      const track = (step: ImportWriteStep) => {
+        tracker.step = step;
+        progress.pendingStep = step;
+      };
       let settled: Bounded<string | undefined>;
       try {
-        settled = await waitBounded(Promise.resolve().then(() => write(current, rowContext)), recordTimeoutMs, options.stopSignal, stopGraceMs);
+        settled = await waitBounded(Promise.resolve().then(() => write(current, rowContext, track)), recordTimeoutMs, options.stopSignal, stopGraceMs);
       } finally {
         progress.inFlight--;
       }
@@ -433,8 +522,8 @@ export async function executeImportRows(
           ? (options.language === 'ar' ? `لم يرد الخادم خلال ${limit}` : `the server did not answer within ${limit}`)
           : (options.language === 'ar' ? 'أُوقف الاستيراد قبل أن يرد الخادم' : 'the import was stopped before the server answered');
         const message = options.language === 'ar'
-          ? `${OUTCOME_UNKNOWN_PREFIX}: ${why} - "${code}" (المرحلة ${phaseName}). قد يكون الخادم قد حفظ السجل أو لم يحفظه؛ إعادة الاستيراد تطابقه ولا تكرره.`
-          : `${OUTCOME_UNKNOWN_PREFIX}: ${why} - "${code}" (phase ${phaseName}). The server may or may not have committed this write; a re-run matches it and never duplicates it.`;
+          ? `${OUTCOME_UNKNOWN_PREFIX}: ${why} - "${code}" (المرحلة ${phaseName}، الخطوة ${tracker.step}). قد يكون الخادم قد حفظ السجل أو لم يحفظه؛ إعادة الاستيراد تطابقه ولا تكرره.`
+          : `${OUTCOME_UNKNOWN_PREFIX}: ${why} - "${code}" (phase ${phaseName}, waiting for ${tracker.step}). The server may or may not have committed this write; a re-run matches it and never duplicates it.`;
         current = applyRowResult(current, { ok: false, error: message }, { user: options.user, at: options.at() });
         if (settled.kind === 'stopped') stoppedWithPendingWrites++;
         if (row.entityKind === 'products' || row.entityKind === 'materials') {
@@ -447,8 +536,19 @@ export async function executeImportRows(
         byKind[current.entityKind].uncertain++;
         progress.lastError = message;
         progress.lastProgressAt = clock();
-        uncertainRows.push({ rowId: current.rowId, kind: current.entityKind, code, reason: message });
-        if (settled.kind === 'timeout') {
+        const env = environment();
+        const source = (() => { try { return options.describeSource?.(current) ?? null; } catch { return null; } })();
+        uncertainRows.push({
+          rowId: current.rowId, kind: current.entityKind, code, reason: message,
+          phase: phaseName, step: tracker.step, startedAt: tracker.startedAt, timedOutAt: clock(),
+          online: env.online, visibility: env.visibility,
+          ...(source?.file ? { sourceFile: source.file } : {}),
+          ...(source?.row !== undefined ? { sourceRow: source.row } : {}),
+        });
+        if (settled.kind === 'timeout') groupTimeouts++;
+        // With a backend probe, a timeout is judged after the group: a lost connection pauses
+        // the run instead of consuming the failure guard. Without one, the 3.21.4 rule applies.
+        if (settled.kind === 'timeout' && !probe) {
           consecutiveFailures++;
           if (consecutiveFailures >= maxConsecutiveFailures && !stopReason) {
             stopReason = options.language === 'ar'
@@ -463,6 +563,9 @@ export async function executeImportRows(
       }
       if (settled.kind === 'error') throw settled.error;
       const id = settled.value;
+      progress.lastWriteAt = clock();
+      progress.lastBackendResponseAt = progress.lastWriteAt;
+      unknownWhileReachable = 0;
       current = applyRowResult(current, { ok: true, id: id ?? null }, { user: options.user, at: options.at() });
       if (id) {
         pendingSameKind.push({ ...(current.normalizedData ?? {}), id });
@@ -509,6 +612,87 @@ export async function executeImportRows(
     heartbeat();
   };
 
+  /** Waits `ms`, or less if a stop arrives. */
+  const pauseFor = (ms: number) => waitBounded(new Promise<never>(() => {}), ms, options.stopSignal, 0).then(() => undefined);
+
+  /** One bounded read-only backend check. */
+  const backendAnswers = async (): Promise<boolean> => {
+    if (!probe) return true;
+    const answer = await waitBounded(Promise.resolve().then(() => probe()), probeTimeoutMs, undefined, 0);
+    if (answer.kind === 'value') {
+      progress.lastBackendResponseAt = clock();
+      return true;
+    }
+    return false;
+  };
+
+  /**
+   * After a group in which a record timed out: is the backend there? If it
+   * answers, the timeouts were a slow server and count toward the guard. If it
+   * does not, the run pauses here - no new record starts - and asks again every
+   * `probeIntervalMs` until it answers, a stop arrives, or `maxPauseMs` passes.
+   * Returns false when the run must end.
+   */
+  const checkConnection = async (): Promise<boolean> => {
+    const timeouts = groupTimeouts;
+    groupTimeouts = 0;
+    if (!probe || timeouts === 0) return true;
+    progress.connection = 'CHECKING';
+    emit();
+    if (await backendAnswers()) {
+      progress.connection = 'OK';
+      unknownWhileReachable += timeouts;
+      if (unknownWhileReachable >= maxConsecutiveFailures && !stopReason) {
+        stopReason = options.language === 'ar'
+          ? `توقف الاستيراد: الخادم يرد، لكن ${unknownWhileReachable} عمليات كتابة متتالية لم يرد عليها في الوقت المحدد.`
+          : `The import stopped: the server answers, but ${unknownWhileReachable} consecutive writes got no answer in time.`;
+        return false;
+      }
+      emit();
+      return true;
+    }
+    // CONNECTION LOST - pause, do not start anything, keep asking.
+    const startedAt = clock();
+    progress.connection = 'LOST';
+    progress.pausedSince = startedAt;
+    let probes = 1;
+    emit();
+    for (;;) {
+      if (stopWanted()) {
+        stopReason = stopMessage();
+        break;
+      }
+      if (clock() - startedAt >= maxPauseMs) {
+        stopReason = options.language === 'ar'
+          ? `توقف الاستيراد: لم يعد الاتصال بالخادم خلال ${Math.round(maxPauseMs / 60000)} دقيقة.`
+          : `The import stopped: the server did not come back within ${Math.round(maxPauseMs / 60000)} min.`;
+        break;
+      }
+      await pauseFor(probeIntervalMs);
+      if (stopWanted()) {
+        stopReason = stopMessage();
+        break;
+      }
+      probes++;
+      const back = await backendAnswers();
+      emit();
+      if (back) {
+        const endedAt = clock();
+        connectionPauses.push({ startedAt, endedAt, probes, recovered: true });
+        progress.pausedMs += endedAt - startedAt;
+        progress.pausedSince = null;
+        progress.connection = 'OK';
+        emit();
+        return true;
+      }
+    }
+    const endedAt = clock();
+    connectionPauses.push({ startedAt, endedAt, probes, recovered: false });
+    progress.pausedMs += endedAt - startedAt;
+    progress.pausedSince = null;
+    return false;
+  };
+
   /** A phase's rows, a batch at a time, each batch written `concurrency` rows at a time. */
   const runRows = async (rows: Array<{ row: ImportRow; payload: Record<string, unknown>; rowContext: ImportValidationContext }>): Promise<boolean> => {
     for (let start = 0; start < rows.length; start += batchSize) {
@@ -519,6 +703,8 @@ export async function executeImportRows(
         if (stopWanted() && !stopReason) stopReason = stopMessage();
         if (stopReason) break;
         await Promise.all(batch.slice(i, i + concurrency).map(({ row, payload, rowContext }) => handleRow(row, payload, rowContext)));
+        // A record timed out: is the server there at all? Pauses here while it is not.
+        if (!(await checkConnection()) && !stopReason) stopReason = stopMessage();
         if (stopWanted() && !stopReason) stopReason = stopMessage();
         if (stopReason) break;
       }
@@ -632,6 +818,8 @@ export async function executeImportRows(
     phasesCompleted,
     verification: { ok: verified, issues },
     stoppedIn: interrupted ? phaseAtStop : null,
+    connectionPauses,
+    pausedMs: progress.pausedMs,
     error: progress.error,
     resumable: true,
   };

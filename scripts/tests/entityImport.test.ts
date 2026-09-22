@@ -377,7 +377,8 @@ test('S2. the final execution revalidates, isolates each row, and writes nothing
   const service = readCode(SERVICE);
   // Phase 1 Step 8C-3: the same final revalidation, now resolving the row's business codes first.
   // The loop lives in entityImportExecutionPure (testable without Firestore); the service passes writeRow to it.
-  assert.ok(/executeImportRows\([\s\S]{0,120}writeRow\(row, rowContext, options\)/.test(service), 'the service runs the shared loop with its own writer');
+  // 3.21.5: the writer also reports which awaited step is running (`track`), and the loop gets a backend probe.
+  assert.ok(/executeImportRows\([\s\S]{0,300}writeRow\(row, rowContext, options, track\)/.test(service), 'the service runs the shared loop with its own writer');
   const loop = readCode('src/services/entityImportExecutionPure.ts');
   assert.ok(/const recheck = resolveAndValidateImportRow\(row\.entityKind, payload, \{ \.\.\.rowContext, pendingSameKind \}, options\.indexes, options\.mappingCache\);/.test(loop), 'revalidated against the rows already written');
   assert.ok(/if \(!isRowWritable\(current\)\) \{[\s\S]{0,200}droppedBeforeWrite\.push/.test(loop));

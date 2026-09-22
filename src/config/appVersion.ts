@@ -37,7 +37,7 @@ const DEPLOYMENT_ID_INJECTED = typeof __BUILD_DEPLOYMENT_ID__ === 'string' ? __B
 
 export const CURRENT_APP_VERSION: AppVersionInfo = {
   /** Set by the automatic release planner from the classified change set - see releasePlannerPure.ts. */
-  version: '3.21.4',
+  version: '3.21.5',
   buildId: BUILD_ID_INJECTED,
   buildTimestamp: BUILD_TIMESTAMP_INJECTED,
   gitCommit: COMMIT_SHA_INJECTED,
@@ -46,6 +46,16 @@ export const CURRENT_APP_VERSION: AppVersionInfo = {
   environment: 'production',
   releaseDate: '2026-08-22',
   changelog: [
+    {
+      version: '3.21.5',
+      date: '2026-09-22',
+      highlights: [
+        'استيراد البيانات الأساسية يتعامل مع انقطاع الاتصال: يتوقف مؤقتًا "في انتظار الخادم" ويفحص الخادم تلقائيًا ثم يستأنف بدل استهلاك حد الأخطاء',
+        'لكل سجل انتهت مهلته: الخطوة التي كان ينتظرها (فحص التكرار، الكتابة، الذاكرة المحلية، سجل التدقيق)، والوقت، وحالة الاتصال والصفحة',
+        'النبض يعرض آخر رد من الخادم، وآخر كتابة ناجحة، والعملية الجارية، ومدة التوقف المؤقت',
+        'الأخطاء المؤكدة ما زالت توقف الاستيراد بعد 25 خطأ متتاليًا كما كانت'
+      ]
+    },
     {
       version: '3.21.4',
       date: '2026-09-22',
