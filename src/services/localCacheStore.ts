@@ -142,6 +142,9 @@ export class LocalCacheStore {
 // Real IndexedDB-backed KeyValueBackend (browser only)
 // ==================================================
 
+/** No single local-cache operation may wait longer than this (3.21.4); on expiry the cache is skipped. */
+export const CACHE_OPERATION_TIMEOUT_MS = 10_000;
+
 const DB_NAME = 'asfour_local_cache';
 const DB_VERSION = 1;
 const OBJECT_STORE_NAME = 'masterDataCollections';
@@ -152,85 +155,97 @@ const OBJECT_STORE_NAME = 'masterDataCollections';
  * a Node test environment) - callers must treat null exactly like "cache
  * unavailable" and fall through to Firestore, never crash.
  */
-export function createIndexedDbBackend(): KeyValueBackend | null {
-  if (typeof indexedDB === 'undefined') return null;
+export function createIndexedDbBackend(
+  factory: IDBFactory | undefined = typeof indexedDB === 'undefined' ? undefined : indexedDB,
+  timeoutMs: number = CACHE_OPERATION_TIMEOUT_MS,
+): KeyValueBackend | null {
+  if (!factory) return null;
+
+  /**
+   * 3.21.4 - every cache operation settles exactly once: on success, on error,
+   * on ABORT (previously unhandled - an aborted transaction left its promise
+   * pending forever, which stalled a Master Data import at 21%), on a thrown
+   * exception, or after `timeoutMs`. The cache is an optimisation only, so a
+   * failure of any kind simply falls back (`fallback`) - Firestore stays the
+   * authoritative source, exactly as before.
+   */
+  function settle<T>(fallback: T, run: (done: (value: T) => void) => void): Promise<T> {
+    return new Promise<T>((resolve) => {
+      let finished = false;
+      const done = (value: T) => {
+        if (finished) return;
+        finished = true;
+        clearTimeout(timer);
+        resolve(value);
+      };
+      const timer = setTimeout(() => done(fallback), timeoutMs);
+      try {
+        run(done);
+      } catch {
+        done(fallback);
+      }
+    });
+  }
 
   let dbPromise: Promise<IDBDatabase | null> | null = null;
   function openDb(): Promise<IDBDatabase | null> {
     if (dbPromise) return dbPromise;
-    dbPromise = new Promise((resolve) => {
-      try {
-        const request = indexedDB.open(DB_NAME, DB_VERSION);
-        request.onupgradeneeded = () => {
-          const idb = request.result;
-          if (!idb.objectStoreNames.contains(OBJECT_STORE_NAME)) {
-            idb.createObjectStore(OBJECT_STORE_NAME, { keyPath: 'key' });
-          }
-        };
-        request.onsuccess = () => resolve(request.result);
-        request.onerror = () => resolve(null);
-        request.onblocked = () => resolve(null);
-      } catch {
-        resolve(null);
-      }
+    dbPromise = settle<IDBDatabase | null>(null, (done) => {
+      const request = factory!.open(DB_NAME, DB_VERSION);
+      request.onupgradeneeded = () => {
+        const idb = request.result;
+        if (!idb.objectStoreNames.contains(OBJECT_STORE_NAME)) {
+          idb.createObjectStore(OBJECT_STORE_NAME, { keyPath: 'key' });
+        }
+      };
+      request.onsuccess = () => done(request.result);
+      request.onerror = () => done(null);
+      request.onblocked = () => done(null);
     });
     return dbPromise;
   }
 
+  /** A read: settles with the request's result, or the fallback on error / abort / timeout. */
+  function read<T>(fallback: T, request: (store: IDBObjectStore) => IDBRequest): Promise<T> {
+    return openDb().then((db) => {
+      if (!db) return fallback;
+      return settle<T>(fallback, (done) => {
+        const tx = db.transaction(OBJECT_STORE_NAME, 'readonly');
+        const req = request(tx.objectStore(OBJECT_STORE_NAME));
+        req.onsuccess = () => done((req.result as T) ?? fallback);
+        req.onerror = () => done(fallback);
+        tx.onerror = () => done(fallback);
+        tx.onabort = () => done(fallback);
+      });
+    });
+  }
+
+  /** A write: settles when the transaction completes, errors or ABORTS, or on timeout. */
+  function write(change: (store: IDBObjectStore) => void): Promise<void> {
+    return openDb().then((db) => {
+      if (!db) return;
+      return settle<void>(undefined, (done) => {
+        const tx = db.transaction(OBJECT_STORE_NAME, 'readwrite');
+        change(tx.objectStore(OBJECT_STORE_NAME));
+        tx.oncomplete = () => done(undefined);
+        tx.onerror = () => done(undefined);
+        tx.onabort = () => done(undefined);
+      });
+    });
+  }
+
   return {
     async get(key) {
-      const db = await openDb();
-      if (!db) return undefined;
-      return new Promise((resolve) => {
-        try {
-          const req = db.transaction(OBJECT_STORE_NAME, 'readonly').objectStore(OBJECT_STORE_NAME).get(key);
-          req.onsuccess = () => resolve(req.result as CacheEntry | undefined);
-          req.onerror = () => resolve(undefined);
-        } catch {
-          resolve(undefined);
-        }
-      });
+      return read<CacheEntry | undefined>(undefined, (store) => store.get(key));
     },
     async put(entry) {
-      const db = await openDb();
-      if (!db) return;
-      return new Promise((resolve) => {
-        try {
-          const tx = db.transaction(OBJECT_STORE_NAME, 'readwrite');
-          tx.objectStore(OBJECT_STORE_NAME).put(entry);
-          tx.oncomplete = () => resolve();
-          tx.onerror = () => resolve();
-        } catch {
-          resolve();
-        }
-      });
+      return write((store) => { store.put(entry); });
     },
     async delete(key) {
-      const db = await openDb();
-      if (!db) return;
-      return new Promise((resolve) => {
-        try {
-          const tx = db.transaction(OBJECT_STORE_NAME, 'readwrite');
-          tx.objectStore(OBJECT_STORE_NAME).delete(key);
-          tx.oncomplete = () => resolve();
-          tx.onerror = () => resolve();
-        } catch {
-          resolve();
-        }
-      });
+      return write((store) => { store.delete(key); });
     },
     async getAllEntries() {
-      const db = await openDb();
-      if (!db) return [];
-      return new Promise((resolve) => {
-        try {
-          const req = db.transaction(OBJECT_STORE_NAME, 'readonly').objectStore(OBJECT_STORE_NAME).getAll();
-          req.onsuccess = () => resolve((req.result as CacheEntry[]) || []);
-          req.onerror = () => resolve([]);
-        } catch {
-          resolve([]);
-        }
-      });
+      return read<CacheEntry[]>([], (store) => store.getAll());
     },
   };
 }

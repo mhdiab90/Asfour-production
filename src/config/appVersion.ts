@@ -37,7 +37,7 @@ const DEPLOYMENT_ID_INJECTED = typeof __BUILD_DEPLOYMENT_ID__ === 'string' ? __B
 
 export const CURRENT_APP_VERSION: AppVersionInfo = {
   /** Set by the automatic release planner from the classified change set - see releasePlannerPure.ts. */
-  version: '3.21.3',
+  version: '3.21.4',
   buildId: BUILD_ID_INJECTED,
   buildTimestamp: BUILD_TIMESTAMP_INJECTED,
   gitCommit: COMMIT_SHA_INJECTED,
@@ -46,6 +46,17 @@ export const CURRENT_APP_VERSION: AppVersionInfo = {
   environment: 'production',
   releaseDate: '2026-08-22',
   changelog: [
+    {
+      version: '3.21.4',
+      date: '2026-09-22',
+      highlights: [
+        'استيراد البيانات الأساسية لا ينتظر أي عملية إلى ما لا نهاية: لكل سجل مهلة 90 ثانية، وما لم يرد عليه الخادم يُسجَّل "نتيجة غير معروفة" وليس فشلًا مؤكدًا',
+        'زر الإيقاف يعمل فورًا حتى أثناء انتظار الخادم، ولا تبدأ أي دفعة جديدة بعده',
+        'نبض حي أثناء الاستيراد: آخر تقدم منذ كم، وحالة الاتصال، وتنبيه "في انتظار الخادم"',
+        'إصلاح تعليق ذاكرة التخزين المحلية عند إلغاء عملية في المتصفح',
+        'إعادة الاستيراد بعد انتهاء المهلة تطابق السجلات ولا تكررها'
+      ]
+    },
     {
       version: '3.21.3',
       date: '2026-09-21',

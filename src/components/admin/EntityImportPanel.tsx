@@ -81,6 +81,8 @@ interface LastRunCheckpoint {
   succeeded: number;
   failed: number;
   skipped: number;
+  /** Rows whose write outcome is unknown (timed out) - a re-run matches them, never duplicates them. */
+  uncertain?: number;
   updatedAt: string;
 }
 function saveLastRun(checkpoint: LastRunCheckpoint): void {
@@ -175,6 +177,8 @@ export const EntityImportPanel: React.FC<Props> = ({ isOpen, onClose }) => {
   const [finalResult, setFinalResult] = useState<ImportFinalResult | null>(null);
   const [stopRequested, setStopRequested] = useState(false);
   const stopRef = useRef(false);
+  /** 3.21.4 - aborting it stops the run promptly, even while a write waits for the server. */
+  const stopControllerRef = useRef<AbortController | null>(null);
   /** A single guard against a second import starting while one runs. */
   const runningRef = useRef(false);
   const [uploadStatus, setUploadStatus] = useState<string | null>(null);
@@ -624,6 +628,7 @@ export const EntityImportPanel: React.FC<Props> = ({ isOpen, onClose }) => {
     if (!window.confirm(importConfirmation(toRun, isAr ? 'ar' : 'en'))) return;
     runningRef.current = true;
     stopRef.current = false;
+    stopControllerRef.current = new AbortController();
     setStopRequested(false);
     setBusy(true);
     setError(null);
@@ -633,7 +638,7 @@ export const EntityImportPanel: React.FC<Props> = ({ isOpen, onClose }) => {
     const packageRun = mode === 'package';
     const checkpoint = (p: ImportExecutionProgress) => saveLastRun({
       importId: toRun.importId, sourceFile: toRun.sourceFile, state: p.state, phase: p.phase,
-      processed: p.processed, total: p.total, succeeded: p.succeeded, failed: p.failed, skipped: p.skipped, updatedAt: now(),
+      processed: p.processed, total: p.total, succeeded: p.succeeded, failed: p.failed, skipped: p.skipped, uncertain: p.uncertain, updatedAt: now(),
     });
     try {
       const outcome = await executeEntityImport(toRun, context, {
@@ -646,6 +651,7 @@ export const EntityImportPanel: React.FC<Props> = ({ isOpen, onClose }) => {
         // A lost connection or a refused permission stops the run instead of failing 30,000 rows one by one.
         maxConsecutiveFailures: packageRun ? 25 : undefined,
         shouldStop: () => stopRef.current,
+        stopSignal: stopControllerRef.current.signal,
         onProgress: (p) => {
           setProgress(p);
           checkpoint(p);
@@ -656,7 +662,7 @@ export const EntityImportPanel: React.FC<Props> = ({ isOpen, onClose }) => {
       setFinalResult(outcome.final);
       saveLastRun({
         importId: toRun.importId, sourceFile: toRun.sourceFile, state: outcome.final.outcome, phase: outcome.final.stoppedIn ?? 'DONE',
-        processed: outcome.final.processed, total: outcome.final.total, succeeded: outcome.final.succeeded, failed: outcome.final.failed, skipped: outcome.final.skipped, updatedAt: now(),
+        processed: outcome.final.processed, total: outcome.final.total, succeeded: outcome.final.succeeded, failed: outcome.final.failed, skipped: outcome.final.skipped, uncertain: outcome.final.uncertain, updatedAt: now(),
       });
     } catch (err: any) {
       // The loop itself never throws; anything here is outside it. The screen stays usable.
@@ -669,6 +675,7 @@ export const EntityImportPanel: React.FC<Props> = ({ isOpen, onClose }) => {
 
   const requestStop = () => {
     stopRef.current = true;
+    stopControllerRef.current?.abort();
     setStopRequested(true);
   };
 
@@ -704,7 +711,7 @@ export const EntityImportPanel: React.FC<Props> = ({ isOpen, onClose }) => {
             <p className="font-bold">
               {isAr
                 ? `استيراد سابق (${lastRun.importId}) لم يكتمل: توقف عند ${lastRun.processed.toLocaleString('ar-EG')} من ${lastRun.total.toLocaleString('ar-EG')} سجل (نجح ${lastRun.succeeded.toLocaleString('ar-EG')}، فشل ${lastRun.failed.toLocaleString('ar-EG')}).`
-                : `A previous import (${lastRun.importId}) did not finish: it stopped at ${lastRun.processed.toLocaleString()} of ${lastRun.total.toLocaleString()} records (${lastRun.succeeded.toLocaleString()} successful, ${lastRun.failed.toLocaleString()} failed).`}
+                : `A previous import (${lastRun.importId}) did not finish: it stopped at ${lastRun.processed.toLocaleString()} of ${lastRun.total.toLocaleString()} records (${lastRun.succeeded.toLocaleString()} successful, ${lastRun.failed.toLocaleString()} failed${lastRun.uncertain ? `, ${lastRun.uncertain.toLocaleString()} with unknown outcome` : ''}).`}
             </p>
             <p>
               {isAr

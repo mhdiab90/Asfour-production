@@ -10,8 +10,8 @@
  * what is being processed, did it finish, did it succeed, how many succeeded /
  * failed / were skipped, and what went wrong.
  */
-import React from 'react';
-import { AlertTriangle, CheckCircle2, Loader2, OctagonX, PauseCircle } from 'lucide-react';
+import React, { useEffect, useState } from 'react';
+import { AlertTriangle, CheckCircle2, Loader2, OctagonX, PauseCircle, Wifi, WifiOff } from 'lucide-react';
 import { progressPercent } from '../../services/entityImportExecutionPure';
 import type { ImportExecutionPhase, ImportExecutionProgress, ImportFinalResult, ImportRowIssue, KindCounts } from '../../services/entityImportExecutionPure';
 
@@ -40,6 +40,67 @@ const PHASE_NAMES: Record<ImportExecutionPhase, { ar: string; en: string }> = {
 };
 
 const fmt = (n: number, isAr: boolean) => n.toLocaleString(isAr ? 'ar-EG' : 'en-US');
+
+/** No recorded outcome for this long means the run is waiting for the server (3.21.4). */
+export const NO_PROGRESS_WARNING_MS = 60_000;
+/** A stop still waiting this long is waiting on a server operation that has not answered. */
+export const STOP_WAIT_WARNING_MS = 10_000;
+
+/** "2 min 14 sec" / "12 seconds". */
+export function formatElapsed(ms: number, isAr: boolean): string {
+  const total = Math.max(0, Math.floor(ms / 1000));
+  const min = Math.floor(total / 60);
+  const sec = total % 60;
+  if (isAr) return min > 0 ? `${min} دقيقة ${sec} ثانية` : `${sec} ثانية`;
+  return min > 0 ? `${min} min ${sec} sec` : `${sec} second${sec === 1 ? '' : 's'}`;
+}
+
+/**
+ * What the heartbeat line says, from the loop's own snapshot and the clock - never
+ * "progressing" when nothing has moved. `online` is the browser's own signal:
+ * informational only, it does not prove Firestore is reachable.
+ */
+export function heartbeatState(p: Pick<ImportExecutionProgress, 'lastProgressAt' | 'inFlight'>, nowMs: number, online: boolean, stopRequested: boolean, isAr: boolean) {
+  const idleMs = Math.max(0, nowMs - p.lastProgressAt);
+  const waiting = idleMs >= NO_PROGRESS_WARNING_MS;
+  const lastProgress = isAr ? `آخر تقدم: منذ ${formatElapsed(idleMs, isAr)}` : `Last progress: ${formatElapsed(idleMs, isAr)} ago`;
+  const connection = online
+    ? (isAr ? 'الاتصال: متصل' : 'Connection: Online')
+    : (isAr ? 'غير متصل - في انتظار الاتصال' : 'Offline — waiting for connection');
+  const stop = !stopRequested
+    ? null
+    : idleMs >= STOP_WAIT_WARNING_MS && p.inFlight > 0
+      ? (isAr ? 'جارٍ الإيقاف - عملية على الخادم لم ترد خلال المهلة.' : 'Stopping — one server operation did not respond within the timeout.')
+      : (isAr ? 'جارٍ الإيقاف بعد اكتمال العمل الحالي...' : 'Stopping after the current work completes...');
+  return { idleMs, waiting, lastProgress, connection, online, stop, waitingText: waiting ? (isAr ? 'في انتظار الخادم...' : 'Waiting for the server...') : null };
+}
+
+/** The browser's online / offline signal, live. */
+function useOnline(): boolean {
+  const [online, setOnline] = useState(() => (typeof navigator === 'undefined' ? true : navigator.onLine !== false));
+  useEffect(() => {
+    const up = () => setOnline(true);
+    const down = () => setOnline(false);
+    window.addEventListener('online', up);
+    window.addEventListener('offline', down);
+    return () => {
+      window.removeEventListener('online', up);
+      window.removeEventListener('offline', down);
+    };
+  }, []);
+  return online;
+}
+
+/** A clock that ticks every second while `active`, so "last progress" keeps counting. */
+function useNow(active: boolean): number {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (!active) return;
+    const id = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(id);
+  }, [active]);
+  return now;
+}
 
 /** The current-action sentence, from the loop's own snapshot. */
 function actionMessage(p: ImportExecutionProgress, isAr: boolean): string {
@@ -90,6 +151,7 @@ function KindTable({ byKind, isAr }: { byKind: Record<string, KindCounts>; isAr:
           <th className="px-2 py-1 text-start">{isAr ? 'نجح' : 'Successful'}</th>
           <th className="px-2 py-1 text-start">{isAr ? 'فشل' : 'Failed'}</th>
           <th className="px-2 py-1 text-start">{isAr ? 'متخطى' : 'Skipped'}</th>
+          <th className="px-2 py-1 text-start">{isAr ? 'نتيجة غير معروفة' : 'Outcome unknown'}</th>
         </tr>
       </thead>
       <tbody>
@@ -100,6 +162,7 @@ function KindTable({ byKind, isAr }: { byKind: Record<string, KindCounts>; isAr:
             <td className="px-2 py-1 text-emerald-700 font-bold">{fmt(byKind[k].succeeded, isAr)}</td>
             <td className="px-2 py-1 text-rose-700 font-bold">{fmt(byKind[k].failed, isAr)}</td>
             <td className="px-2 py-1 text-amber-700">{fmt(byKind[k].skipped, isAr)}</td>
+            <td className="px-2 py-1 text-violet-700 font-bold">{fmt(byKind[k].uncertain ?? 0, isAr)}</td>
           </tr>
         ))}
       </tbody>
@@ -168,6 +231,9 @@ export function closingMessage(outcome: ImportFinalResult['outcome'], isAr: bool
 }
 
 export const ImportProgressPanel: React.FC<ImportProgressPanelProps> = ({ isAr, progress, final, readyCount, onStop, stopRequested, onClose }) => {
+  const online = useOnline();
+  const running = !final && progress !== null && (progress.state === 'IMPORTING' || progress.state === 'VERIFYING');
+  const now = useNow(running);
   // --- Final result -------------------------------------------------------------------------
   if (final) {
     const ok = final.outcome === 'COMPLETED';
@@ -201,10 +267,11 @@ export const ImportProgressPanel: React.FC<ImportProgressPanelProps> = ({ isAr, 
           <span className="text-2xl font-black">{final.percent}%</span>
         </div>
         <Bar percent={final.percent} tone={ok ? 'bg-emerald-500' : partial ? 'bg-amber-500' : 'bg-rose-500'} />
-        <div className="grid grid-cols-2 sm:grid-cols-5 gap-1.5">
+        <div className="grid grid-cols-2 sm:grid-cols-6 gap-1.5">
           <Counter label={isAr ? 'تمت معالجته' : 'Processed'} value={`${fmt(final.processed, isAr)} / ${fmt(final.total, isAr)}`} />
           <Counter label={isAr ? 'نجح' : 'Successful'} value={fmt(final.succeeded, isAr)} tone="text-emerald-700" />
-          <Counter label={isAr ? 'فشل' : 'Failed'} value={fmt(final.failed, isAr)} tone="text-rose-700" />
+          <Counter label={isAr ? 'فشل (مؤكد)' : 'Failed (confirmed)'} value={fmt(final.failed, isAr)} tone="text-rose-700" />
+          <Counter label={isAr ? 'نتيجة غير معروفة' : 'Outcome unknown'} value={fmt(final.uncertain ?? 0, isAr)} tone="text-violet-700" />
           <Counter label={isAr ? 'متخطى قبل الكتابة' : 'Skipped'} value={fmt(final.skipped, isAr)} tone="text-amber-700" />
           <Counter label={isAr ? 'بتحذيرات مقبولة' : 'With accepted warnings'} value={fmt(final.warnings, isAr)} />
         </div>
@@ -231,6 +298,14 @@ export const ImportProgressPanel: React.FC<ImportProgressPanelProps> = ({ isAr, 
           </ul>
         )}
         <IssueList id="entity-import-final-failures" title={isAr ? 'السجلات الفاشلة وأسبابها' : 'Failed records and reasons'} issues={final.failures} isAr={isAr} />
+        {(final.uncertain ?? 0) > 0 && (
+          <p id="entity-import-final-uncertain-note" className="text-violet-900 font-bold">
+            {isAr
+              ? 'سجلات لم يرد الخادم عليها في الوقت المحدد: قد تكون حُفظت أو لم تُحفظ. أعد رفع نفس الحزمة واستورد - ما حُفظ منها يُطابق ويُحدَّث ولا يتكرر.'
+              : 'Records the server did not answer in time: they may or may not have been saved. Upload the same package again and import - whatever was saved is matched and updated, never duplicated.'}
+          </p>
+        )}
+        <IssueList id="entity-import-final-uncertain" title={isAr ? 'سجلات نتيجتها غير معروفة (انتهت المهلة)' : 'Records with an unknown outcome (timed out)'} issues={final.uncertainRows ?? []} isAr={isAr} />
         <IssueList id="entity-import-final-dropped" title={isAr ? 'سجلات لم تُكتب بعد إعادة التحقق' : 'Records not written after the final check'} issues={final.dropped} isAr={isAr} />
       </div>
     );
@@ -240,6 +315,7 @@ export const ImportProgressPanel: React.FC<ImportProgressPanelProps> = ({ isAr, 
   if (progress) {
     const percent = progressPercent(progress);
     const verifying = progress.state === 'VERIFYING';
+    const beat = heartbeatState(progress, now, online, Boolean(stopRequested || progress.stopRequested), isAr);
     return (
       <div id="entity-import-progress" data-state={progress.state} className="p-3 rounded-xl border-2 border-indigo-300 bg-indigo-50 space-y-2" aria-live="polite">
         <div className="flex items-center justify-between gap-2">
@@ -258,10 +334,18 @@ export const ImportProgressPanel: React.FC<ImportProgressPanelProps> = ({ isAr, 
             {isAr ? `المرحلة ${progress.phaseNumber} من ${progress.phaseCount} - ${PHASE_NAMES[progress.phase].ar}` : `Phase ${progress.phaseNumber} of ${progress.phaseCount} — ${PHASE_NAMES[progress.phase].en}`}
           </p>
         )}
-        <p id="entity-import-progress-action" className="text-slate-700">{actionMessage(progress, isAr)}</p>
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-1.5">
+        <p id="entity-import-progress-action" className="text-slate-700">{beat.waitingText ?? actionMessage(progress, isAr)}</p>
+        <div id="entity-import-heartbeat" data-waiting={beat.waiting ? 'yes' : 'no'} className={`flex flex-wrap items-center gap-2 rounded-lg px-2 py-1 border ${beat.waiting ? 'bg-amber-50 border-amber-300 text-amber-950 font-bold' : 'bg-white border-slate-200 text-slate-700'}`}>
+          <span>{beat.lastProgress}</span>
+          <span className={`inline-flex items-center gap-1 ${beat.online ? 'text-emerald-700' : 'text-rose-700 font-bold'}`} title={isAr ? 'إشارة المتصفح فقط - لا تثبت أن الخادم متاح' : 'The browser\'s signal only - it does not prove the server is reachable'}>
+            {beat.online ? <Wifi className="w-3.5 h-3.5" /> : <WifiOff className="w-3.5 h-3.5" />}{beat.connection}
+          </span>
+        </div>
+        {beat.stop && <p id="entity-import-stopping" className="font-bold text-slate-900">{beat.stop}</p>}
+        <div className="grid grid-cols-2 sm:grid-cols-5 gap-1.5">
           <Counter label={isAr ? 'نجح' : 'Successful'} value={fmt(progress.succeeded, isAr)} tone="text-emerald-700" />
-          <Counter label={isAr ? 'فشل' : 'Failed'} value={fmt(progress.failed, isAr)} tone="text-rose-700" />
+          <Counter label={isAr ? 'فشل (مؤكد)' : 'Failed (confirmed)'} value={fmt(progress.failed, isAr)} tone="text-rose-700" />
+          <Counter label={isAr ? 'نتيجة غير معروفة' : 'Outcome unknown'} value={fmt(progress.uncertain ?? 0, isAr)} tone="text-violet-700" />
           <Counter label={isAr ? 'متخطى' : 'Skipped'} value={fmt(progress.skipped, isAr)} tone="text-amber-700" />
           <Counter label={isAr ? 'بتحذيرات مقبولة' : 'With accepted warnings'} value={fmt(progress.warnings, isAr)} />
         </div>
@@ -271,7 +355,7 @@ export const ImportProgressPanel: React.FC<ImportProgressPanelProps> = ({ isAr, 
           {onStop && (
             <button id="entity-import-stop" type="button" onClick={onStop} disabled={stopRequested} className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-slate-300 bg-white font-bold cursor-pointer disabled:opacity-50">
               <PauseCircle className="w-3.5 h-3.5" />
-              {stopRequested ? (isAr ? 'سيتوقف بعد الدفعة الحالية...' : 'Stopping after this batch...') : (isAr ? 'إيقاف بعد الدفعة الحالية' : 'Stop after this batch')}
+              {stopRequested ? (isAr ? 'جارٍ الإيقاف...' : 'Stopping...') : (isAr ? 'إيقاف بعد الدفعة الحالية' : 'Stop after this batch')}
             </button>
           )}
         </div>

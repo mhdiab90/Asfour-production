@@ -65,6 +65,9 @@ export interface ImportExecutionOptions {
   yieldToUi?: ExecuteRowsOptions['yieldToUi'];
   shouldStop?: ExecuteRowsOptions['shouldStop'];
   maxConsecutiveFailures?: ExecuteRowsOptions['maxConsecutiveFailures'];
+  /** 3.21.4 - no record is waited for forever, and a stop is honoured while a write is pending. */
+  recordTimeoutMs?: ExecuteRowsOptions['recordTimeoutMs'];
+  stopSignal?: ExecuteRowsOptions['stopSignal'];
 }
 
 export interface ImportExecutionResult {

@@ -30,6 +30,18 @@
  * lost connection, a refused permission), and never throws: an unexpected error
  * ends the run as INTERRUPTED with every completed row kept.
  *
+ * NO WAIT IS UNBOUNDED (3.21.4). A record's write - duplicate lookup, write,
+ * cache cleanup and audit line together - may take at most `recordTimeoutMs`
+ * (IMPORT_RECORD_TIMEOUT_MS). Past it the loop stops waiting and records the row
+ * as OUTCOME UNKNOWN: the server may or may not have committed it. That is never
+ * reported as a confirmed failure, never retried in the same run, and never a
+ * duplicate on a re-run (the next run matches the record by its identity, and the
+ * master-data service refuses a second record with the same code). A stop request
+ * (`stopSignal`) is honoured while a write is still pending: in-flight writes get
+ * STOP_GRACE_MS to answer, then are recorded as outcome unknown, and no further
+ * batch starts. Progress is also reported at most every `heartbeatMs` between
+ * batches, with the time of the last recorded outcome, so a stall is visible.
+ *
  * THE RESULT IS THE LOOP'S OWN. Counts, the phases completed, the verification
  * and the percentage come from here - the screen never computes them itself.
  *
@@ -43,6 +55,15 @@ import type { ReferenceIndexes, ReferenceMappingCache } from './referenceResolut
 import { bindPackageItemReferences, isPackageItemToken, packageItemKey } from './masterDataPackageSessionPure';
 
 type Stored = Record<string, unknown> & { id?: string };
+
+/** The longest a single record's write (lookup + write + cache cleanup + audit) is waited for. */
+export const IMPORT_RECORD_TIMEOUT_MS = 90_000;
+/** After a stop request, how long writes already in flight are still given to answer. */
+export const STOP_GRACE_MS = 5_000;
+/** At most one progress report per this interval between batches (the heartbeat). */
+export const PROGRESS_HEARTBEAT_MS = 1_000;
+/** The prefix of every outcome-unknown row message, so it is never mistaken for a confirmed failure. */
+export const OUTCOME_UNKNOWN_PREFIX = 'OUTCOME UNKNOWN';
 
 export interface ExecuteRowsOptions {
   indexes: ReferenceIndexes;
@@ -60,8 +81,18 @@ export interface ExecuteRowsOptions {
   yieldToUi?: () => Promise<void>;
   /** Checked between batches; true stops the run as INTERRUPTED (resumable). */
   shouldStop?: () => boolean;
-  /** Consecutive failed writes that end the run as INTERRUPTED. Default: never. */
+  /** Consecutive failed or timed-out writes that end the run as INTERRUPTED. Default: never. */
   maxConsecutiveFailures?: number;
+  /** A record's longest wait. Default IMPORT_RECORD_TIMEOUT_MS. */
+  recordTimeoutMs?: number;
+  /** Aborting it stops the run promptly - even while a write is pending. */
+  stopSignal?: AbortSignal;
+  /** Grace for in-flight writes after a stop. Default STOP_GRACE_MS. */
+  stopGraceMs?: number;
+  /** Heartbeat interval. Default PROGRESS_HEARTBEAT_MS. */
+  heartbeatMs?: number;
+  /** The clock (ms). Default Date.now - injectable for tests. */
+  clock?: () => number;
 }
 
 /** Writes one row through its existing service; returns the ASFOUR id it wrote or updated. */
@@ -83,6 +114,8 @@ export interface KindCounts {
   succeeded: number;
   failed: number;
   skipped: number;
+  /** Timed out or cut by a stop: the server may or may not have committed them. */
+  uncertain: number;
 }
 
 export interface ImportExecutionProgress {
@@ -101,7 +134,15 @@ export interface ImportExecutionProgress {
   skipped: number;
   /** Written rows that carried (accepted) warnings. */
   warnings: number;
+  /** Rows whose write did not answer in time (or was cut by a stop): outcome unknown, not failed. */
+  uncertain: number;
   byKind: Record<string, KindCounts>;
+  /** When the last row outcome was recorded (clock ms) - the heartbeat. */
+  lastProgressAt: number;
+  /** Writes currently waiting for the server. */
+  inFlight: number;
+  /** A stop was requested and is being honoured. */
+  stopRequested: boolean;
   /** The kind being processed, and the position within the running phase. */
   currentKind: string | null;
   phaseProcessed: number;
@@ -131,6 +172,9 @@ export interface ImportFinalResult {
   failed: number;
   skipped: number;
   warnings: number;
+  /** Rows whose outcome is unknown (timed out / cut by a stop) - listed in `uncertainRows`. */
+  uncertain: number;
+  uncertainRows: ImportRowIssue[];
   byKind: Record<string, KindCounts>;
   /** Rows the plan never included (blocked, skipped, excluded, warnings not accepted) - by kind. */
   notPlanned: Record<string, number>;
@@ -183,6 +227,38 @@ const codeOf = (row: ImportRow): string => {
 
 const defaultYield = () => new Promise<void>((resolve) => setTimeout(resolve, 0));
 
+type Bounded<T> = { kind: 'value'; value: T } | { kind: 'error'; error: unknown } | { kind: 'timeout' } | { kind: 'stopped' };
+
+/**
+ * Waits for `work`, but never longer than `timeoutMs`, and - once `signal` aborts -
+ * never longer than `graceMs` more. The work is not cancelled (Firestore writes
+ * cannot be): its late settlement is simply ignored, and handled so it can never
+ * surface as an unhandled rejection.
+ */
+export function waitBounded<T>(work: Promise<T>, timeoutMs: number, signal: AbortSignal | undefined, graceMs: number): Promise<Bounded<T>> {
+  return new Promise<Bounded<T>>((resolve) => {
+    let done = false;
+    let graceTimer: ReturnType<typeof setTimeout> | null = null;
+    const finish = (result: Bounded<T>) => {
+      if (done) return;
+      done = true;
+      clearTimeout(timer);
+      if (graceTimer) clearTimeout(graceTimer);
+      signal?.removeEventListener('abort', onAbort);
+      resolve(result);
+    };
+    const timer = setTimeout(() => finish({ kind: 'timeout' }), timeoutMs);
+    const onAbort = () => {
+      if (!graceTimer) graceTimer = setTimeout(() => finish({ kind: 'stopped' }), graceMs);
+    };
+    if (signal) {
+      if (signal.aborted) onAbort();
+      else signal.addEventListener('abort', onAbort);
+    }
+    work.then((value) => finish({ kind: 'value', value }), (error) => finish({ kind: 'error', error }));
+  });
+}
+
 export async function executeImportRows(
   session: ImportSession,
   context: ImportValidationContext,
@@ -194,6 +270,11 @@ export async function executeImportRows(
   const concurrency = Math.max(1, Math.floor(options.concurrency ?? 1));
   const yieldToUi = options.yieldToUi ?? defaultYield;
   const maxConsecutiveFailures = options.maxConsecutiveFailures ?? Number.POSITIVE_INFINITY;
+  const recordTimeoutMs = Math.max(1, options.recordTimeoutMs ?? IMPORT_RECORD_TIMEOUT_MS);
+  const stopGraceMs = Math.max(0, options.stopGraceMs ?? STOP_GRACE_MS);
+  const heartbeatMs = Math.max(0, options.heartbeatMs ?? PROGRESS_HEARTBEAT_MS);
+  const clock = options.clock ?? Date.now;
+  const stopWanted = () => Boolean(options.stopSignal?.aborted) || Boolean(options.shouldStop?.());
 
   const droppedBeforeWrite: Array<{ rowId: string; reason: string }> = [];
   const eligible = new Set(planImport(session).willImport.map((r) => r.rowId));
@@ -223,7 +304,7 @@ export async function executeImportRows(
 
   const byKind: Record<string, KindCounts> = {};
   for (const row of planned) {
-    byKind[row.entityKind] ??= { total: 0, succeeded: 0, failed: 0, skipped: 0 };
+    byKind[row.entityKind] ??= { total: 0, succeeded: 0, failed: 0, skipped: 0, uncertain: 0 };
     byKind[row.entityKind].total++;
   }
   const progress: ImportExecutionProgress = {
@@ -237,7 +318,11 @@ export async function executeImportRows(
     failed: 0,
     skipped: 0,
     warnings: 0,
+    uncertain: 0,
     byKind,
+    lastProgressAt: clock(),
+    inFlight: 0,
+    stopRequested: false,
     currentKind: null,
     phaseProcessed: 0,
     phaseTotal: 0,
@@ -248,14 +333,35 @@ export async function executeImportRows(
   const phasesCompleted: ImportExecutionPhase[] = [];
   const failures: ImportRowIssue[] = [];
   const dropped: ImportRowIssue[] = [];
+  const uncertainRows: ImportRowIssue[] = [];
+  /** Package items whose write outcome is unknown - a BOM on them says so. */
+  const uncertainItemKeys = new Set<string>();
   let consecutiveFailures = 0;
   let stopReason: string | null = null;
+  let stoppedWithPendingWrites = 0;
+  let lastEmitAt = clock();
 
   const snapshot = (): ImportExecutionProgress => ({
     ...progress,
     byKind: Object.fromEntries(Object.entries(progress.byKind).map(([k, v]) => [k, { ...v }])),
   });
-  const emit = () => options.onProgress?.(snapshot());
+  const emit = () => {
+    lastEmitAt = clock();
+    progress.stopRequested = stopWanted();
+    options.onProgress?.(snapshot());
+  };
+  /** The heartbeat: a report between batches, at most every `heartbeatMs`. */
+  const heartbeat = () => {
+    if (clock() - lastEmitAt >= heartbeatMs) emit();
+  };
+  const stopMessage = () => {
+    if (stoppedWithPendingWrites > 0) {
+      return options.language === 'ar'
+        ? `أوقف المستخدم الاستيراد - ${stoppedWithPendingWrites} عملية على الخادم لم ترد قبل التوقف (نتيجتها غير معروفة).`
+        : `The import was stopped by the user - ${stoppedWithPendingWrites} server operation(s) did not respond before the stop (outcome unknown).`;
+    }
+    return options.language === 'ar' ? 'أوقف المستخدم الاستيراد بين دفعتين.' : 'The import was stopped by the user between two batches.';
+  };
   const enterPhase = (phase: ImportExecutionPhase, phaseNumber: number, phaseTotal: number) => {
     progress.phase = phase;
     progress.phaseNumber = phaseNumber;
@@ -276,8 +382,8 @@ export async function executeImportRows(
     emit();
     await yieldToUi();
     if (stopReason) return false;
-    if (options.shouldStop?.()) {
-      stopReason = options.language === 'ar' ? 'أوقف المستخدم الاستيراد بين دفعتين.' : 'The import was stopped by the user between two batches.';
+    if (stopWanted()) {
+      stopReason = stopMessage();
       return false;
     }
     return true;
@@ -311,7 +417,52 @@ export async function executeImportRows(
         // Defence in depth: a pending token is never an id and is never written.
         throw new Error('A pending package-item reference was not bound to an ASFOUR id.');
       }
-      const id = await write(current, rowContext);
+      progress.inFlight++;
+      let settled: Bounded<string | undefined>;
+      try {
+        settled = await waitBounded(Promise.resolve().then(() => write(current, rowContext)), recordTimeoutMs, options.stopSignal, stopGraceMs);
+      } finally {
+        progress.inFlight--;
+      }
+      if (settled.kind === 'timeout' || settled.kind === 'stopped') {
+        // Not a confirmed failure: the server may have committed it after all.
+        const code = codeOf(current);
+        const phaseName = progress.phase;
+        const limit = recordTimeoutMs >= 1000 ? `${Math.round(recordTimeoutMs / 1000)} s` : `${recordTimeoutMs} ms`;
+        const why = settled.kind === 'timeout'
+          ? (options.language === 'ar' ? `لم يرد الخادم خلال ${limit}` : `the server did not answer within ${limit}`)
+          : (options.language === 'ar' ? 'أُوقف الاستيراد قبل أن يرد الخادم' : 'the import was stopped before the server answered');
+        const message = options.language === 'ar'
+          ? `${OUTCOME_UNKNOWN_PREFIX}: ${why} - "${code}" (المرحلة ${phaseName}). قد يكون الخادم قد حفظ السجل أو لم يحفظه؛ إعادة الاستيراد تطابقه ولا تكرره.`
+          : `${OUTCOME_UNKNOWN_PREFIX}: ${why} - "${code}" (phase ${phaseName}). The server may or may not have committed this write; a re-run matches it and never duplicates it.`;
+        current = applyRowResult(current, { ok: false, error: message }, { user: options.user, at: options.at() });
+        if (settled.kind === 'stopped') stoppedWithPendingWrites++;
+        if (row.entityKind === 'products' || row.entityKind === 'materials') {
+          const itemCode = String(((current.normalizedData ?? {}) as Record<string, unknown>).code ?? '');
+          if (itemCode) uncertainItemKeys.add(packageItemKey(row.entityKind, itemCode));
+        }
+        progress.processed++;
+        progress.phaseProcessed++;
+        progress.uncertain++;
+        byKind[current.entityKind].uncertain++;
+        progress.lastError = message;
+        progress.lastProgressAt = clock();
+        uncertainRows.push({ rowId: current.rowId, kind: current.entityKind, code, reason: message });
+        if (settled.kind === 'timeout') {
+          consecutiveFailures++;
+          if (consecutiveFailures >= maxConsecutiveFailures && !stopReason) {
+            stopReason = options.language === 'ar'
+              ? `توقف الاستيراد بعد ${consecutiveFailures} عمليات كتابة متتالية فشلت أو لم يرد عليها الخادم. آخر رسالة: ${message}`
+              : `The import stopped after ${consecutiveFailures} consecutive writes that failed or got no answer. Last: ${message}`;
+          }
+        }
+        try { observe?.(current, recheck); } catch { /* the audit line never decides an outcome */ }
+        outcome.set(current.rowId, current);
+        heartbeat();
+        return;
+      }
+      if (settled.kind === 'error') throw settled.error;
+      const id = settled.value;
       current = applyRowResult(current, { ok: true, id: id ?? null }, { user: options.user, at: options.at() });
       if (id) {
         pendingSameKind.push({ ...(current.normalizedData ?? {}), id });
@@ -331,6 +482,7 @@ export async function executeImportRows(
     }
     progress.processed++;
     progress.phaseProcessed++;
+    progress.lastProgressAt = clock();
     if (current.status === 'IMPORTED') {
       progress.succeeded++;
       byKind[current.entityKind].succeeded++;
@@ -354,6 +506,7 @@ export async function executeImportRows(
       // An observer (the audit line) never decides a row's outcome.
     }
     outcome.set(current.rowId, current);
+    heartbeat();
   };
 
   /** A phase's rows, a batch at a time, each batch written `concurrency` rows at a time. */
@@ -362,7 +515,11 @@ export async function executeImportRows(
       const batch = rows.slice(start, start + batchSize);
       progress.currentKind = batch[0]?.row.entityKind ?? null;
       for (let i = 0; i < batch.length; i += concurrency) {
+        // A stop is honoured before any new write starts - never after a whole batch.
+        if (stopWanted() && !stopReason) stopReason = stopMessage();
+        if (stopReason) break;
         await Promise.all(batch.slice(i, i + concurrency).map(({ row, payload, rowContext }) => handleRow(row, payload, rowContext)));
+        if (stopWanted() && !stopReason) stopReason = stopMessage();
         if (stopReason) break;
       }
       if (!(await afterBatch())) return false;
@@ -394,9 +551,14 @@ export async function executeImportRows(
           progress.phaseProcessed++;
           if (bound.unresolved.length > 0) {
             const codes = bound.unresolved.map((k) => k.slice(k.indexOf(':') + 1)).join(', ');
-            markDropped(row, options.language === 'ar'
-              ? `صنف من نفس الحزمة لم يُكتب في هذا الاستيراد: ${codes}`
-              : `A package item was not written in this import: ${codes}`);
+            const unknown = bound.unresolved.filter((k) => uncertainItemKeys.has(k)).map((k) => k.slice(k.indexOf(':') + 1));
+            markDropped(row, unknown.length > 0
+              ? (options.language === 'ar'
+                ? `نتيجة كتابة صنف من نفس الحزمة غير معروفة (لم يرد الخادم): ${unknown.join(', ')} - أعد الاستيراد لإكمال هذه القائمة.`
+                : `The write outcome of a package item is unknown (no server answer): ${unknown.join(', ')} - re-run the import to complete this BOM.`)
+              : (options.language === 'ar'
+                ? `صنف من نفس الحزمة لم يُكتب في هذا الاستيراد: ${codes}`
+                : `A package item was not written in this import: ${codes}`));
             outcome.set(row.rowId, row);
             continue;
           }
@@ -432,7 +594,7 @@ export async function executeImportRows(
   }
   const issues: string[] = [];
   if (progress.processed !== progress.total) issues.push(`${progress.processed} of ${progress.total} planned rows have an outcome`);
-  if (progress.succeeded + progress.failed + progress.skipped !== progress.processed) issues.push('succeeded + failed + skipped does not equal processed');
+  if (progress.succeeded + progress.failed + progress.uncertain + progress.skipped !== progress.processed) issues.push('succeeded + failed + uncertain + skipped does not equal processed');
   const droppedIds = new Set(droppedBeforeWrite.map((d) => d.rowId));
   const undecided = planned.filter((row) => {
     const final = outcome.get(row.rowId);
@@ -444,7 +606,7 @@ export async function executeImportRows(
 
   const outcomeState: ImportFinalResult['outcome'] = interrupted
     ? 'INTERRUPTED'
-    : progress.failed === 0 && progress.skipped === 0 && verified ? 'COMPLETED' : 'COMPLETED_WITH_ERRORS';
+    : progress.failed === 0 && progress.skipped === 0 && progress.uncertain === 0 && verified ? 'COMPLETED' : 'COMPLETED_WITH_ERRORS';
   progress.state = outcomeState;
   progress.phase = interrupted ? phaseAtStop : 'DONE';
   progress.error = fatal ?? stopReason;
@@ -461,6 +623,8 @@ export async function executeImportRows(
     failed: progress.failed,
     skipped: progress.skipped,
     warnings: progress.warnings,
+    uncertain: progress.uncertain,
+    uncertainRows,
     byKind: snapshot().byKind,
     notPlanned,
     failures,
