@@ -3,7 +3,7 @@
  * Manages Master Data entities:
  * Products, Product Types (Prefixes), Employees, Departments, Presses, Furnaces, Furnace Cars, Customers, Shifts
  */
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { 
   Users, 
   Building2, 
@@ -73,6 +73,20 @@ import {
   updateProductType,
   toggleProductTypeActive
 } from '../../services/productTypeService';
+/*
+ * On-demand loading rules (shared, pure).
+ *
+ * The screen reads nothing until a section is opened explicitly, so these
+ * conditions live in one testable place rather than as conditions scattered
+ * through the effects below.
+ */
+import {
+  formDropdownCollections,
+  needsEquipmentReferenceData,
+  planSectionLoad,
+  resolveOpenTab,
+  shouldSubscribeProductTypes,
+} from '../../services/masterDataLazyLoadPure';
 import { parseProductCode, normalizeProductCode } from '../../utils/productCodeParser';
 import { enrichWithNormalizedFields } from '../../utils/searchUtils';
 import { DataQualityModal } from '../admin/DataQualityModal';
@@ -264,6 +278,14 @@ interface CodeAnalysisItem {
   };
 }
 
+/**
+ * The registry key for the product-types listener.
+ *
+ * It shares the listener registry with the section listeners, so it needs a key
+ * that no MasterDataTab can ever be - `productTypes` is itself a tab id.
+ */
+const PRODUCT_TYPES_LISTENER_KEY = '@productTypes';
+
 interface MasterDataViewProps {
   onNavigate: (page: NavigationPage) => void;
 }
@@ -276,7 +298,11 @@ export const MasterDataView: React.FC<MasterDataViewProps> = ({ onNavigate }) =>
   const [productTypes, setProductTypes] = useState<ProductType[]>([]);
   const [departments, setDepartments] = useState<Department[]>([]);
   const [furnaces, setFurnaces] = useState<Furnace[]>([]);
-  const [isLoading, setIsLoading] = useState<boolean>(true);
+  /*
+   * Nothing is loading when the screen opens, because nothing is read when the
+   * screen opens. The spinner belongs to a section the user has opened.
+   */
+  const [isLoading, setIsLoading] = useState<boolean>(false);
   const [searchQuery, setSearchQuery] = useState<string>(prefill?.query || '');
   const [statusFilter, setStatusFilter] = useState<'all' | 'active' | 'inactive'>('all');
   const [prefixFilter, setPrefixFilter] = useState<string>('all');
@@ -357,9 +383,32 @@ export const MasterDataView: React.FC<MasterDataViewProps> = ({ onNavigate }) =>
    * category row repeated the very navigation underneath it, so choosing a
    * category took two controls instead of one.
    */
-  const [activeCategoryId, setActiveCategoryId] = useState<string>(
-    () => (prefill?.tab && navigationCategoryIdForTab(prefill.tab, panelCategories())) || 'products'
+  /*
+   * No section is open until one is chosen. Defaulting to Products meant every
+   * visit to this screen read the whole products collection before the user had
+   * asked for anything - the deep-link prefill is the one case where a section
+   * WAS asked for, so it still opens.
+   */
+  const [activeCategoryId, setActiveCategoryId] = useState<string | null>(
+    () => (prefill?.tab && navigationCategoryIdForTab(prefill.tab, panelCategories())) || null
   );
+  /** Whether a section has been opened explicitly. Nothing is read while it is false. */
+  const isSectionOpen = activeCategoryId !== null;
+  /**
+   * The live listeners this screen has opened, keyed by section (and by
+   * PRODUCT_TYPES_LISTENER_KEY for the product types). They are kept for the
+   * screen's lifetime, so returning to a section already opened costs no new
+   * read, and released together on unmount.
+   */
+  const listenersRef = useRef<Map<string, () => void>>(new Map());
+  /** The rows each opened section already has, so a revisit renders immediately. */
+  const sectionRowsRef = useRef<Map<string, any[]>>(new Map());
+  /** The section on screen, for listeners that are still attached to another one. */
+  const activeTabRef = useRef<MasterDataTab | null>(null);
+  /** Set once the equipment hierarchy has been read; a failed read clears it again. */
+  const hierarchyReadRef = useRef<boolean>(false);
+  /** Bumped by Refresh - the only thing that re-reads a section already loaded. */
+  const [sectionReload, setSectionReload] = useState<number>(0);
   /** Cost-centre classifications. Empty = no narrowing, as everywhere else. */
   const [costCenterDigits, setCostCenterDigits] = useState<string[]>([]);
   const [isApplyingLinks, setIsApplyingLinks] = useState<boolean>(false);
@@ -454,9 +503,23 @@ export const MasterDataView: React.FC<MasterDataViewProps> = ({ onNavigate }) =>
   }, [activeCategoryId, areaCategories]);
 
   /** The Equipment group's categories, when that group is the active navigation entry. */
-  const activeSubCategories = useMemo(() => subCategories(activeCategoryId), [activeCategoryId]);
+  const activeSubCategories = useMemo(() => subCategories(activeCategoryId ?? ''), [activeCategoryId]);
 
   const isCostCenterActive = activeCategoryId === COST_CENTER_CATEGORY_ID;
+
+  /**
+   * The collection the OPEN section reads - derived from the chosen category,
+   * not from `activeTab`.
+   *
+   * `activeTab` is set by the effect above, one render later, so reading from it
+   * would make opening a section read the previous section's collection first
+   * and the chosen one immediately after: two reads for one click, and the first
+   * for data nobody asked for. Null means no section is open, and nothing reads.
+   */
+  const openTab = useMemo<MasterDataTab | null>(
+    () => resolveOpenTab({ activeCategoryId, activeTab }, areaCategories) as MasterDataTab | null,
+    [activeCategoryId, activeTab, areaCategories],
+  );
 
   /**
    * Counts per 5/6/7/8/9, from the rows already loaded - no extra read.
@@ -469,45 +532,113 @@ export const MasterDataView: React.FC<MasterDataViewProps> = ({ onNavigate }) =>
     [isCostCenterActive, items],
   );
 
-  // Subscribe to Product Types (always kept live for parser)
+  /*
+   * Product types, live, for the sections that actually use them: the Products
+   * parser and prefix filter, and the Product Types section itself. This ran on
+   * mount before - and subscribeProductTypes also triggers the initial seed - so
+   * a user who opened neither section still paid for the collection.
+   */
+  const needsProductTypes = shouldSubscribeProductTypes(openTab);
   useEffect(() => {
+    if (!needsProductTypes) return;
+    // Already live: reuse it rather than opening a second listener on the same data.
+    if (listenersRef.current.has(PRODUCT_TYPES_LISTENER_KEY)) return;
     const unsubTypes = subscribeProductTypes(
       (types) => setProductTypes(types),
       (err) => console.warn('Product types listener warning:', err)
     );
-    return () => unsubTypes();
-  }, []);
+    listenersRef.current.set(PRODUCT_TYPES_LISTENER_KEY, unsubTypes);
+  }, [needsProductTypes]);
 
-  // Subscribe to current collection
+  /*
+   * The open section's rows.
+   *
+   * Nothing is read until a section is opened explicitly. A section already
+   * opened keeps its listener, so coming back to it renders the rows already in
+   * hand and issues no new read - and still updates live, which is what the
+   * importers and the inline edits rely on. Refresh is the only re-read.
+   */
   useEffect(() => {
-    setIsLoading(true);
+    activeTabRef.current = openTab;
+    if (!openTab) {
+      setItems([]);
+      setIsLoading(false);
+      return;
+    }
+    const tab = openTab;
+    const cached = sectionRowsRef.current.get(tab);
+    const plan = planSectionLoad({
+      collectionName: MASTER_DATA_COLLECTIONS[tab],
+      hasListener: listenersRef.current.has(tab),
+      hasRows: cached !== undefined,
+    });
+    setItems(cached ?? []);
+    setIsLoading(plan.loading);
+    // Already live: the rows in hand are current, so this costs no read.
+    if (!plan.read) return;
     const unsubscribe = subscribeMasterData<any>(
-      MASTER_DATA_COLLECTIONS[activeTab],
+      plan.read,
       (data) => {
+        sectionRowsRef.current.set(tab, data);
+        // A listener still attached to another section must never replace the
+        // rows of the one on screen.
+        if (activeTabRef.current !== tab) return;
         setItems(data);
         setIsLoading(false);
       },
       (err) => {
-        console.error(`Error loading ${activeTab}:`, err);
-        setIsLoading(false);
+        console.error(`Error loading ${tab}:`, err);
+        if (activeTabRef.current === tab) setIsLoading(false);
       }
     );
+    listenersRef.current.set(tab, unsubscribe);
+  }, [openTab, sectionReload]);
 
-    return () => unsubscribe();
-  }, [activeTab]);
+  /* Every listener this screen opened is released together when it unmounts. */
+  useEffect(() => () => {
+    listenersRef.current.forEach((stop) => stop());
+    listenersRef.current.clear();
+  }, []);
+
+  /**
+   * Re-reads the open section, on request only.
+   *
+   * The listener is detached and the rows dropped first, so this is a real
+   * server read rather than a re-render of what is already held.
+   */
+  const handleRefreshSection = () => {
+    if (!openTab) return;
+    const stop = listenersRef.current.get(openTab);
+    if (stop) stop();
+    listenersRef.current.delete(openTab);
+    sectionRowsRef.current.delete(openTab);
+    setIsLoading(true);
+    setSectionReload((n) => n + 1);
+  };
+
+  /*
+   * The equipment reference data: the hierarchy nodes the link selector offers,
+   * and every equipment record the reconciliation compares. Both were read on
+   * mount; they are read when an equipment section is open or the reconciliation
+   * window is, and not before.
+   */
+  const needsEquipmentReference = needsEquipmentReferenceData(openTab, isReconcileOpen, isEquipmentLinkTab);
 
   /* The hierarchy node list, read once through the existing cache-first reader. */
   useEffect(() => {
+    if (!needsEquipmentReference || hierarchyReadRef.current) return;
+    hierarchyReadRef.current = true;
     listCostCenterHierarchyNodes()
       .then(setHierarchyNodes)
-      .catch(() => { /* an unavailable hierarchy only costs the link selector */ });
-  }, []);
+      .catch(() => { hierarchyReadRef.current = false; /* an unavailable hierarchy only costs the link selector */ });
+  }, [needsEquipmentReference]);
 
   /*
    * All equipment categories, cache-first, once. Reconciliation covers them
    * together, so it must not depend on which tab happens to be open.
    */
   useEffect(() => {
+    if (!needsEquipmentReference) return;
     Promise.all(
       RECONCILABLE_EQUIPMENT_CATEGORIES.map((categoryId) =>
         // `skipCache` after an apply: updateMasterDataItem invalidated the
@@ -520,13 +651,19 @@ export const MasterDataView: React.FC<MasterDataViewProps> = ({ onNavigate }) =>
     )
       .then((groups) => setAllEquipment(groups.flat()))
       .catch(() => { /* an unavailable collection only shrinks the report */ });
-  }, [equipmentRefresh]);
+  }, [equipmentRefresh, needsEquipmentReference]);
 
-  // Load auxiliary lists (departments & furnaces for dropdowns)
+  /*
+   * The two dropdown lists inside the Add/Edit form - a department for an
+   * employee, a furnace for a furnace car. Read when that form opens, and only
+   * for the section that offers the dropdown; opening the screen no longer
+   * reads two more collections for a form nobody has asked for yet.
+   */
   useEffect(() => {
-    fetchMasterData<Department>('departments').then(setDepartments).catch(() => {});
-    fetchMasterData<Furnace>('furnaces').then(setFurnaces).catch(() => {});
-  }, []);
+    const wanted = formDropdownCollections(openTab, isModalOpen);
+    if (wanted.includes('departments')) fetchMasterData<Department>('departments').then(setDepartments).catch(() => {});
+    if (wanted.includes('furnaces')) fetchMasterData<Furnace>('furnaces').then(setFurnaces).catch(() => {});
+  }, [isModalOpen, openTab]);
 
   /**
    * Which tabs can carry a hierarchy link.
@@ -1684,10 +1821,13 @@ export const MasterDataView: React.FC<MasterDataViewProps> = ({ onNavigate }) =>
         </div>
 
         <div className="flex items-center gap-2 flex-wrap text-[11px] font-bold text-slate-600">
-          <span className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl bg-slate-100">
-            {language === 'ar' ? 'عدد الأكواد' : 'Codes'}
-            <span className="text-slate-900 font-black">{items.length}</span>
-          </span>
+          {/* A count belongs to a section that is open - never "0" for nothing. */}
+          {isSectionOpen && (
+            <span className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl bg-slate-100">
+              {language === 'ar' ? 'عدد الأكواد' : 'Codes'}
+              <span className="text-slate-900 font-black">{items.length}</span>
+            </span>
+          )}
           {currentCategory?.hierarchical && (
             <span className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl bg-amber-50 border border-amber-200 text-amber-800">
               <Layers className="w-3.5 h-3.5" />
@@ -1882,7 +2022,25 @@ export const MasterDataView: React.FC<MasterDataViewProps> = ({ onNavigate }) =>
         Area 3's controls and table. Hidden entirely while no category is
         chosen - leaving them visible would show the previously loaded rows
         under a heading that no longer applies.
+
+        Nothing rendered above this point reads an entity list, so opening the
+        screen performs no Firestore list read at all: this placeholder is what
+        the user sees until they choose a section from the row above.
       */}
+      {!isSectionOpen ? (
+        <div id="master-data-no-section" className="bg-white rounded-2xl p-12 border border-slate-200 shadow-xs text-center">
+          <ListTree className="w-10 h-10 mx-auto mb-3 text-slate-300" />
+          <p className="text-sm font-black text-slate-700">
+            {language === 'ar' ? 'اختر قسمًا لعرض بياناته' : 'Choose a section to view its data'}
+          </p>
+          <p className="text-xs font-semibold text-slate-400 mt-1">
+            {language === 'ar'
+              ? 'لا تُقرأ أي بيانات من Firestore قبل اختيار القسم.'
+              : 'No data is read from Firestore before a section is chosen.'}
+          </p>
+        </div>
+      ) : (
+      <>
       {/* Control Bar: Search, Filters, Add Button, Bulk Import Link, Excel Export */}
       <div className="bg-white rounded-2xl p-4 border border-slate-200 shadow-xs flex flex-col md:flex-row items-stretch md:items-center justify-between gap-3">
         {/* Search & Status Filter */}
@@ -2051,6 +2209,25 @@ export const MasterDataView: React.FC<MasterDataViewProps> = ({ onNavigate }) =>
             </button>
           )}
 
+          {/*
+            The explicit re-read.
+
+            The section's listener stays attached while the screen is open, so
+            the rows are already live; this is for the case where the user wants
+            to force a fresh server read of the section they are looking at.
+          */}
+          <button
+            id="master-data-refresh-btn"
+            type="button"
+            onClick={handleRefreshSection}
+            disabled={isLoading}
+            className="flex items-center gap-1.5 px-3 py-2 text-xs font-bold text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-xl transition-colors disabled:opacity-50 cursor-pointer"
+            title={language === 'ar' ? 'إعادة قراءة بيانات هذا القسم من Firestore' : 'Re-read this section from Firestore'}
+          >
+            <RefreshCw className={`w-3.5 h-3.5 ${isLoading ? 'animate-spin' : ''}`} />
+            <span>{language === 'ar' ? 'تحديث' : 'Refresh'}</span>
+          </button>
+
           <button
             id="master-data-export-btn"
             type="button"
@@ -2165,7 +2342,11 @@ export const MasterDataView: React.FC<MasterDataViewProps> = ({ onNavigate }) =>
         {isLoading ? (
           <div className="py-16 text-center text-slate-400">
             <RefreshCw className="w-6 h-6 animate-spin mx-auto mb-2 text-amber-500" />
-            <p className="text-xs font-semibold">{language === 'ar' ? 'جارٍ تحميل البيانات من Firestore...' : 'Loading data from Firestore...'}</p>
+            <p id="master-data-section-loading" className="text-xs font-semibold">
+              {language === 'ar'
+                ? `جاري تحميل ${labelForCategory(activeCategoryId ?? '')}...`
+                : `Loading ${labelForCategory(activeCategoryId ?? '')}...`}
+            </p>
           </div>
         ) : visibleItems.length === 0 ? (
           <div className="py-16 text-center text-slate-400">
@@ -2733,6 +2914,8 @@ export const MasterDataView: React.FC<MasterDataViewProps> = ({ onNavigate }) =>
           </div>
         )}
       </div>
+      </>
+      )}
 
       {/* Add / Edit Modal */}
       <Modal

@@ -37,7 +37,7 @@ const DEPLOYMENT_ID_INJECTED = typeof __BUILD_DEPLOYMENT_ID__ === 'string' ? __B
 
 export const CURRENT_APP_VERSION: AppVersionInfo = {
   /** Set by the automatic release planner from the classified change set - see releasePlannerPure.ts. */
-  version: '3.21.5',
+  version: '3.21.6',
   buildId: BUILD_ID_INJECTED,
   buildTimestamp: BUILD_TIMESTAMP_INJECTED,
   gitCommit: COMMIT_SHA_INJECTED,
@@ -46,6 +46,17 @@ export const CURRENT_APP_VERSION: AppVersionInfo = {
   environment: 'production',
   releaseDate: '2026-08-22',
   changelog: [
+    {
+      version: '3.21.6',
+      date: '2026-09-23',
+      highlights: [
+        'شاشة البيانات الأساسية لم تعد تقرأ أي بيانات عند فتحها: لا يتم اختيار "المنتجات" تلقائيًا، وتظهر رسالة "اختر قسمًا لعرض بياناته"',
+        'كل قسم يُقرأ عند فتحه فقط، والعودة إلى قسم سبق فتحه لا تكلف أي قراءة جديدة',
+        'زر "تحديث" هو الطريقة الوحيدة لإعادة قراءة القسم المعروض من Firestore',
+        'أُلغيت القراءات المخفية عند الفتح: تصنيفات المنتجات، وقوائم المعدات والتسلسل الهرمي، وقائمتا الأقسام والأفران الخاصتان بنموذج الإضافة/التعديل',
+        'لم تتغير أي قاعدة عمل أو صلاحية أو تحقق أو سجل تدقيق، ولم يتغير الاستيراد'
+      ]
+    },
     {
       version: '3.21.5',
       date: '2026-09-22',

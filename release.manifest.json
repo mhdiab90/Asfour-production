@@ -1,9 +1,9 @@
 {
   "_doc": "Release Manifest precursor. Describes WHAT is being released so the gate checks a committed declaration rather than whatever flags an operator typed. commitSha/buildId/deploymentId are left null until a release is cut - the gate fills the comparison from the build itself, and only enforces a field that is set here. This is NOT the Change Registry: no change IDs, no Firestore, no UI.",
-  "version": "3.21.5",
-  "releaseId": "REL-2026-0028",
+  "version": "3.21.6",
+  "releaseId": "REL-2026-0029",
   "changeIds": [
-    "FIX-0042"
+    "PERF-0043"
   ],
   "commitSha": null,
   "buildId": null,
@@ -48,7 +48,9 @@
     "entity-import-progress",
     "entity-import-close",
     "entity-import-heartbeat",
-    "entity-import-connection"
+    "entity-import-connection",
+    "master-data-no-section",
+    "master-data-refresh-btn"
   ],
   "_markerNotes": {
     "ai-provider-management": "AI Provider Management route - absent means the AI Assistant closure was dropped",
@@ -90,7 +92,9 @@
     "entity-import-progress": "The live import progress panel - absent means a large import runs again without visible progress or a verified final result",
     "entity-import-close": "The \"Close window\" button of a finished or stopped import - absent means the import window lost its final close state",
     "entity-import-heartbeat": "The import heartbeat (last progress / connection) - absent means a stalled import can again look like progress",
-    "entity-import-connection": "The \"waiting for the server\" connection panel of a paused import - absent means a connection loss again burns the failure guard silently"
+    "entity-import-connection": "The \"waiting for the server\" connection panel of a paused import - absent means a connection loss again burns the failure guard silently",
+    "master-data-no-section": "The Master Data placeholder shown while no section is open - absent means the screen went back to selecting Products and reading it on mount",
+    "master-data-refresh-btn": "The explicit re-read of the open section - absent means there is no way to force a fresh read now that sections are loaded on demand"
   },
   "tests": [
     "buildIdentity",
@@ -141,11 +145,13 @@
     "importProgress",
     "masterDataPackageRealIndexes",
     "importTimeout",
-    "importConnection"
+    "importConnection",
+    "masterDataLazyLoad"
   ],
   "deployCommand": "firebase deploy --only hosting --project asfourproduction-70e6e",
   "treeClean": true,
   "_changeNotes": {
+    "PERF-0043": "Master Data screen loads on demand. Opening البيانات الأساسية used to select Products automatically, which subscribed to the whole products collection, seeded and subscribed to productTypes, read the five equipment collections and the cost-centre hierarchy, and read departments and furnaces for a form nobody had opened - tens of thousands of document reads before the user asked for anything. Now activeCategoryId starts null, the screen shows اختر قسمًا لعرض بياناته, and nothing is read until a section is opened explicitly (a deep-link prefill still opens the section it names). Each section is read once when opened and keeps its live listener, so returning to it costs no new read and realtime updates still arrive; the new Refresh button is the only re-read, and it detaches the listener first so the read is a real one. The conditions live in one pure module, masterDataLazyLoadPure.ts, whose plannedEntityReads returns an EMPTY list for the mount state - that is the assertion, not a source pattern. Product types are subscribed only for the Products and Product Types sections; the hierarchy and equipment collections only while an equipment section or the reconciliation window is open; the department and furnace dropdown lists only while the Add/Edit form that offers them is open. No business rule, validation, permission, audit, CRUD path, BOM/routing feature, export, importer or Firestore rule changed, and no data was read, written or migrated by this change",
     "FIX-0042": "Connection-aware Master Data import. In production 3.21.4 stopped at 11,036 / 30,166 (11,001 written, 35 outcome unknown): a silent network stall timed out group after group of 4 records at 90 s each until the 25-failure guard ended the run. Now, after any group in which a record timed out, the loop asks the backend itself with a bounded read-only probe (probeMasterDataBackend: one document from the server, never the cache, nothing written; 15 s). If the backend does not answer, the run PAUSES in CONNECTION LOST - no new record starts, the timeouts do not consume the failure guard, and the probe repeats every 10 s until the server answers (resume with the next record), the user stops (INTERRUPTED) or 30 minutes pass (INTERRUPTED, resumable). A timed-out record stays OUTCOME UNKNOWN and is never retried in the run. If the backend answers while writes keep timing out, those timeouts count toward the guard (a slow server); confirmed failures count exactly as before. createMasterDataItem / updateMasterDataItem report each awaited step (duplicate lookup, Firestore write, cache cleanup, audit write - none removed or reordered), so every timeout records the step it waited for, its start and timeout times, the page visibility, the browser online signal, and the source file and row. The heartbeat shows the connection state, paused time, last server answer, last successful write and the current operation. Batch size 250 and concurrency 4 unchanged. No business rule, validation, audit, cache behaviour, Firestore rule, schema or permission changed; nothing was imported",
     "FIX-0041": "Master Data import hang (3.21.3 stopped at 21% = 6,500 / 30,166 for 30 minutes in batch 6,501-6,750). Each record write waits on a duplicate lookup, the Firestore write, a local-cache cleanup and an audit write, and none of those waits was bounded: a Firestore write stays pending while the connection is lost or the machine sleeps, and an aborted IndexedDB transaction left the cache promise pending forever (no onabort). A pending promise is not a failure, so the consecutive-failure guard never fired, and the stop only acted between batches. Fix (entityImportExecutionPure): every record is bounded by IMPORT_RECORD_TIMEOUT_MS (90 s); past it the row is recorded as OUTCOME UNKNOWN - the server may or may not have committed it - separately from confirmed failures, counted toward the failure guard, never retried in the same run, and a BOM depending on it says so. A stop is a real AbortSignal: no new write or batch starts after it, and writes already in flight get STOP_GRACE_MS (5 s) before they are recorded as outcome unknown. Progress is reported every second between batches with the time of the last outcome. localCacheStore: every IndexedDB operation settles on success, error, ABORT, exception or CACHE_OPERATION_TIMEOUT_MS (10 s), falling back as before. The screen shows the last progress time, a \"waiting for the server\" warning after 60 s without progress, the browser online/offline signal (informational only), the stop state, and outcome-unknown counts and records; 100% still means every phase ran and the verification passed, and a run with an unknown outcome is never reported as a success. A re-run matches committed records by identity and never duplicates them. No business rule, validation rule, audit, cache, Firestore rule, schema or permission changed; nothing was imported",
     "FIX-0040": "Master Data Package final re-check fix (3.21.2 wrote 222 of 30,166 rows). Two defects in the final pre-write re-check, which - unlike the preview - resolved business codes against the Firestore reference indexes: (1) each product row's OWN productCode was looked up as a reference to another product, so every new product was rejected (\"No record matches\", or \"suggestions must be approved manually\" for close codes), and every BOM depending on it was then dropped; (2) the BOM row's top-level `version` object matched the `version` alias of bomVersionCode and was looked up as an existing BOM version. Fix: resolveAndValidateImportRow runs no business-code resolution for the self-identified package kinds (products, materials, bomPackage) - their identity and resolved ids / pending tokens are already on the row - so the preview and the final re-check now run identical rules; and readReferenceValue reads only scalar values, so an object under an alias name is never taken as a code (a real version code is still read). Resolution is unchanged for every other kind. The summary strip is relabelled as totals of all runs in the window, the final panel as this run's result; a finished or stopped import shows its closing message and a \"Close window\" button and never closes by itself. Replayed on the real package with real indexes and a recording writer: 15,872 products + 221 materials + 14,073 BOMs written, 0 not written, 0 failed; the 29 blocked BOMs and 85 skipped duplicates unchanged; a re-run over the state 3.21.2 left updates its 221 materials and 1 product and creates nothing twice. No business rule, validation rule, Firestore rule, schema or permission changed; nothing was imported",
@@ -181,8 +187,8 @@
     "UI-0010": "Financial Accounts import opens a dedicated Master Data importer instead of the Historical Excel Import screen: the action no longer navigates to the bulk-entry route (which App.tsx renders as DataImportView); a new in-place modal reuses the existing financialAccounts schema, XLSX reader, row validation, duplicate detection and chunked commit, adds sheet selection and parent/cycle relationship checks, and keeps partial import so invalid rows never block valid ones",
     "DB-0009": "Category-first Master Data over an extensible registry; Financial Accounts master data with Excel import and hierarchical editing (new financialAccounts collection and its Firestore rule); one shared generic hierarchy resolver reused by Master Data, Production Review and production aggregation; hierarchical cost-centre editing with cycle, self-parent and unknown-parent protection"
   },
-  "previousVersion": "3.21.4",
+  "previousVersion": "3.21.5",
   "versionBump": "PATCH",
   "classificationConfidence": "HIGH",
-  "previousReleaseId": "REL-2026-0027"
+  "previousReleaseId": "REL-2026-0028"
 }

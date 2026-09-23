@@ -704,7 +704,12 @@ test('G8. TEST 11 / §10/§16 - the panel re-reads after a successful apply', ()
     'a successful write triggers a refresh');
   assert.ok(/skipCache: equipmentRefresh > 0/.test(src),
     'and the refresh bypasses the cache so it sees what was written');
-  assert.ok(/\}, \[equipmentRefresh\]\);/.test(src), 'the load effect re-runs on it');
+  // 3.21.6: the same effect is now also gated on needsEquipmentReferenceData, so
+  // the equipment collections are read when an equipment section or the
+  // reconciliation window is open rather than on every mount. `equipmentRefresh`
+  // is still a dependency, which is what this assertion is about.
+  assert.ok(/\}, \[equipmentRefresh(, [^\]]+)?\]\);/.test(src), 'the load effect re-runs on it');
+  assert.ok(/needsEquipmentReference/.test(src), 'and it only runs while that data is actually needed');
   // Master Data shows the resulting path.
   assert.ok(/hierarchyLabelFor\(item\.hierarchyNodeId\)/.test(src), 'the linked path is rendered');
 });
