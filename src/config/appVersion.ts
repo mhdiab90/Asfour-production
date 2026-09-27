@@ -37,7 +37,7 @@ const DEPLOYMENT_ID_INJECTED = typeof __BUILD_DEPLOYMENT_ID__ === 'string' ? __B
 
 export const CURRENT_APP_VERSION: AppVersionInfo = {
   /** Set by the automatic release planner from the classified change set - see releasePlannerPure.ts. */
-  version: '3.21.6',
+  version: '3.22.0',
   buildId: BUILD_ID_INJECTED,
   buildTimestamp: BUILD_TIMESTAMP_INJECTED,
   gitCommit: COMMIT_SHA_INJECTED,
@@ -46,6 +46,18 @@ export const CURRENT_APP_VERSION: AppVersionInfo = {
   environment: 'production',
   releaseDate: '2026-08-22',
   changelog: [
+    {
+      version: '3.22.0',
+      date: '2026-09-27',
+      highlights: [
+        'فتح أي قسم في البيانات الأساسية يعرض صفحة واحدة بحجم الشاشة فقط بدل تحميل كل السجلات، مع عرض إجمالي عدد السجلات',
+        'البحث يبحث مباشرة في قاعدة البيانات ويُظهر الأكواد والأسماء التي تبدأ بما تكتبه، حتى لو لم تكن في الصفحة المعروضة',
+        'زر "تحميل كل البيانات" لقراءة القسم كاملًا عند الحاجة، ويصبح البحث بعدها داخل أي جزء من الكود أو أي بيان',
+        'زر "طباعة الخلطة" داخل نافذة قائمة المواد (BOM) يطبع الإصدار بنفس الشكل الظاهر: المكونات والنسب والكميات وملخص الخلطة',
+        'فتح قائمة مواد واحدة يقرأ إصداراتها فقط بدل كل إصدارات كل القوائم',
+        'التحقق عند الحفظ لم يتغير: الأقسام التي يتحقق حفظها من كل السجلات تحمّل القائمة الكاملة قبل الحفظ'
+      ]
+    },
     {
       version: '3.21.6',
       date: '2026-09-23',

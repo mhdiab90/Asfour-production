@@ -292,7 +292,9 @@ test('D5. TEST 4/§9 - the cost-centre classifications are INLINE and compose wi
   assert.ok(/filterByCostCenterSubCategories\(filteredItems, costCenterDigits, COST_CENTER_CODE_FIELD\)/.test(src),
     'it narrows the ALREADY filtered rows rather than replacing them');
   assert.ok(/isCostCenterActive \? filterByCostCenterSubCategories/.test(src), 'and only when cost centres are active');
-  assert.ok(/visibleItems\.map\(\(item\) =>/.test(src), 'the table renders the sub-filtered rows');
+  // 3.22.0: the table draws the sub-filtered rows one screen at a time.
+  assert.ok(/const renderedItems = useMemo\(\(\) => visibleItems\.slice\(0, renderLimit\)/.test(src)
+    && /renderedItems\.map\(\(item\) =>/.test(src), 'the table renders the sub-filtered rows');
 });
 
 test('D6. §11 - the hierarchy path is shown for the hierarchical category', () => {

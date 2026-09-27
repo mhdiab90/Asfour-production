@@ -13,7 +13,7 @@
  * only for `bomVersions`. Nothing here deletes anything, reads production, or
  * touches products, materials, jobs or batches.
  */
-import { createMasterDataItem, fetchMasterData, updateMasterDataItem } from './masterDataService';
+import { createMasterDataItem, fetchMasterData, fetchMasterDataByField, updateMasterDataItem } from './masterDataService';
 import { logAuditAction } from './auditService';
 import {
   BOM_VERSION_COLLECTION,
@@ -31,9 +31,19 @@ function refuse(issues: Array<{ messageAr: string; messageEn: string }>, languag
 }
 
 /** The stored versions of one BOM, cache-first like every Master Data read. */
-export async function listBomVersions(bomId: string, options?: { skipCache?: boolean }): Promise<Stored[]> {
-  const all = await fetchMasterData<Stored>(BOM_VERSION_COLLECTION, options);
-  return all.filter((v) => v.bomId === bomId);
+/**
+ * The versions of ONE BOM.
+ *
+ * 3.22.0: asked of the server by `bomId` instead of reading every version of
+ * every BOM and filtering here - after the Odoo package import that was the
+ * whole bomVersions collection (thousands of documents) to open one BOM. The
+ * result is the same list the filter produced, so every rule that receives it
+ * (duplicate version codes, one ACTIVE version, transitions) sees exactly what
+ * it saw before. A server query always reflects committed writes, which is
+ * what `skipCache` asked for; the option is kept so no caller changes.
+ */
+export async function listBomVersions(bomId: string, _options?: { skipCache?: boolean }): Promise<Stored[]> {
+  return fetchMasterDataByField<Stored>(BOM_VERSION_COLLECTION, 'bomId', bomId);
 }
 
 /** Creates a DRAFT (or any valid) version after full validation. Returns the new document id. */

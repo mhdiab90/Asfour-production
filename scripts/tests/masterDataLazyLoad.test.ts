@@ -147,7 +147,10 @@ test('A4. the screen starts with no section selected and Products is not chosen 
 
 test('A5. the loading indicator does not start on - nothing is loading before a section is opened', () => {
   const src = readCode(VIEW);
-  assert.ok(/const \[isLoading, setIsLoading\] = useState<boolean>\(false\);/.test(src));
+  // 3.22.0: loading belongs to an opened section's own state, so with no
+  // section there is nothing to be loading.
+  assert.ok(/const isLoading = Boolean\(section\?\.loading\);/.test(src));
+  assert.ok(/const section: SectionBrowse \| undefined = openTab \? browse\[openTab\] : undefined;/.test(src));
 });
 
 // ==================================================
@@ -234,38 +237,45 @@ test('C3. a group section (Equipment) keeps whichever of its own tabs is open', 
 // D. REUSING A SECTION ALREADY LOADED
 // ==================================================
 
-test('D1. a section opened for the first time is read', () => {
-  const plan = lazy.planSectionLoad({ collectionName: 'products', hasListener: false, hasRows: false });
-  assert.equal(plan.read, 'products');
-  assert.equal(plan.loading, true, 'and the indicator is shown while it arrives');
+/*
+ * 3.22.0 replaced the per-section full listener with a page / search / load-all
+ * model (masterDataBrowse.test.ts covers it in depth). The properties this group
+ * guards are unchanged - an opened section is read once, a revisit reads
+ * nothing, listeners are released - and are asserted on the new mechanism.
+ */
+test('D1. a section opened for the first time is read - one page of it', () => {
+  const src = readCode(VIEW);
+  assert.ok(/initializedRef\.current\.add\(openTab\);/.test(src), 'marked as opened');
+  assert.ok(/void loadFirstPage\(openTab\);/.test(src), 'and its first page read');
+  assert.ok(/patchBrowse\(openTab, \{ \.\.\.emptySection\(mode\), loading: true \}\);/.test(src), 'with the indicator on while it arrives');
 });
 
 test('D2. returning to a section already open costs NO new read', () => {
-  const plan = lazy.planSectionLoad({ collectionName: 'products', hasListener: true, hasRows: true });
-  assert.equal(plan.read, null, 'nothing is read again');
-  assert.equal(plan.reuse, true, 'the rows already in hand are shown');
-  assert.equal(plan.loading, false, 'and no spinner appears for data already held');
+  const src = readCode(VIEW);
+  assert.ok(/if \(initializedRef\.current\.has\(openTab\)\) return;/.test(src), 'what it has is reused');
 });
 
 test('D3. with no section open nothing is read and nothing is loading', () => {
-  const plan = lazy.planSectionLoad({ collectionName: null, hasListener: false, hasRows: false });
-  assert.deepEqual(plan, { read: null, reuse: false, loading: false });
+  const src = readCode(VIEW);
+  assert.ok(/useEffect\(\(\) => \{\s*if \(!openTab\) return;/.test(src), 'no section, no read');
+  assert.ok(/\? browseRows\(\{[\s\S]*?\}\)\s*: EMPTY_ROWS\)/.test(src), 'and no rows');
 });
 
-test('D4. the screen keeps one listener per opened section and reuses it', () => {
+test('D4. the screen keeps one listener per section whose full list was loaded, and reuses it', () => {
   const src = readCode(VIEW);
   assert.ok(/listenersRef = useRef<Map<string, \(\) => void>>/.test(src), 'a registry of the listeners it opened');
-  assert.ok(/sectionRowsRef = useRef<Map<string, any\[\]>>/.test(src), 'and of the rows each already has');
-  assert.ok(/planSectionLoad\(\{/.test(src), 'the decision comes from the shared rule');
-  assert.ok(/if \(!plan\.read\) return;/.test(src), 'a reused section opens no second listener');
+  assert.ok(/const \[browse, setBrowse\] = useState<Record<string, SectionBrowse>>\(\{\}\);/.test(src), 'and of what each section already has');
+  assert.ok(/if \(listenersRef\.current\.has\(tab\)\) return;/.test(src), 'a section already live opens no second listener');
   // The listeners are released together, so nothing leaks when the screen closes.
   assert.ok(/listenersRef\.current\.forEach\(\(stop\) => stop\(\)\);/.test(src), 'and all are released on unmount');
 });
 
 test('D5. rows arriving for a section that is no longer on screen never replace the visible ones', () => {
   const src = readCode(VIEW);
-  assert.ok(/if \(activeTabRef\.current !== tab\) return;/.test(src),
-    'a listener left attached to another section must not write into the table');
+  // Each section's rows live under its own key, so a listener still attached to
+  // another section writes only into that section's entry.
+  assert.ok(/patchBrowse\(tab, \{ fullRows: data,/.test(src), 'a listener writes into its own section');
+  assert.ok(/const section: SectionBrowse \| undefined = openTab \? browse\[openTab\] : undefined;/.test(src), 'and the table shows only the open one');
 });
 
 // ==================================================
@@ -278,7 +288,7 @@ test('E1. Refresh detaches the listener and drops the rows, so the re-read is a 
   assert.ok(fn, 'the refresh handler exists');
   const body = fn![0];
   assert.ok(/listenersRef\.current\.delete\(openTab\)/.test(body), 'the listener is detached');
-  assert.ok(/sectionRowsRef\.current\.delete\(openTab\)/.test(body), 'and the held rows dropped');
+  assert.ok(/dropBrowse\(openTab\)/.test(body), 'and the held rows dropped');
   assert.ok(/setSectionReload\(\(n\) => n \+ 1\)/.test(body), 'which makes the effect read again');
   assert.ok(/if \(!openTab\) return;/.test(body), 'and it does nothing while no section is open');
 });
@@ -424,8 +434,11 @@ test('H3. search, filtering and the cost-centre sub-filter still work over the r
   const src = readCode(VIEW);
   assert.ok(/const filteredItems = useMemo\(/.test(src), 'filtering is still local to the loaded rows');
   assert.ok(/filterByCostCenterSubCategories\(filteredItems, costCenterDigits, COST_CENTER_CODE_FIELD\)/.test(src));
-  assert.ok(/visibleItems\.map\(\(item\) =>/.test(src), 'and the table renders those rows');
-  assert.equal(/searchQuery[^\n]*fetchMasterData/.test(src), false, 'searching must not trigger a read');
+  // 3.22.0: the table draws one screen of those rows at a time.
+  assert.ok(/visibleItems\.slice\(0, renderLimit\)/.test(src) && /renderedItems\.map\(\(item\) =>/.test(src), 'and the table renders those rows');
+  // Since 3.22.0 a search in a paged section asks the server - but only a
+  // bounded query, never the whole collection (see masterDataBrowse.test.ts B4).
+  assert.equal(/searchQuery[^\n]*fetchMasterData</.test(src), false, 'searching must never read a whole collection');
 });
 
 test('H4. export, bulk import and the BOM / routing version windows are still reachable', () => {

@@ -65,7 +65,12 @@ import {
   updateMasterDataItem,
   toggleMasterDataActive,
   deleteMasterDataItem,
-  MASTER_DATA_COLLECTIONS
+  MASTER_DATA_COLLECTIONS,
+  countMasterData,
+  fetchMasterDataItem,
+  fetchMasterDataPage,
+  fetchMasterDataWhereEquals,
+  searchMasterDataByPrefix,
 } from '../../services/masterDataService';
 import {
   subscribeProductTypes,
@@ -83,10 +88,31 @@ import {
 import {
   formDropdownCollections,
   needsEquipmentReferenceData,
-  planSectionLoad,
   resolveOpenTab,
   shouldSubscribeProductTypes,
 } from '../../services/masterDataLazyLoadPure';
+/*
+ * Browsing a section one screen at a time (3.22.0): a page, the total count, a
+ * server search, and the full list only on request. See masterDataBrowsePure.ts.
+ */
+import {
+  BROWSE_FETCH_TIMEOUT_MS,
+  FULL_LIST_WAIT_MS,
+  SEARCH_DEBOUNCE_MS,
+  SEARCH_LIMIT_PER_QUERY,
+  SectionBrowseMode,
+  browseRows,
+  mergeRowsById,
+  moreAction,
+  pageSizeForViewport,
+  removeRowById,
+  saveNeedsFullList,
+  searchTermVariants,
+  sectionBrowseMode,
+  serverSearchFields,
+  shouldSearchServer,
+  upsertRowById,
+} from '../../services/masterDataBrowsePure';
 import { parseProductCode, normalizeProductCode } from '../../utils/productCodeParser';
 import { enrichWithNormalizedFields } from '../../utils/searchUtils';
 import { DataQualityModal } from '../admin/DataQualityModal';
@@ -286,6 +312,57 @@ interface CodeAnalysisItem {
  */
 const PRODUCT_TYPES_LISTENER_KEY = '@productTypes';
 
+/** What one opened section has in hand. */
+interface SectionBrowse {
+  mode: SectionBrowseMode;
+  /** The pages read so far, in document-id order. */
+  pageRows: any[];
+  /** The id the next page continues after. */
+  lastId: string | null;
+  /** The last page came back short - there is nothing after it. */
+  exhausted: boolean;
+  /** Every record, live - only once the user asked for it or a save needed it. */
+  fullRows: any[] | null;
+  /** The record count on the server, when known. */
+  total: number | null;
+  loading: boolean;
+  loadingMore: boolean;
+  loadingAll: boolean;
+  error: string | null;
+}
+
+const emptySection = (mode: SectionBrowseMode): SectionBrowse => ({
+  mode, pageRows: [], lastId: null, exhausted: false, fullRows: null, total: null,
+  loading: false, loadingMore: false, loadingAll: false, error: null,
+});
+
+/** The server's answer to the search on screen, keyed by section + term + filter. */
+interface ServerSearchState {
+  key: string;
+  rows: any[];
+  truncated: boolean;
+  loading: boolean;
+  error: string | null;
+}
+const EMPTY_SEARCH: ServerSearchState = { key: '', rows: [], truncated: false, loading: false, error: null };
+const EMPTY_ROWS: any[] = [];
+
+/**
+ * A browse read that has not answered in time is reported, never waited on
+ * forever - the lesson of the 3.21.3 import hang, applied to reads.
+ */
+function withTimeout<T>(work: Promise<T>, ms: number): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error('TIMEOUT')), ms);
+    work.then(
+      (value) => { clearTimeout(timer); resolve(value); },
+      (err) => { clearTimeout(timer); reject(err); },
+    );
+  });
+}
+
+const readError = (err: unknown): string => String((err as any)?.message ?? err ?? '');
+
 interface MasterDataViewProps {
   onNavigate: (page: NavigationPage) => void;
 }
@@ -294,15 +371,9 @@ export const MasterDataView: React.FC<MasterDataViewProps> = ({ onNavigate }) =>
   const { language, isRtl } = useLanguage();
   const [prefill] = useState<MasterDataPrefill | null>(() => readMasterDataPrefill());
   const [activeTab, setActiveTab] = useState<MasterDataTab>(prefill?.tab || 'products');
-  const [items, setItems] = useState<any[]>([]);
   const [productTypes, setProductTypes] = useState<ProductType[]>([]);
   const [departments, setDepartments] = useState<Department[]>([]);
   const [furnaces, setFurnaces] = useState<Furnace[]>([]);
-  /*
-   * Nothing is loading when the screen opens, because nothing is read when the
-   * screen opens. The spinner belongs to a section the user has opened.
-   */
-  const [isLoading, setIsLoading] = useState<boolean>(false);
   const [searchQuery, setSearchQuery] = useState<string>(prefill?.query || '');
   const [statusFilter, setStatusFilter] = useState<'all' | 'active' | 'inactive'>('all');
   const [prefixFilter, setPrefixFilter] = useState<string>('all');
@@ -401,14 +472,49 @@ export const MasterDataView: React.FC<MasterDataViewProps> = ({ onNavigate }) =>
    * read, and released together on unmount.
    */
   const listenersRef = useRef<Map<string, () => void>>(new Map());
-  /** The rows each opened section already has, so a revisit renders immediately. */
-  const sectionRowsRef = useRef<Map<string, any[]>>(new Map());
-  /** The section on screen, for listeners that are still attached to another one. */
-  const activeTabRef = useRef<MasterDataTab | null>(null);
   /** Set once the equipment hierarchy has been read; a failed read clears it again. */
   const hierarchyReadRef = useRef<boolean>(false);
   /** Bumped by Refresh - the only thing that re-reads a section already loaded. */
   const [sectionReload, setSectionReload] = useState<number>(0);
+  /**
+   * What each opened section has in hand (3.22.0): the pages read so far, the
+   * total count and - only once asked for, or once a save needed it - the full
+   * live list. Kept for the screen's lifetime, so going back to a section costs
+   * no new read.
+   */
+  const [browse, setBrowse] = useState<Record<string, SectionBrowse>>({});
+  /** Sections already opened in this visit - checked synchronously by the open effect. */
+  const initializedRef = useRef<Set<string>>(new Set());
+  /** The full list of each section whose listener has delivered, for saves that need it now. */
+  const fullRowsRef = useRef<Map<string, any[]>>(new Map());
+  /** Saves waiting for a section's full list, released by its listener's first delivery. */
+  const fullWaitersRef = useRef<Map<string, Array<{ resolve: (rows: any[]) => void; reject: (err: Error) => void }>>>(new Map());
+  /** Sections whose Refresh must bring the full list back, because it had been loaded. */
+  const reloadFullRef = useRef<Set<string>>(new Set());
+  /** The server's answer to the current search, and a counter that drops stale answers. */
+  const [serverSearch, setServerSearch] = useState<ServerSearchState>(EMPTY_SEARCH);
+  const searchSeqRef = useRef<number>(0);
+  const [searchNonce, setSearchNonce] = useState<number>(0);
+  /** One screen of rows - the size of a page, and of each "show more" step. */
+  const pageSize = useMemo(() => pageSizeForViewport(typeof window !== 'undefined' ? window.innerHeight : null), []);
+  /** How many of the matched rows are rendered - the table never draws thousands at once. */
+  const [renderLimit, setRenderLimit] = useState<number>(pageSize);
+  /** "Analyze current codes" is preparing the full product list. */
+  const [isPreparingAnalysis, setIsPreparingAnalysis] = useState<boolean>(false);
+
+  const patchBrowse = (tab: string, patch: Partial<SectionBrowse> | ((current: SectionBrowse) => Partial<SectionBrowse>)) => {
+    setBrowse((prev) => {
+      const current = prev[tab] ?? emptySection('PAGED');
+      return { ...prev, [tab]: { ...current, ...(typeof patch === 'function' ? patch(current) : patch) } };
+    });
+  };
+  const dropBrowse = (tab: string) => {
+    setBrowse((prev) => {
+      const next = { ...prev };
+      delete next[tab];
+      return next;
+    });
+  };
   /** Cost-centre classifications. Empty = no narrowing, as everywhere else. */
   const [costCenterDigits, setCostCenterDigits] = useState<string[]>([]);
   const [isApplyingLinks, setIsApplyingLinks] = useState<boolean>(false);
@@ -521,6 +627,39 @@ export const MasterDataView: React.FC<MasterDataViewProps> = ({ onNavigate }) =>
     [activeCategoryId, activeTab, areaCategories],
   );
 
+  /** What the open section has in hand. */
+  const section: SectionBrowse | undefined = openTab ? browse[openTab] : undefined;
+  const fullLoaded = Boolean(section?.fullRows);
+  /** The Products prefix filter, which the server can answer on its own. */
+  const equalsFilter = openTab === 'products' && prefixFilter !== 'all' ? prefixFilter : null;
+  const searchKey = `${openTab ?? ''}|${searchQuery.trim()}|${equalsFilter ?? ''}`;
+  /** Whether the server is being asked - a page-by-page section with a search or a prefix. */
+  const searchActive = Boolean(section) && shouldSearchServer({
+    mode: section?.mode ?? 'PAGED',
+    fullLoaded,
+    term: searchQuery,
+    equalsFilter,
+  });
+  const searchRowsInHand = searchActive && serverSearch.key === searchKey ? serverSearch.rows : EMPTY_ROWS;
+  const isSearching = searchActive && serverSearch.loading;
+
+  /**
+   * The records in hand for the open section - everything the filters, the
+   * selection and the table below work over. The full list once it is loaded
+   * (the local search then matches anywhere, as before); otherwise the pages
+   * read so far plus the server's search results.
+   */
+  const items = useMemo(
+    () => (section
+      ? browseRows({ fullRows: section.fullRows, pageRows: section.pageRows, searchRows: searchRowsInHand, searchActive })
+      : EMPTY_ROWS),
+    [section, searchRowsInHand, searchActive],
+  );
+  /** The same rows, under a name a function can still reach where it re-binds `items` to the full list. */
+  const loadedItems = items;
+  /** The spinner belongs to a section whose first read is in flight. */
+  const isLoading = Boolean(section?.loading);
+
   /**
    * Counts per 5/6/7/8/9, from the rows already loaded - no extra read.
    *
@@ -550,71 +689,221 @@ export const MasterDataView: React.FC<MasterDataViewProps> = ({ onNavigate }) =>
     listenersRef.current.set(PRODUCT_TYPES_LISTENER_KEY, unsubTypes);
   }, [needsProductTypes]);
 
-  /*
-   * The open section's rows.
-   *
-   * Nothing is read until a section is opened explicitly. A section already
-   * opened keeps its listener, so coming back to it renders the rows already in
-   * hand and issues no new read - and still updates live, which is what the
-   * importers and the inline edits rely on. Refresh is the only re-read.
-   */
-  useEffect(() => {
-    activeTabRef.current = openTab;
-    if (!openTab) {
-      setItems([]);
-      setIsLoading(false);
-      return;
+  /** Releases every save waiting on a section's full list - with the list, or with the reason it is not coming. */
+  const settleFullWaiters = (tab: string, rows: any[] | null, error?: Error) => {
+    const waiters = fullWaitersRef.current.get(tab) ?? [];
+    fullWaitersRef.current.delete(tab);
+    for (const waiter of waiters) {
+      if (rows) waiter.resolve(rows);
+      else waiter.reject(error ?? new Error('FULL_LIST_UNAVAILABLE'));
     }
-    const tab = openTab;
-    const cached = sectionRowsRef.current.get(tab);
-    const plan = planSectionLoad({
-      collectionName: MASTER_DATA_COLLECTIONS[tab],
-      hasListener: listenersRef.current.has(tab),
-      hasRows: cached !== undefined,
-    });
-    setItems(cached ?? []);
-    setIsLoading(plan.loading);
-    // Already live: the rows in hand are current, so this costs no read.
-    if (!plan.read) return;
+  };
+
+  /**
+   * The section's FULL list, live.
+   *
+   * This is what every section did on open before 3.22.0. It now happens only
+   * when the user presses "Load all data", for the sections that cannot be
+   * paged (a hierarchy, the small reference lists), or when a save's
+   * validation needs every record. Once attached it stays for the visit, so it
+   * is paid for once and then updates itself.
+   */
+  const attachFullListener = (tab: MasterDataTab) => {
+    if (listenersRef.current.has(tab)) return;
+    patchBrowse(tab, { loadingAll: true, error: null });
     const unsubscribe = subscribeMasterData<any>(
-      plan.read,
+      MASTER_DATA_COLLECTIONS[tab],
       (data) => {
-        sectionRowsRef.current.set(tab, data);
-        // A listener still attached to another section must never replace the
-        // rows of the one on screen.
-        if (activeTabRef.current !== tab) return;
-        setItems(data);
-        setIsLoading(false);
+        fullRowsRef.current.set(tab, data);
+        patchBrowse(tab, { fullRows: data, total: data.length, loading: false, loadingAll: false, error: null });
+        settleFullWaiters(tab, data);
       },
       (err) => {
         console.error(`Error loading ${tab}:`, err);
-        if (activeTabRef.current === tab) setIsLoading(false);
+        // Detached on failure, so "Load all data" or the next save can try again.
+        listenersRef.current.get(tab)?.();
+        listenersRef.current.delete(tab);
+        patchBrowse(tab, { loading: false, loadingAll: false, error: readError(err) });
+        settleFullWaiters(tab, null, new Error(readError(err)));
       }
     );
     listenersRef.current.set(tab, unsubscribe);
+  };
+
+  /** The first page of a section, and its total count - one screen of records, and a count that reads none. */
+  const loadFirstPage = async (tab: MasterDataTab) => {
+    const collectionName = MASTER_DATA_COLLECTIONS[tab];
+    // The count is information only; a failed count never blocks the page.
+    void withTimeout(countMasterData(collectionName), BROWSE_FETCH_TIMEOUT_MS)
+      .then((total) => patchBrowse(tab, (s) => (s.fullRows ? {} : { total })))
+      .catch(() => { /* the count is simply not shown */ });
+    try {
+      const page = await withTimeout(fetchMasterDataPage<any>(collectionName, pageSize), BROWSE_FETCH_TIMEOUT_MS);
+      patchBrowse(tab, { pageRows: page.rows, lastId: page.lastId, exhausted: page.exhausted, loading: false });
+    } catch (err) {
+      patchBrowse(tab, { loading: false, error: readError(err) });
+    }
+  };
+
+  /*
+   * Opening a section.
+   *
+   * Nothing is read until a section is opened explicitly, and then one screen
+   * of it - not the collection. A section already opened in this visit keeps
+   * what it has, so coming back to it reads nothing. Refresh is the only re-read.
+   */
+  useEffect(() => {
+    if (!openTab) return;
+    if (initializedRef.current.has(openTab)) return;
+    initializedRef.current.add(openTab);
+    const mode = sectionBrowseMode(openTab, categoryForTab(openTab));
+    patchBrowse(openTab, { ...emptySection(mode), loading: true });
+    if (mode === 'FULL' || reloadFullRef.current.has(openTab)) {
+      reloadFullRef.current.delete(openTab);
+      attachFullListener(openTab);
+      return;
+    }
+    void loadFirstPage(openTab);
   }, [openTab, sectionReload]);
 
-  /* Every listener this screen opened is released together when it unmounts. */
+  /* Every listener this screen opened is released together when it unmounts, and no save is left waiting. */
   useEffect(() => () => {
     listenersRef.current.forEach((stop) => stop());
     listenersRef.current.clear();
+    for (const tab of [...fullWaitersRef.current.keys()]) settleFullWaiters(tab, null, new Error('CLOSED'));
   }, []);
 
   /**
    * Re-reads the open section, on request only.
    *
-   * The listener is detached and the rows dropped first, so this is a real
-   * server read rather than a re-render of what is already held.
+   * The listener (if any) is detached and everything held is dropped first, so
+   * this is a real server read. A section whose full list had been loaded gets
+   * its full list back; a paged one gets its first page back.
    */
   const handleRefreshSection = () => {
     if (!openTab) return;
     const stop = listenersRef.current.get(openTab);
-    if (stop) stop();
+    if (stop) {
+      stop();
+      reloadFullRef.current.add(openTab);
+    }
     listenersRef.current.delete(openTab);
-    sectionRowsRef.current.delete(openTab);
-    setIsLoading(true);
+    fullRowsRef.current.delete(openTab);
+    initializedRef.current.delete(openTab);
+    dropBrowse(openTab);
     setSectionReload((n) => n + 1);
+    setSearchNonce((n) => n + 1);
   };
+
+  /** "Load all data" - the whole section, live, on the user's request. */
+  const handleLoadAll = () => {
+    if (openTab) attachFullListener(openTab);
+  };
+
+  /** The next page from the server, once every row already in hand is on screen. */
+  const handleLoadMorePage = async () => {
+    if (!openTab || !section || section.exhausted || section.loadingMore) return;
+    const tab = openTab;
+    const afterId = section.lastId;
+    patchBrowse(tab, { loadingMore: true });
+    try {
+      const page = await withTimeout(fetchMasterDataPage<any>(MASTER_DATA_COLLECTIONS[tab], pageSize, afterId), BROWSE_FETCH_TIMEOUT_MS);
+      patchBrowse(tab, (s) => ({ pageRows: mergeRowsById(s.pageRows, page.rows), lastId: page.lastId, exhausted: page.exhausted, loadingMore: false }));
+      setRenderLimit((n) => n + pageSize);
+    } catch (err) {
+      patchBrowse(tab, { loadingMore: false, error: readError(err) });
+    }
+  };
+
+  /**
+   * The full list a save's validation compares against.
+   *
+   * Duplicate codes, one active default per scope and parent cycles are checked
+   * against EVERY record, exactly as before - a page is never passed off as the
+   * whole list. The list is read once (the listener then stays), and a save
+   * that cannot get it within FULL_LIST_WAIT_MS is refused, not left hanging.
+   */
+  const ensureFullRows = (tab: MasterDataTab): Promise<any[]> => {
+    const ready = fullRowsRef.current.get(tab);
+    if (ready) return Promise.resolve(ready);
+    return new Promise<any[]>((resolve, reject) => {
+      const waiter = {
+        resolve: (rows: any[]) => { clearTimeout(timer); resolve(rows); },
+        reject: (err: Error) => { clearTimeout(timer); reject(err); },
+      };
+      const timer = setTimeout(() => {
+        fullWaitersRef.current.set(tab, (fullWaitersRef.current.get(tab) ?? []).filter((w) => w !== waiter));
+        reject(new Error(language === 'ar'
+          ? 'تعذر تحميل القائمة الكاملة اللازمة للتحقق قبل الحفظ. تحقق من الاتصال ثم حاول مرة أخرى.'
+          : 'The full list needed to validate this save could not be loaded. Check the connection and try again.'));
+      }, FULL_LIST_WAIT_MS);
+      fullWaitersRef.current.set(tab, [...(fullWaitersRef.current.get(tab) ?? []), waiter]);
+      attachFullListener(tab);
+    });
+  };
+
+  /**
+   * Keeps a row current after a write, in a section shown page by page.
+   *
+   * A section holding its full list is live and needs nothing. Otherwise the
+   * one record is re-read (a single document) and replaced, added, or dropped
+   * when deleted - and the count is re-taken when the number of records changed.
+   */
+  const syncRowAfterWrite = async (tab: MasterDataTab, id: string | undefined, kind: 'create' | 'update' | 'delete') => {
+    if (!id || fullRowsRef.current.has(tab) || !initializedRef.current.has(tab)) return;
+    const collectionName = MASTER_DATA_COLLECTIONS[tab];
+    try {
+      const row = kind === 'delete' ? null : await withTimeout(fetchMasterDataItem<any>(collectionName, id), BROWSE_FETCH_TIMEOUT_MS);
+      const apply = (rows: any[]) => (row ? upsertRowById(rows, row) : removeRowById(rows, id));
+      patchBrowse(tab, (s) => ({ pageRows: apply(s.pageRows) }));
+      setServerSearch((s) => ({ ...s, rows: apply(s.rows) }));
+      if (kind !== 'update') {
+        const total = await withTimeout(countMasterData(collectionName), BROWSE_FETCH_TIMEOUT_MS);
+        patchBrowse(tab, (s) => (s.fullRows ? {} : { total }));
+      }
+    } catch {
+      /* the row is current again after the next Refresh */
+    }
+  };
+
+  /*
+   * The search box asks the SERVER in a section shown page by page, so a record
+   * that is not on the first page is still found without loading the
+   * collection. Debounced, at least SEARCH_MIN_LENGTH characters, each query
+   * limited; a stale answer (the user kept typing) is dropped. Once the full
+   * list is loaded the server is not asked - the local search covers it.
+   */
+  useEffect(() => {
+    if (!openTab || !searchActive) {
+      setServerSearch(EMPTY_SEARCH);
+      return;
+    }
+    const tab = openTab;
+    const key = searchKey;
+    const term = searchQuery.trim();
+    const filterValue = equalsFilter;
+    const seq = ++searchSeqRef.current;
+    setServerSearch((s) => ({ key, rows: s.key === key ? s.rows : [], truncated: false, loading: true, error: null }));
+    const timer = setTimeout(async () => {
+      try {
+        const collectionName = MASTER_DATA_COLLECTIONS[tab];
+        const result = searchTermVariants(term).length > 0
+          ? await withTimeout(searchMasterDataByPrefix<any>(collectionName, serverSearchFields(categoryForTab(tab)), term, SEARCH_LIMIT_PER_QUERY), BROWSE_FETCH_TIMEOUT_MS)
+          : await withTimeout(fetchMasterDataWhereEquals<any>(collectionName, 'productTypePrefix', filterValue ?? '', SEARCH_LIMIT_PER_QUERY), BROWSE_FETCH_TIMEOUT_MS);
+        if (seq !== searchSeqRef.current) return;
+        setServerSearch({ key, rows: result.rows, truncated: result.truncated, loading: false, error: null });
+      } catch (err) {
+        if (seq !== searchSeqRef.current) return;
+        setServerSearch({ key, rows: [], truncated: false, loading: false, error: readError(err) });
+      }
+    }, SEARCH_DEBOUNCE_MS);
+    return () => clearTimeout(timer);
+  }, [openTab, searchKey, searchActive, searchNonce]);
+
+  /* A new section, search or filter starts again at one screen of rows. */
+  useEffect(() => {
+    setRenderLimit(pageSize);
+  }, [openTab, searchQuery, statusFilter, prefixFilter, costCenterDigits, pageSize]);
 
   /*
    * The equipment reference data: the hierarchy nodes the link selector offers,
@@ -945,7 +1234,11 @@ export const MasterDataView: React.FC<MasterDataViewProps> = ({ onNavigate }) =>
       );
       const outcome = await applySafeLinks(plannedLinks, { currentLinks });
       setApplyOutcome(outcome);
-      if (outcome.successCount > 0) setEquipmentRefresh((v) => v + 1);
+      if (outcome.successCount > 0) {
+        setEquipmentRefresh((v) => v + 1);
+        // An equipment section shown page by page is not live: re-read it so the new links show.
+        if (openTab && isEquipmentLinkTab(openTab) && !fullRowsRef.current.has(openTab)) handleRefreshSection();
+      }
     } catch (err: any) {
       // A failure that stopped the whole run is reported as such - never as a
       // partial success, and never silently.
@@ -1126,6 +1419,21 @@ export const MasterDataView: React.FC<MasterDataViewProps> = ({ onNavigate }) =>
     [isCostCenterActive, filteredItems, costCenterDigits],
   );
 
+  /**
+   * The rows actually drawn - one screen at a time.
+   *
+   * Selection, export and the counts still cover every matched row; only the
+   * table's DOM is windowed, so a loaded list of thousands does not freeze it.
+   */
+  const renderedItems = useMemo(() => visibleItems.slice(0, renderLimit), [visibleItems, renderLimit]);
+  const nextMore = moreAction({
+    rendered: renderedItems.length,
+    available: visibleItems.length,
+    fullLoaded,
+    pageExhausted: Boolean(section?.exhausted),
+    searchActive,
+  });
+
   const handleOpenAdd = () => {
     setEditingItem(null);
     setFormError(null);
@@ -1205,6 +1513,13 @@ export const MasterDataView: React.FC<MasterDataViewProps> = ({ onNavigate }) =>
     setIsSaving(true);
 
     try {
+      /*
+       * The list every validation below compares against. For a section whose
+       * rule needs every record (duplicates, defaults, parent cycles) that is
+       * the FULL list, read once if it is not in hand - never the page on
+       * screen, so no rule sees less than it did before 3.22.0.
+       */
+      const items = saveNeedsFullList(activeTab) ? await ensureFullRows(activeTab) : loadedItems;
       if (activeTab === 'productTypes') {
         const prefix = (formData.prefixCode || '').trim().toUpperCase();
         if (!/^[A-Z0-9]{3}$/.test(prefix)) {
@@ -1472,6 +1787,8 @@ export const MasterDataView: React.FC<MasterDataViewProps> = ({ onNavigate }) =>
       } else {
         savedId = await createMasterDataItem(MASTER_DATA_COLLECTIONS[activeTab], dataToWrite);
       }
+      // A section shown page by page is not live: the saved row is re-read so the table shows it.
+      void syncRowAfterWrite(activeTab, savedId, editingItem ? 'update' : 'create');
       // BOM identity and customer scope are described in the existing audit log, beside the shared entry.
       if (isBomTab && savedId) {
         logAuditAction(editingItem ? 'UPDATE' : 'CREATE', MASTER_DATA_COLLECTIONS.boms, savedId, describeBomChange(editingItem, dataToWrite)).catch(() => {});
@@ -1502,6 +1819,8 @@ export const MasterDataView: React.FC<MasterDataViewProps> = ({ onNavigate }) =>
 
   const handleToggleStatus = async (item: any) => {
     try {
+      /* The reactivation rules below compare against every record, as in handleSave. */
+      const items = saveNeedsFullList(activeTab) ? await ensureFullRows(activeTab) : loadedItems;
       /* Retiring an operation is always allowed; reactivating runs the legacy-stage rule. */
       if (activeTab === 'stages') {
         if (!canImportMasterData) return;
@@ -1540,8 +1859,10 @@ export const MasterDataView: React.FC<MasterDataViewProps> = ({ onNavigate }) =>
       } else {
         await toggleMasterDataActive(MASTER_DATA_COLLECTIONS[activeTab], item.id, item.active !== false);
       }
+      void syncRowAfterWrite(activeTab, item.id, 'update');
     } catch (err) {
       console.error('Error toggling status:', err);
+      if (err instanceof Error && err.message) alert(err.message);
     }
   };
 
@@ -1563,6 +1884,7 @@ export const MasterDataView: React.FC<MasterDataViewProps> = ({ onNavigate }) =>
       } else {
         await deleteMasterDataItem(MASTER_DATA_COLLECTIONS[activeTab], deleteConfirmItem.id, deleteConfirmItem.code || deleteConfirmItem.name);
       }
+      void syncRowAfterWrite(activeTab, deleteConfirmItem.id, activeTab === 'productTypes' ? 'update' : 'delete');
       setDeleteConfirmItem(null);
     } catch (err) {
       console.error('Error deleting item:', err);
@@ -1625,8 +1947,22 @@ export const MasterDataView: React.FC<MasterDataViewProps> = ({ onNavigate }) =>
   };
 
   // Analyze Existing Products Action
-  const handleOpenAnalyzeCodes = () => {
+  const handleOpenAnalyzeCodes = async () => {
     setAnalysisAppliedMessage(null);
+    /*
+     * The analysis covers EVERY product, as it always did - never the page on
+     * screen. The full list is read once if it is not in hand.
+     */
+    let items: any[];
+    setIsPreparingAnalysis(true);
+    try {
+      items = await ensureFullRows('products');
+    } catch (err: any) {
+      alert(err?.message || (language === 'ar' ? 'تعذر تحميل قائمة المنتجات الكاملة.' : 'The full product list could not be loaded.'));
+      return;
+    } finally {
+      setIsPreparingAnalysis(false);
+    }
     const analysis: CodeAnalysisItem[] = items.map((prod: Product) => {
       const normalizedCode = normalizeProductCode(prod.code || prod.productCode || '');
       const parseRes = parseProductCode(normalizedCode, productTypes);
@@ -1825,7 +2161,7 @@ export const MasterDataView: React.FC<MasterDataViewProps> = ({ onNavigate }) =>
           {isSectionOpen && (
             <span className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl bg-slate-100">
               {language === 'ar' ? 'عدد الأكواد' : 'Codes'}
-              <span className="text-slate-900 font-black">{items.length}</span>
+              <span className="text-slate-900 font-black">{(section?.total ?? items.length).toLocaleString('en-US')}</span>
             </span>
           )}
           {currentCategory?.hierarchical && (
@@ -2200,7 +2536,8 @@ export const MasterDataView: React.FC<MasterDataViewProps> = ({ onNavigate }) =>
             <button
               id="master-data-analyze-codes-btn"
               type="button"
-              onClick={handleOpenAnalyzeCodes}
+              onClick={() => void handleOpenAnalyzeCodes()}
+              disabled={isPreparingAnalysis}
               className="flex items-center gap-1.5 px-3 py-2 text-xs font-bold text-indigo-800 bg-indigo-50 border border-indigo-200 hover:bg-indigo-100 rounded-xl transition-colors cursor-pointer"
               title={language === 'ar' ? 'فحص واستخراج الحقول المشتقة لمنتجات قاعدة البيانات الحالية دون المساس بالأوزان أو الأبعاد' : "Inspect and derive fields for the current database's products without touching weights or dimensions"}
             >
@@ -2346,6 +2683,13 @@ export const MasterDataView: React.FC<MasterDataViewProps> = ({ onNavigate }) =>
               {language === 'ar'
                 ? `جاري تحميل ${labelForCategory(activeCategoryId ?? '')}...`
                 : `Loading ${labelForCategory(activeCategoryId ?? '')}...`}
+            </p>
+          </div>
+        ) : visibleItems.length === 0 && isSearching ? (
+          <div className="py-16 text-center text-slate-400">
+            <RefreshCw className="w-6 h-6 animate-spin mx-auto mb-2 text-amber-500" />
+            <p id="master-data-searching" className="text-xs font-semibold">
+              {language === 'ar' ? 'جاري البحث في قاعدة البيانات...' : 'Searching the database...'}
             </p>
           </div>
         ) : visibleItems.length === 0 ? (
@@ -2517,7 +2861,7 @@ export const MasterDataView: React.FC<MasterDataViewProps> = ({ onNavigate }) =>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100 font-medium text-slate-700">
-                {visibleItems.map((item) => (
+                {renderedItems.map((item) => (
                   <tr key={item.id} className="hover:bg-slate-50/80 transition-colors">
                     <td className="px-3 py-3">
                       <input
@@ -2911,6 +3255,99 @@ export const MasterDataView: React.FC<MasterDataViewProps> = ({ onNavigate }) =>
                 ))}
               </tbody>
             </table>
+          </div>
+        )}
+
+        {/*
+          What is on screen, and how to get more of it.
+
+          Rows already in hand are shown first ("Show more", no read). Only when
+          all of them are on screen does "Load more" ask the server for the next
+          page. "Load all data" is the whole section, live - the previous
+          behaviour, now a choice the user makes.
+        */}
+        {section && !isLoading && (
+          <div id="master-data-browse-footer" className="px-4 py-3 border-t border-slate-100 flex items-center gap-2 flex-wrap text-xs">
+            <span className="font-bold text-slate-600">
+              {language === 'ar'
+                ? `معروض ${renderedItems.length.toLocaleString('en-US')} من ${visibleItems.length.toLocaleString('en-US')}`
+                : `Showing ${renderedItems.length.toLocaleString('en-US')} of ${visibleItems.length.toLocaleString('en-US')}`}
+              {!fullLoaded && section.total !== null && (
+                <span className="text-slate-400 font-semibold">
+                  {language === 'ar'
+                    ? ` · إجمالي السجلات في القاعدة: ${section.total.toLocaleString('en-US')}`
+                    : ` · records in the database: ${section.total.toLocaleString('en-US')}`}
+                </span>
+              )}
+            </span>
+            {nextMore === 'SHOW_MORE' && (
+              <button
+                id="master-data-show-more-btn"
+                type="button"
+                onClick={() => setRenderLimit((n) => n + pageSize)}
+                className="px-3 py-1.5 font-bold text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-lg cursor-pointer"
+              >
+                {language === 'ar' ? 'عرض المزيد' : 'Show more'}
+              </button>
+            )}
+            {nextMore === 'SHOW_MORE' && fullLoaded && (
+              <button
+                id="master-data-show-all-btn"
+                type="button"
+                onClick={() => setRenderLimit(visibleItems.length)}
+                className="px-3 py-1.5 font-bold text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-lg cursor-pointer"
+              >
+                {language === 'ar' ? `عرض الكل (${visibleItems.length.toLocaleString('en-US')})` : `Show all (${visibleItems.length.toLocaleString('en-US')})`}
+              </button>
+            )}
+            {nextMore === 'FETCH_PAGE' && (
+              <button
+                id="master-data-load-more-btn"
+                type="button"
+                onClick={() => void handleLoadMorePage()}
+                disabled={section.loadingMore}
+                className="flex items-center gap-1.5 px-3 py-1.5 font-bold text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-lg cursor-pointer disabled:opacity-50"
+              >
+                {section.loadingMore && <RefreshCw className="w-3.5 h-3.5 animate-spin" />}
+                {language === 'ar' ? 'تحميل المزيد' : 'Load more'}
+              </button>
+            )}
+            {!fullLoaded && (
+              <button
+                id="master-data-load-all-btn"
+                type="button"
+                onClick={handleLoadAll}
+                disabled={section.loadingAll}
+                className="flex items-center gap-1.5 px-3 py-1.5 font-bold text-amber-900 bg-amber-50 border border-amber-200 hover:bg-amber-100 rounded-lg cursor-pointer disabled:opacity-50"
+                title={language === 'ar' ? 'قراءة كل سجلات هذا القسم من قاعدة البيانات - قد يستغرق وقتًا في الأقسام الكبيرة' : 'Read every record of this section - may take a while for large sections'}
+              >
+                {section.loadingAll && <RefreshCw className="w-3.5 h-3.5 animate-spin" />}
+                {language === 'ar'
+                  ? `تحميل كل البيانات${section.total !== null ? ` (${section.total.toLocaleString('en-US')})` : ''}`
+                  : `Load all data${section.total !== null ? ` (${section.total.toLocaleString('en-US')})` : ''}`}
+              </button>
+            )}
+            {searchActive && (
+              <p id="master-data-search-scope" className="w-full text-[11px] font-semibold text-slate-500">
+                {language === 'ar'
+                  ? 'البحث في قاعدة البيانات يطابق بداية الكود أو الاسم. للبحث عن أي جزء من الكود أو أي بيان آخر اضغط «تحميل كل البيانات».'
+                  : 'The database search matches the START of the code or name. To match any part of a code or any other field, press "Load all data".'}
+              </p>
+            )}
+            {searchActive && serverSearch.truncated && serverSearch.key === searchKey && (
+              <p className="w-full text-[11px] font-semibold text-amber-800">
+                {language === 'ar'
+                  ? 'قد توجد نتائج أكثر - اكتب حروفًا أكثر لتضييق البحث.'
+                  : 'There may be more matches - type more characters to narrow the search.'}
+              </p>
+            )}
+            {(section.error || (searchActive && serverSearch.error)) && (
+              <p className="w-full text-[11px] font-bold text-rose-700">
+                {language === 'ar'
+                  ? 'تعذر إكمال القراءة من قاعدة البيانات. تحقق من الاتصال ثم اضغط «تحديث».'
+                  : 'A read from the database did not complete. Check the connection, then press Refresh.'}
+              </p>
+            )}
           </div>
         )}
       </div>
@@ -4390,6 +4827,7 @@ export const MasterDataView: React.FC<MasterDataViewProps> = ({ onNavigate }) =>
         canEdit={canImportMasterData}
         products={referenceProducts}
         materials={referenceMaterials}
+        customerLabel={bomForVersions ? scopeLabel(bomForVersions.customerId) : ''}
       />
 
       {/* Cost Center Hierarchy - a separate, additive Master Data section (see the pseudo-tab button above); entirely local/Firestore-independent browsing except for the manually-gated Phase 4B execution action inside it */}

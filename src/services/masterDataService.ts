@@ -16,7 +16,11 @@ import {
   onSnapshot, 
   serverTimestamp,
   getDocsFromServer,
-  limit
+  limit,
+  orderBy,
+  startAfter,
+  documentId,
+  getCountFromServer
 } from 'firebase/firestore';
 import { db, auth, handleFirestoreError, OperationType } from '../config/firebase';
 import { safeAddDoc, safeUpdateDoc } from '../utils/firestoreSanitizer';
@@ -37,6 +41,7 @@ import { logAuditAction } from './auditService';
 import { parseProductCode, normalizeProductCode } from '../utils/productCodeParser';
 import { enrichWithNormalizedFields } from '../utils/searchUtils';
 import { getCachedProductTypes } from './productTypeService';
+import { mergeRowsById, searchTermVariants, isTruncated } from './masterDataBrowsePure';
 
 export const MASTER_DATA_COLLECTIONS: Record<MasterDataTab, string> = {
   products: 'products',
@@ -208,6 +213,120 @@ export interface MasterDataWriteOptions {
  */
 export async function probeMasterDataBackend(): Promise<void> {
   await getDocsFromServer(query(collection(db, 'products'), limit(1)));
+}
+
+/*
+ * ---------------------------------------------------------------------------
+ * Bounded reads for browsing (3.22.0) - see masterDataBrowsePure.ts.
+ *
+ * Each of these reads a LIMITED number of documents (or, for the count, none):
+ * they are how the Master Data screen shows a page, answers a search and keeps
+ * one row current without reading a whole collection. None of them writes the
+ * local collection cache - a page or a search result is not the collection,
+ * and caching it as one would make fetchMasterData return a partial list.
+ * ---------------------------------------------------------------------------
+ */
+
+/** One page of a collection, in document-id order - the order the full listener delivers. */
+export interface MasterDataPage<T> {
+  rows: T[];
+  /** The id to continue after, or null before the first page. */
+  lastId: string | null;
+  /** The page came back short: there is nothing after it. */
+  exhausted: boolean;
+}
+
+export async function fetchMasterDataPage<T extends { id?: string }>(
+  collectionName: string,
+  pageSize: number,
+  afterId?: string | null,
+): Promise<MasterDataPage<T>> {
+  const constraints = afterId
+    ? [orderBy(documentId()), startAfter(afterId), limit(pageSize)]
+    : [orderBy(documentId()), limit(pageSize)];
+  const snapshot = await getDocs(query(collection(db, collectionName), ...constraints));
+  const rows = snapshot.docs.map((d) => ({ id: d.id, ...d.data() })) as T[];
+  return {
+    rows,
+    lastId: rows.length ? String(rows[rows.length - 1].id) : (afterId ?? null),
+    exhausted: rows.length < pageSize,
+  };
+}
+
+/** Result of a bounded server search. */
+export interface MasterDataSearchResult<T> {
+  rows: T[];
+  /** At least one query stopped at its limit - more matches may exist on the server. */
+  truncated: boolean;
+}
+
+/**
+ * Records whose code or name STARTS WITH the term, from the server.
+ *
+ * One range query per field per form of the term (as typed / upper / lower),
+ * each limited - a single-field range needs no composite index. Firestore has
+ * no "contains"; matching any part of a code needs the full list, which the
+ * screen loads only when asked.
+ */
+export async function searchMasterDataByPrefix<T extends { id?: string }>(
+  collectionName: string,
+  fields: readonly string[],
+  term: string,
+  perQueryLimit: number,
+): Promise<MasterDataSearchResult<T>> {
+  const variants = searchTermVariants(term);
+  if (variants.length === 0 || fields.length === 0) return { rows: [], truncated: false };
+  const queries = fields.flatMap((field) =>
+    variants.map((v) =>
+      query(collection(db, collectionName), where(field, '>=', v), where(field, '<=', `${v}\uf8ff`), limit(perQueryLimit)),
+    ),
+  );
+  const snapshots = await Promise.all(queries.map((q) => getDocs(q)));
+  const lists = snapshots.map((s) => s.docs.map((d) => ({ id: d.id, ...d.data() })) as T[]);
+  return {
+    rows: mergeRowsById(...lists),
+    truncated: snapshots.some((s) => isTruncated(s.size, perQueryLimit)),
+  };
+}
+
+/** Records whose field equals a value (the Products prefix filter), limited. */
+export async function fetchMasterDataWhereEquals<T extends { id?: string }>(
+  collectionName: string,
+  field: string,
+  value: string,
+  max: number,
+): Promise<MasterDataSearchResult<T>> {
+  const snapshot = await getDocs(query(collection(db, collectionName), where(field, '==', value), limit(max)));
+  return {
+    rows: snapshot.docs.map((d) => ({ id: d.id, ...d.data() })) as T[],
+    truncated: isTruncated(snapshot.size, max),
+  };
+}
+
+/**
+ * EVERY record whose field equals a value - no limit, for a caller whose rules
+ * need the complete set (the versions of one BOM). It reads only the matching
+ * documents, never the collection. Not cached: it is not the collection.
+ */
+export async function fetchMasterDataByField<T extends { id?: string }>(
+  collectionName: string,
+  field: string,
+  value: string,
+): Promise<T[]> {
+  const snapshot = await getDocs(query(collection(db, collectionName), where(field, '==', value)));
+  return snapshot.docs.map((d) => ({ id: d.id, ...d.data() })) as T[];
+}
+
+/** How many records a collection holds - a server-side count, no documents read. */
+export async function countMasterData(collectionName: string): Promise<number> {
+  const snapshot = await getCountFromServer(collection(db, collectionName));
+  return snapshot.data().count;
+}
+
+/** One record, re-read after a write so the row on screen shows what was saved. Null when it no longer exists. */
+export async function fetchMasterDataItem<T extends { id?: string }>(collectionName: string, id: string): Promise<T | null> {
+  const snapshot = await getDoc(doc(db, collectionName, id));
+  return snapshot.exists() ? ({ id: snapshot.id, ...snapshot.data() } as T) : null;
 }
 
 // Add Item

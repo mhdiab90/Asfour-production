@@ -700,7 +700,9 @@ test('G7. TEST 8 / §8 - a second run writes nothing', () => {
 
 test('G8. TEST 11 / §10/§16 - the panel re-reads after a successful apply', () => {
   const src = readCode(MDVIEW);
-  assert.ok(/if \(outcome\.successCount > 0\) setEquipmentRefresh/.test(src),
+  // 3.22.0: the same branch also re-reads an equipment section shown page by
+  // page, so the refresh is now the first statement of a block.
+  assert.ok(/if \(outcome\.successCount > 0\) \{?\s*setEquipmentRefresh/.test(src),
     'a successful write triggers a refresh');
   assert.ok(/skipCache: equipmentRefresh > 0/.test(src),
     'and the refresh bypasses the cache so it sees what was written');

@@ -18,7 +18,7 @@
  * quantity. Derived quantities / percentages are shown, never written into the line.
  */
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { ArrowDown, ArrowUp, Copy, History, Plus, RefreshCw, Trash2, Info } from 'lucide-react';
+import { ArrowDown, ArrowUp, Copy, History, Plus, RefreshCw, Trash2, Info, Printer } from 'lucide-react';
 import { Modal } from '../common/Modal';
 import { Badge } from '../common/Badge';
 import { SmartEntitySelect, SmartOption } from '../common/SmartEntitySelect';
@@ -40,6 +40,7 @@ import {
 } from '../../services/bomPure';
 import { createBomVersion, listBomVersions, saveBomVersionDraft, transitionBomVersion } from '../../services/bomService';
 import { loadLogicalItemState } from '../../services/logicalItemService';
+import { bomPrintHtml, buildBomPrintModel } from '../../services/bomPrintPure';
 import type { LogicalItemRecord } from '../../services/logicalItemPure';
 
 interface BomVersionsModalProps {
@@ -50,12 +51,48 @@ interface BomVersionsModalProps {
   canEdit: boolean;
   products: any[];
   materials: any[];
+  /** The BOM's customer scope as the Master Data table shows it - printed in the header. */
+  customerLabel?: string;
+}
+
+/**
+ * Hands a finished document to the browser's print dialog through a hidden
+ * frame - no new tab, nothing a popup blocker stops, and the frame is removed
+ * once the dialog closes.
+ */
+function printDocument(html: string): void {
+  const frame = document.createElement('iframe');
+  frame.setAttribute('aria-hidden', 'true');
+  frame.style.cssText = 'position:fixed;right:0;bottom:0;width:0;height:0;border:0;';
+  document.body.appendChild(frame);
+  const doc = frame.contentDocument;
+  const win = frame.contentWindow;
+  if (!doc || !win) {
+    frame.remove();
+    return;
+  }
+  doc.open();
+  doc.write(html);
+  doc.close();
+  let removed = false;
+  const remove = () => {
+    if (removed) return;
+    removed = true;
+    frame.remove();
+  };
+  win.addEventListener('afterprint', () => setTimeout(remove, 0));
+  // Browsers whose print() returns before the dialog closes still get the frame back.
+  setTimeout(remove, 60_000);
+  setTimeout(() => {
+    win.focus();
+    win.print();
+  }, 50);
 }
 
 const toOptions = (list: any[]): SmartOption[] =>
   list.map((x) => ({ id: x.id || '', code: x.code || x.productCode || '', name: x.name || '' }));
 
-export const BomVersionsModal: React.FC<BomVersionsModalProps> = ({ isOpen, onClose, bom, canEdit, products, materials }) => {
+export const BomVersionsModal: React.FC<BomVersionsModalProps> = ({ isOpen, onClose, bom, canEdit, products, materials, customerLabel }) => {
   const { language } = useLanguage();
   const isAr = language === 'ar';
   const [versions, setVersions] = useState<any[]>([]);
@@ -182,6 +219,24 @@ export const BomVersionsModal: React.FC<BomVersionsModalProps> = ({ isOpen, onCl
 
   const legacy = bom?.itemSource === 'products' ? readLegacyMixture(products.find((p) => p.id === bom?.itemId)) : null;
 
+  /**
+   * Prints one version as this window shows it. The version open in the editor
+   * prints what is on screen (including the scaling preview, if one is typed);
+   * a version printed from the list prints as stored. Nothing is saved.
+   */
+  const printVersion = (version: Record<string, any>, fromEditor: boolean) => {
+    const model = buildBomPrintModel({
+      language: isAr ? 'ar' : 'en',
+      bom,
+      version,
+      itemLabel,
+      customerLabel: customerLabel ?? '',
+      previewQuantity: fromEditor ? previewQuantity : null,
+      printedAt: new Date().toLocaleString('en-GB'),
+    });
+    printDocument(bomPrintHtml(model));
+  };
+
   const statusBadge = (status: string) => (
     <Badge variant={status === 'ACTIVE' ? 'success' : status === 'RETIRED' ? 'neutral' : 'warning'}>{status}</Badge>
   );
@@ -265,6 +320,16 @@ export const BomVersionsModal: React.FC<BomVersionsModalProps> = ({ isOpen, onCl
                       <button type="button" onClick={() => openVersion(v)} className="px-2 py-1 rounded-lg bg-slate-100 hover:bg-slate-200 font-bold cursor-pointer">
                         {canEdit && isVersionEditable(v) ? (isAr ? 'تعديل' : 'Edit') : (isAr ? 'عرض' : 'View')}
                       </button>
+                      {/* Printing reads nothing and changes nothing - every user who can open the BOM can print it. */}
+                      <button
+                        type="button"
+                        data-bom-print-version={v.id}
+                        onClick={() => printVersion(v, false)}
+                        className="p-1 rounded-lg hover:bg-slate-100 cursor-pointer"
+                        title={isAr ? 'طباعة هذا الإصدار' : 'Print this version'}
+                      >
+                        <Printer className="w-3.5 h-3.5" />
+                      </button>
                       {canEdit && v.status === 'DRAFT' && (
                         <button type="button" disabled={isBusy} onClick={() => handleTransition(v, 'ACTIVE')} className="px-2 py-1 rounded-lg bg-emerald-100 text-emerald-800 hover:bg-emerald-200 font-bold cursor-pointer disabled:opacity-50">
                           {isAr ? 'تفعيل' : 'Activate'}
@@ -310,7 +375,19 @@ export const BomVersionsModal: React.FC<BomVersionsModalProps> = ({ isOpen, onCl
           <div id="bom-version-editor" className="border border-slate-200 rounded-xl p-3 space-y-3">
             <div className="flex items-center justify-between gap-2">
               <span className="font-black text-slate-800">{isAr ? 'الإصدار' : 'Version'} {selected.versionCode} {statusBadge(selected.status)}</span>
-              {!editable && <span className="text-[10px] text-slate-500">{isAr ? 'للقراءة فقط' : 'Read-only'}</span>}
+              <div className="flex items-center gap-2">
+                {!editable && <span className="text-[10px] text-slate-500">{isAr ? 'للقراءة فقط' : 'Read-only'}</span>}
+                <button
+                  id="bom-print-btn"
+                  type="button"
+                  onClick={() => printVersion({ ...draft, status: selected.status }, true)}
+                  className="flex items-center gap-1.5 px-3 py-1.5 font-bold text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-lg cursor-pointer"
+                  title={isAr ? 'طباعة الخلطة كما تظهر في هذه النافذة' : 'Print the mixture as shown in this window'}
+                >
+                  <Printer className="w-3.5 h-3.5" />
+                  {isAr ? 'طباعة الخلطة' : 'Print mixture'}
+                </button>
+              </div>
             </div>
             <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
               <label className="space-y-1"><span className="font-bold text-slate-600">{isAr ? 'رمز الإصدار' : 'Version code'}</span>

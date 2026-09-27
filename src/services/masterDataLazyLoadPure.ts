@@ -95,36 +95,6 @@ export function formDropdownCollections(openTab: string | null, isModalOpen: boo
   return [];
 }
 
-/** What the screen should do for the section now on display. */
-export interface SectionLoadPlan {
-  /** The collection to subscribe to, or `null` when nothing may be read. */
-  read: string | null;
-  /** Rows already in hand are shown instead of being read again. */
-  reuse: boolean;
-  /** Whether the loading indicator belongs on screen. */
-  loading: boolean;
-}
-
-/**
- * Whether opening this section costs a read.
- *
- * A section already opened keeps its live listener, so returning to it is free:
- * the rows are already held and still updating. A section never opened, or one
- * whose listener the explicit Refresh has just detached, is read.
- */
-export function planSectionLoad(input: {
-  /** The section's collection, or `null` when no section is open. */
-  collectionName: string | null;
-  /** A live listener for this section is already attached. */
-  hasListener: boolean;
-  /** Rows for this section are already held. */
-  hasRows: boolean;
-}): SectionLoadPlan {
-  if (!input.collectionName) return { read: null, reuse: false, loading: false };
-  if (input.hasListener) return { read: null, reuse: true, loading: false };
-  return { read: input.collectionName, reuse: input.hasRows, loading: !input.hasRows };
-}
-
 /** The collections a given screen state is allowed to read, with nothing loaded yet. */
 export function plannedEntityReads(
   state: MasterDataScreenState,
