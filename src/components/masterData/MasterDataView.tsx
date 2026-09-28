@@ -121,6 +121,8 @@ import { ItemOverlapReviewModal } from './ItemOverlapReviewModal';
 import { OperationSeedModal } from './OperationSeedModal';
 import { SmartEntitySelect, SmartOption } from '../common/SmartEntitySelect';
 import { BomVersionsModal } from './BomVersionsModal';
+import { RecordDetailsModal } from './RecordDetailsModal';
+import { ROW_CONTROL_SELECTOR } from '../../services/masterDataDetailsPure';
 import { RoutingVersionsModal } from './RoutingVersionsModal';
 /*
  * Routings (Phase 1 Step 3): the routing header is a Master Data record in this
@@ -977,6 +979,14 @@ export const MasterDataView: React.FC<MasterDataViewProps> = ({ onNavigate }) =>
   const [bomForVersions, setBomForVersions] = useState<any | null>(null);
   /** The routing whose versions window is open. */
   const [routingForVersions, setRoutingForVersions] = useState<any | null>(null);
+  /**
+   * Opened by a double-click (3.23.0): the versions window then opens its
+   * ACTIVE version straight away, so the components or steps are on screen.
+   * The row's own "versions" button still opens the list, as before.
+   */
+  const [openVersionOnLoad, setOpenVersionOnLoad] = useState<boolean>(false);
+  /** The record whose details window is open (a double-click on any other row). */
+  const [detailsItem, setDetailsItem] = useState<any | null>(null);
 
   /*
    * Products, customers and job references for the Job/Batch pickers and
@@ -2124,6 +2134,47 @@ export const MasterDataView: React.FC<MasterDataViewProps> = ({ onNavigate }) =>
     }
   };
 
+  /**
+   * A double-click on a row opens it in full (3.23.0).
+   *
+   * A BOM opens its versions window with the ACTIVE version - its components -
+   * already open, where it can be printed; a routing opens with its active
+   * version's steps; any other record opens its details. A double-click on a
+   * control inside the row (the checkbox, an action button) is left alone.
+   */
+  const handleRowDoubleClick = (e: React.MouseEvent, item: any) => {
+    if ((e.target as HTMLElement | null)?.closest?.(ROW_CONTROL_SELECTOR)) return;
+    if (activeTab === 'boms') {
+      setOpenVersionOnLoad(true);
+      setBomForVersions(item);
+      return;
+    }
+    if (activeTab === 'routings') {
+      setOpenVersionOnLoad(true);
+      setRoutingForVersions(item);
+      return;
+    }
+    setDetailsItem(item);
+  };
+
+  /** An id field shown as the label the table shows for it; null leaves the raw value. */
+  const resolveDetailValue = (key: string, value: unknown): string | null => {
+    if (value == null || value === '') return null;
+    const label = (list: any[]) => {
+      const text = referenceLabel(list, value);
+      return text === String(value) ? null : text;
+    };
+    if (key === 'customerId') return label(referenceCustomers);
+    if (key === 'productId') return label(referenceProducts);
+    if (key === 'jobReferenceId') return label(referenceJobs);
+    if (key === 'logicalItemId') {
+      const text = logicalItemLabel(value);
+      return text === String(value) ? null : text;
+    }
+    if (key === 'hierarchyNodeId') return hierarchyNodes.length ? hierarchyLabelFor(value) : null;
+    return null;
+  };
+
   const handleExport = () => {
     const currentTabObj = tabs.find((t) => t.id === activeTab);
     exportMasterDataToExcel(
@@ -2862,7 +2913,12 @@ export const MasterDataView: React.FC<MasterDataViewProps> = ({ onNavigate }) =>
               </thead>
               <tbody className="divide-y divide-slate-100 font-medium text-slate-700">
                 {renderedItems.map((item) => (
-                  <tr key={item.id} className="hover:bg-slate-50/80 transition-colors">
+                  <tr
+                    key={item.id}
+                    className="hover:bg-slate-50/80 transition-colors cursor-pointer select-none"
+                    onDoubleClick={(e) => handleRowDoubleClick(e, item)}
+                    title={language === 'ar' ? 'انقر نقرًا مزدوجًا لعرض التفاصيل' : 'Double-click to see the details'}
+                  >
                     <td className="px-3 py-3">
                       <input
                         type="checkbox"
@@ -3208,7 +3264,7 @@ export const MasterDataView: React.FC<MasterDataViewProps> = ({ onNavigate }) =>
                         {activeTab === 'routings' && (
                           <button
                             type="button"
-                            onClick={() => setRoutingForVersions(item)}
+                            onClick={() => { setOpenVersionOnLoad(false); setRoutingForVersions(item); }}
                             className="px-2 h-7 rounded-lg flex items-center gap-1 text-[11px] font-bold text-indigo-700 bg-indigo-50 hover:bg-indigo-100 transition-colors"
                             title={language === 'ar' ? 'الإصدارات والخطوات' : 'Versions and steps'}
                           >
@@ -3220,7 +3276,7 @@ export const MasterDataView: React.FC<MasterDataViewProps> = ({ onNavigate }) =>
                         {activeTab === 'boms' && (
                           <button
                             type="button"
-                            onClick={() => setBomForVersions(item)}
+                            onClick={() => { setOpenVersionOnLoad(false); setBomForVersions(item); }}
                             className="px-2 h-7 rounded-lg flex items-center gap-1 text-[11px] font-bold text-indigo-700 bg-indigo-50 hover:bg-indigo-100 transition-colors"
                             title={language === 'ar' ? 'الإصدارات والمكونات' : 'Versions and components'}
                           >
@@ -3327,6 +3383,9 @@ export const MasterDataView: React.FC<MasterDataViewProps> = ({ onNavigate }) =>
                   : `Load all data${section.total !== null ? ` (${section.total.toLocaleString('en-US')})` : ''}`}
               </button>
             )}
+            <span id="master-data-double-click-hint" className="text-[11px] font-semibold text-slate-400">
+              {language === 'ar' ? 'انقر نقرًا مزدوجًا على أي سطر لعرض تفاصيله' : 'Double-click any row to see its details'}
+            </span>
             {searchActive && (
               <p id="master-data-search-scope" className="w-full text-[11px] font-semibold text-slate-500">
                 {language === 'ar'
@@ -4814,6 +4873,7 @@ export const MasterDataView: React.FC<MasterDataViewProps> = ({ onNavigate }) =>
         routing={routingForVersions}
         canEdit={canImportMasterData}
         itemLabel={routingForVersions ? logicalItemLabel(routingForVersions.logicalItemId) : ''}
+        openVersionOnLoad={openVersionOnLoad}
         operations={referenceOperations}
         hierarchyIndex={hierarchyNodes.length ? linkHierarchyIndex : null}
         hierarchyOptions={hierarchyOptions}
@@ -4828,6 +4888,16 @@ export const MasterDataView: React.FC<MasterDataViewProps> = ({ onNavigate }) =>
         products={referenceProducts}
         materials={referenceMaterials}
         customerLabel={bomForVersions ? scopeLabel(bomForVersions.customerId) : ''}
+        openVersionOnLoad={openVersionOnLoad}
+      />
+
+      <RecordDetailsModal
+        isOpen={detailsItem != null}
+        onClose={() => setDetailsItem(null)}
+        record={detailsItem}
+        sectionLabel={tabs.find((t) => t.id === activeTab)?.label ?? ''}
+        code={detailsItem ? codeOfItem(detailsItem) : ''}
+        resolve={resolveDetailValue}
       />
 
       {/* Cost Center Hierarchy - a separate, additive Master Data section (see the pseudo-tab button above); entirely local/Firestore-independent browsing except for the manually-gated Phase 4B execution action inside it */}

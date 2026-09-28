@@ -37,7 +37,7 @@ const DEPLOYMENT_ID_INJECTED = typeof __BUILD_DEPLOYMENT_ID__ === 'string' ? __B
 
 export const CURRENT_APP_VERSION: AppVersionInfo = {
   /** Set by the automatic release planner from the classified change set - see releasePlannerPure.ts. */
-  version: '3.22.0',
+  version: '3.23.0',
   buildId: BUILD_ID_INJECTED,
   buildTimestamp: BUILD_TIMESTAMP_INJECTED,
   gitCommit: COMMIT_SHA_INJECTED,
@@ -46,6 +46,16 @@ export const CURRENT_APP_VERSION: AppVersionInfo = {
   environment: 'production',
   releaseDate: '2026-08-22',
   changelog: [
+    {
+      version: '3.23.0',
+      date: '2026-09-28',
+      highlights: [
+        'ترتيب الأقسام تحت المنتجات أصبح: مسارات التصنيع (Routing) ثم قوائم المواد (BOM) ثم المنتجات',
+        'النقر المزدوج على أي سطر يفتح تفاصيله كاملة؛ وفي BOM يفتح الإصدار النشط بمكوناته كاملة ومنه تتم الطباعة، وفي مسارات التصنيع يفتح الإصدار النشط بخطواته',
+        'ورقة طباعة الخلطة تحمل شعار الشركة أعلى الصفحة جهة اليسار',
+        'تذييل في كل صفحة مطبوعة: اسم المطور جهة اليمين و"إدارة المالية والتكاليف" في المنتصف بخط صغير وواضح'
+      ]
+    },
     {
       version: '3.22.0',
       date: '2026-09-27',

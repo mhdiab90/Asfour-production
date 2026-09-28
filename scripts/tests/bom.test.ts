@@ -363,7 +363,8 @@ test('22. Batches stay compatible', () => {
 
 test('U1. Bills of Materials sit beneath Products in the existing Master Data navigation - no new page or manager', () => {
   // Routings (Phase 1 Step 3) joined the same Products sub-row.
-  assert.deepEqual(reg.subCategories('products').map((c: any) => c.tab), ['products', 'boms', 'routings']);
+  // 3.23.0: shown Routing, BOM, Products - the order the user asked for.
+  assert.deepEqual(reg.subCategories('products').map((c: any) => c.tab), ['routings', 'boms', 'products']);
   assert.equal(reg.categoryForTab('products').id, 'products', 'Products is still its own category');
   assert.equal(reg.categoryForTab('boms').collection, 'boms');
   assert.equal(reg.navigationCategoryIdForTab('boms', panels.panelCategories()), 'products');

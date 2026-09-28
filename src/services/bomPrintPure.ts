@@ -10,6 +10,10 @@
  * window uses (bomVersionPayloadForSave, bomFormula, formatFormulaPercentage),
  * so the paper can never disagree with the screen.
  *
+ * 3.23.0: the page carries the company logo at the top left, and a footer on
+ * every printed page - the developer on the right, the issuing department
+ * (Finance & Costing) in the centre - in a small but legible type.
+ *
  * Pure: it builds a model and an HTML document and nothing else - the window
  * hands the document to the browser's print dialog. It reads nothing, writes
  * nothing and changes no BOM.
@@ -64,7 +68,13 @@ export interface BomPrintModel {
   };
   notes: string;
   printedAt: string;
+  /** Absolute address of the company logo, or null to print without one. */
+  logoUrl: string | null;
 }
+
+/** The footer: who built the system, and which department issues the document. */
+export const PRINT_FOOTER_DEVELOPER = 'Developed by MHDIAB';
+export const PRINT_FOOTER_DEPARTMENT = { ar: 'إدارة المالية والتكاليف', en: 'Finance & Costing Department' };
 
 const pct = (n: number) => n.toLocaleString('en-US', { minimumFractionDigits: 1, maximumFractionDigits: 4 });
 const qty = (n: number | null) => (n === null ? '-' : Number(n.toFixed(6)).toLocaleString('en-US', { maximumFractionDigits: 6 }));
@@ -86,6 +96,8 @@ export function buildBomPrintModel(input: {
   /** The scaling-preview quantity typed in the window, if any. */
   previewQuantity?: string | null;
   printedAt: string;
+  /** Absolute address of the company logo. */
+  logoUrl?: string | null;
 }): BomPrintModel {
   const isAr = input.language === 'ar';
   const unitLabel = (u: string | null | undefined) =>
@@ -150,6 +162,7 @@ export function buildBomPrintModel(input: {
     },
     notes: normalised.notes,
     printedAt: input.printedAt,
+    logoUrl: input.logoUrl || null,
   };
 }
 
@@ -210,8 +223,17 @@ export function bomPrintHtml(model: BomPrintModel): string {
 <style>
   @page { size: A4; margin: 12mm; }
   * { box-sizing: border-box; }
-  body { font-family: 'Segoe UI', Tahoma, Arial, sans-serif; color: #0f172a; font-size: 11px; margin: 0; }
-  header { display: flex; justify-content: space-between; align-items: flex-end; border-bottom: 2px solid #0f172a; padding-bottom: 6px; margin-bottom: 10px; }
+  body { font-family: 'Segoe UI', Tahoma, Arial, sans-serif; color: #0f172a; font-size: 11px; margin: 0; padding-bottom: 26px; }
+  header { display: flex; justify-content: space-between; align-items: center; border-bottom: 2px solid #0f172a; padding-bottom: 6px; margin-bottom: 10px; gap: 12px; }
+  /* The logo sits at the top LEFT in either language. */
+  header .logo { height: 54px; width: auto; object-fit: contain; order: 2; margin-inline-start: auto; }
+  html[dir="ltr"] header .logo { order: -1; margin-inline-start: 0; margin-inline-end: auto; }
+  header .titles { order: 1; }
+  /* The footer repeats at the bottom of every printed page. */
+  /* Laid out left to right in either language, so the developer is always on the RIGHT and the department in the centre. */
+  footer { position: fixed; bottom: 0; left: 0; right: 0; height: 18px; border-top: 1px solid #cbd5e1; display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; direction: ltr; font-size: 8.5px; font-weight: 600; color: #334155; background: #fff; }
+  footer .developer { justify-self: end; }
+  footer .department { justify-self: center; font-weight: 700; }
   header h1 { font-size: 16px; margin: 0; }
   header .company { font-size: 12px; font-weight: 700; color: #b45309; }
   header .printed { font-size: 10px; color: #475569; }
@@ -239,11 +261,12 @@ export function bomPrintHtml(model: BomPrintModel): string {
 </head>
 <body>
   <header>
-    <div>
+    <div class="titles">
       <div class="company">${L('شركة عصفور للتعدين والحراريات', 'ASFOUR for Mining & Refractories')}</div>
       <h1>${L('قائمة المواد (الخلطة)', 'Bill of Materials (Mixture)')} - ${e(model.bomCode)}</h1>
+      <div class="printed">${L('تاريخ الطباعة', 'Printed')}: <span class="num">${e(model.printedAt)}</span></div>
     </div>
-    <div class="printed">${L('تاريخ الطباعة', 'Printed')}: <span class="num">${e(model.printedAt)}</span></div>
+    ${model.logoUrl ? `<img class="logo" id="bom-print-logo" src="${e(model.logoUrl)}" alt="${L('شعار الشركة', 'Company logo')}" />` : ''}
   </header>
 
   <table class="head" id="bom-print-header">
@@ -282,6 +305,12 @@ export function bomPrintHtml(model: BomPrintModel): string {
   ${issues}
 
   <div class="notes"><b>${L('ملاحظات الإصدار', 'Version notes')}:</b> ${e(model.notes)}</div>
+
+  <footer id="bom-print-footer">
+    <span></span>
+    <span class="department" dir="${isAr ? 'rtl' : 'ltr'}">${e(isAr ? PRINT_FOOTER_DEPARTMENT.ar : PRINT_FOOTER_DEPARTMENT.en)}</span>
+    <span class="developer">${e(PRINT_FOOTER_DEVELOPER)}</span>
+  </footer>
 </body>
 </html>`;
 }

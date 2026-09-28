@@ -1,10 +1,10 @@
 {
   "_doc": "Release Manifest precursor. Describes WHAT is being released so the gate checks a committed declaration rather than whatever flags an operator typed. commitSha/buildId/deploymentId are left null until a release is cut - the gate fills the comparison from the build itself, and only enforces a field that is set here. This is NOT the Change Registry: no change IDs, no Firestore, no UI.",
-  "version": "3.22.0",
-  "releaseId": "REL-2026-0030",
+  "version": "3.23.0",
+  "releaseId": "REL-2026-0031",
   "changeIds": [
-    "PERF-0044",
-    "MOD-0045"
+    "MOD-0046",
+    "UI-0047"
   ],
   "commitSha": null,
   "buildId": null,
@@ -54,7 +54,11 @@
     "master-data-refresh-btn",
     "master-data-load-all-btn",
     "master-data-browse-footer",
-    "bom-print-btn"
+    "bom-print-btn",
+    "master-data-record-details",
+    "master-data-double-click-hint",
+    "bom-print-footer",
+    "bom-print-logo"
   ],
   "_markerNotes": {
     "ai-provider-management": "AI Provider Management route - absent means the AI Assistant closure was dropped",
@@ -101,7 +105,11 @@
     "master-data-refresh-btn": "The explicit re-read of the open section - absent means there is no way to force a fresh read now that sections are loaded on demand",
     "master-data-load-all-btn": "The explicit \"Load all data\" of a Master Data section - absent means a section is again either read whole on open or cannot be read whole at all",
     "master-data-browse-footer": "The page / show-more / load-all footer under the Master Data table - absent means the table went back to rendering and reading every record",
-    "bom-print-btn": "The \"Print mixture\" button of an opened BOM version - absent means BOM printing was dropped"
+    "bom-print-btn": "The \"Print mixture\" button of an opened BOM version - absent means BOM printing was dropped",
+    "master-data-record-details": "The details window a double-click on a Master Data row opens - absent means double-click details were dropped",
+    "master-data-double-click-hint": "The hint under the table that a row opens on double-click",
+    "bom-print-footer": "The footer of the printed mixture (developer / Finance & Costing) - absent means the print lost its footer",
+    "bom-print-logo": "The company logo on the printed mixture - absent means the print lost its logo"
   },
   "tests": [
     "buildIdentity",
@@ -155,11 +163,14 @@
     "importConnection",
     "masterDataLazyLoad",
     "masterDataBrowse",
-    "bomPrint"
+    "bomPrint",
+    "masterDataDetails"
   ],
   "deployCommand": "firebase deploy --only hosting --project asfourproduction-70e6e",
   "treeClean": true,
   "_changeNotes": {
+    "MOD-0046": "Double-click a Master Data row to open it in full. A BOM opens its versions window with the ACTIVE version (else the newest; versionToShowFirst) already open - its complete components, and the Print mixture button; a routing opens with its active version's steps; any other record opens a read-only details window listing every field it carries (recordDetailFields: identity first, the rest alphabetically, bookkeeping last; only the search-index ...Normalized copies are hidden; ids shown as the label the table shows; timestamps in the viewer's local time). A double-click on the row's checkbox or action buttons is ignored, and the row's own versions buttons still open the plain list. Nothing is read or written to open a record - it is the row already on screen",
+    "UI-0047": "Under Products the sections now read Routing, BOM, Products (registry subCategoryIds order); opening Products still lands on the Products list. The printed mixture carries the company logo (the app's branding logo, as an absolute address, waited for up to 3 s before the print dialog) at the top left, and a footer repeated on every printed page - 'Developed by MHDIAB' on the right and 'إدارة المالية والتكاليف' in the centre, 8.5 px semibold",
     "PERF-0044": "Master Data sections open one screen at a time. 3.21.6 stopped the screen reading before a section was chosen, but choosing Products still attached a listener to the whole products collection and rendered every record - a long wait and a full read for a user who usually wants one record. Now a section opens with one page (window height / 40 px, 20-50 rows) read with orderBy(documentId()) + limit - the order the old listener delivered - and the total from getCountFromServer (reads no documents). The search box asks the SERVER: one limited single-field range query per search field (the category's own code/name fields) per form of the term (as typed / upper / lower), debounced 400 ms, from 2 characters, stale answers dropped, bounded by a 30 s timeout. Firestore has no 'contains', so the server search matches the START of a code or name, and the screen says so; \"Load all data\" attaches the previous full live listener on request, after which the existing local search matches any part of any field again. The Products prefix filter is answered by an equality query. The table renders one screen of the matched rows with Show more / Show all; selection, export and counts still cover every match. Hierarchies (financial accounts, cost centres) and the small reference lists (product types, operations) still open whole - a tree needs its parents. VALIDATION IS NOT WEAKENED: every save / status change whose rule compares against all records (financial accounts, operations, tube-ball mills, bunkers, rotary kilns, job references, batches, BOMs, routings) binds `items` to the FULL list (read once if not in hand, bounded 60 s, refused on failure) - never the page; Analyze Current Codes still analyses every product. A page is not live, so a saved / toggled / deleted row is re-read by id (one document) or dropped. Pages and search results are never written to the collection cache. Opening one BOM now reads only its own versions (where bomId ==, no limit, so the version rules still see every version of that BOM) instead of the whole bomVersions collection. No business rule, permission, audit, importer, Firestore rule or data changed",
     "MOD-0045": "Print a BOM mixture. The BOM versions window gains a \"Print mixture\" button on the opened version (prints what is on screen, including the scaling preview when a production quantity is typed) and a print icon on every version in the list (prints it as stored). The print carries the BOM, its item and customer scope, the version header (code, status, effective dates, basis, expected yield), every component line in sequence order (type, source, item, percentage, quantity, unit, preview, notes, with derived values), the Base Formula / Additives / Total Applied summary with any activation issue, and the version notes - computed by the same bomPure functions the window uses, in a pure builder (bomPrintPure.ts) that escapes every value. It is handed to the browser print dialog through a hidden frame (no popup), is available to every user who can open the BOM, reads nothing and writes nothing",
     "PERF-0043": "Master Data screen loads on demand. Opening البيانات الأساسية used to select Products automatically, which subscribed to the whole products collection, seeded and subscribed to productTypes, read the five equipment collections and the cost-centre hierarchy, and read departments and furnaces for a form nobody had opened - tens of thousands of document reads before the user asked for anything. Now activeCategoryId starts null, the screen shows اختر قسمًا لعرض بياناته, and nothing is read until a section is opened explicitly (a deep-link prefill still opens the section it names). Each section is read once when opened and keeps its live listener, so returning to it costs no new read and realtime updates still arrive; the new Refresh button is the only re-read, and it detaches the listener first so the read is a real one. The conditions live in one pure module, masterDataLazyLoadPure.ts, whose plannedEntityReads returns an EMPTY list for the mount state - that is the assertion, not a source pattern. Product types are subscribed only for the Products and Product Types sections; the hierarchy and equipment collections only while an equipment section or the reconciliation window is open; the department and furnace dropdown lists only while the Add/Edit form that offers them is open. No business rule, validation, permission, audit, CRUD path, BOM/routing feature, export, importer or Firestore rule changed, and no data was read, written or migrated by this change",
@@ -198,8 +209,8 @@
     "UI-0010": "Financial Accounts import opens a dedicated Master Data importer instead of the Historical Excel Import screen: the action no longer navigates to the bulk-entry route (which App.tsx renders as DataImportView); a new in-place modal reuses the existing financialAccounts schema, XLSX reader, row validation, duplicate detection and chunked commit, adds sheet selection and parent/cycle relationship checks, and keeps partial import so invalid rows never block valid ones",
     "DB-0009": "Category-first Master Data over an extensible registry; Financial Accounts master data with Excel import and hierarchical editing (new financialAccounts collection and its Firestore rule); one shared generic hierarchy resolver reused by Master Data, Production Review and production aggregation; hierarchical cost-centre editing with cycle, self-parent and unknown-parent protection"
   },
-  "previousVersion": "3.21.6",
+  "previousVersion": "3.22.0",
   "versionBump": "MINOR",
   "classificationConfidence": "HIGH",
-  "previousReleaseId": "REL-2026-0029"
+  "previousReleaseId": "REL-2026-0030"
 }

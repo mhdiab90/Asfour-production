@@ -12,7 +12,8 @@
  * The operation, hierarchy and equipment lists come from the caller (the
  * existing Master Data reads). Writes go through routingService.
  */
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { versionToShowFirst } from '../../services/masterDataDetailsPure';
 import { ArrowDown, ArrowUp, Copy, History, Plus, RefreshCw, Trash2, Info } from 'lucide-react';
 import { Modal } from '../common/Modal';
 import { Badge } from '../common/Badge';
@@ -49,11 +50,15 @@ interface RoutingVersionsModalProps {
   hierarchyIndex: HierarchyIndex<any> | null;
   hierarchyOptions: Array<{ id: string; label: string }>;
   equipment: RoutingEquipmentOption[];
+  /** Opened by a double-click: open the ACTIVE version (else the newest) as soon as the list arrives. */
+  openVersionOnLoad?: boolean;
 }
 
 export const RoutingVersionsModal: React.FC<RoutingVersionsModalProps> = ({
-  isOpen, onClose, routing, canEdit, itemLabel, operations, hierarchyIndex, hierarchyOptions, equipment,
+  isOpen, onClose, routing, canEdit, itemLabel, operations, hierarchyIndex, hierarchyOptions, equipment, openVersionOnLoad,
 }) => {
+  /** Set when the window was opened to show a version at once; consumed by the next load. */
+  const openOnLoadRef = useRef<boolean>(false);
   const { language } = useLanguage();
   const isAr = language === 'ar';
   const [versions, setVersions] = useState<any[]>([]);
@@ -88,6 +93,14 @@ export const RoutingVersionsModal: React.FC<RoutingVersionsModalProps> = ({
       const list = await listRoutingVersions(String(routing.id), { skipCache });
       list.sort((a, b) => String(b.createdAt ?? '').localeCompare(String(a.createdAt ?? '')));
       setVersions(list);
+      if (openOnLoadRef.current) {
+        openOnLoadRef.current = false;
+        const first = versionToShowFirst(list);
+        if (first) {
+          setSelectedId(first.id);
+          setDraft({ ...routingVersionPayloadForSave(first) });
+        }
+      }
     } catch (err: any) {
       setError(String(err?.message ?? err));
     } finally {
@@ -100,8 +113,11 @@ export const RoutingVersionsModal: React.FC<RoutingVersionsModalProps> = ({
       setSelectedId(null);
       setDraft(null);
       setNewVersionCode('');
+      openOnLoadRef.current = Boolean(openVersionOnLoad);
       void load();
     }
+    // openVersionOnLoad is read when the window opens, not tracked afterwards.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isOpen, load]);
 
   const selected = versions.find((v) => v.id === selectedId) ?? null;

@@ -369,7 +369,8 @@ test('C3. no hard-coded route anywhere - operations, products and stages are nev
 // ==================================================
 
 test('U1. Routings sit beneath Products in the existing Master Data navigation - no new page', () => {
-  assert.deepEqual(reg.subCategories('products').map((c: any) => c.tab), ['products', 'boms', 'routings']);
+  // 3.23.0: shown Routing, BOM, Products - the order the user asked for.
+  assert.deepEqual(reg.subCategories('products').map((c: any) => c.tab), ['routings', 'boms', 'products']);
   assert.equal(reg.categoryForTab('routings').collection, 'routings');
   assert.ok(/routings: 'routings'/.test(readCode('src/services/masterDataService.ts')));
   assert.equal(/Routing(View|Page|Manager|App)|'routing/.test(readCode('src/App.tsx')), false);

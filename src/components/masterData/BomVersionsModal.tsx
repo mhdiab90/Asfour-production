@@ -17,7 +17,7 @@
  * will enforce, and a read-only preview of the quantities for a production
  * quantity. Derived quantities / percentages are shown, never written into the line.
  */
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ArrowDown, ArrowUp, Copy, History, Plus, RefreshCw, Trash2, Info, Printer } from 'lucide-react';
 import { Modal } from '../common/Modal';
 import { Badge } from '../common/Badge';
@@ -41,6 +41,9 @@ import {
 import { createBomVersion, listBomVersions, saveBomVersionDraft, transitionBomVersion } from '../../services/bomService';
 import { loadLogicalItemState } from '../../services/logicalItemService';
 import { bomPrintHtml, buildBomPrintModel } from '../../services/bomPrintPure';
+import { versionToShowFirst } from '../../services/masterDataDetailsPure';
+import { useBranding } from '../../context/BrandingContext';
+import { ORIGINAL_LOGO_SRC } from '../common/AsfourLogo';
 import type { LogicalItemRecord } from '../../services/logicalItemPure';
 
 interface BomVersionsModalProps {
@@ -53,6 +56,8 @@ interface BomVersionsModalProps {
   materials: any[];
   /** The BOM's customer scope as the Master Data table shows it - printed in the header. */
   customerLabel?: string;
+  /** Opened by a double-click: open the ACTIVE version (else the newest) as soon as the list arrives. */
+  openVersionOnLoad?: boolean;
 }
 
 /**
@@ -83,17 +88,30 @@ function printDocument(html: string): void {
   win.addEventListener('afterprint', () => setTimeout(remove, 0));
   // Browsers whose print() returns before the dialog closes still get the frame back.
   setTimeout(remove, 60_000);
-  setTimeout(() => {
+  // The logo must be loaded before the dialog opens, or the page prints without it.
+  // A logo that fails or is slow never blocks printing: at most 3 s.
+  const images = Array.from(doc.images).map((img) =>
+    img.complete ? Promise.resolve() : new Promise<void>((done) => { img.onload = () => done(); img.onerror = () => done(); }));
+  void Promise.race([Promise.all(images), new Promise((done) => setTimeout(done, 3000))]).then(() => {
     win.focus();
     win.print();
-  }, 50);
+  });
 }
 
 const toOptions = (list: any[]): SmartOption[] =>
   list.map((x) => ({ id: x.id || '', code: x.code || x.productCode || '', name: x.name || '' }));
 
-export const BomVersionsModal: React.FC<BomVersionsModalProps> = ({ isOpen, onClose, bom, canEdit, products, materials, customerLabel }) => {
+export const BomVersionsModal: React.FC<BomVersionsModalProps> = ({ isOpen, onClose, bom, canEdit, products, materials, customerLabel, openVersionOnLoad }) => {
   const { language } = useLanguage();
+  /** The company logo the rest of the app shows - printed at the top of the mixture. */
+  let logoSrc = ORIGINAL_LOGO_SRC;
+  try {
+    logoSrc = useBranding().companyLogoSrc || ORIGINAL_LOGO_SRC;
+  } catch {
+    /* outside the branding provider: the bundled logo */
+  }
+  /** Set when the window was opened to show a version at once; consumed by the next load. */
+  const openOnLoadRef = useRef<boolean>(false);
   const isAr = language === 'ar';
   const [versions, setVersions] = useState<any[]>([]);
   const [isLoading, setIsLoading] = useState(false);
@@ -134,6 +152,14 @@ export const BomVersionsModal: React.FC<BomVersionsModalProps> = ({ isOpen, onCl
       setLogicalItems((await loadLogicalItemState({ skipCache }).catch(() => ({ items: [] as LogicalItemRecord[] }))).items);
       list.sort((a, b) => String(b.createdAt ?? '').localeCompare(String(a.createdAt ?? '')));
       setVersions(list);
+      if (openOnLoadRef.current) {
+        openOnLoadRef.current = false;
+        const first = versionToShowFirst(list);
+        if (first) {
+          setSelectedId(first.id);
+          setDraft({ ...bomVersionPayloadForSave(first) });
+        }
+      }
     } catch (err: any) {
       setError(String(err?.message ?? err));
     } finally {
@@ -146,8 +172,11 @@ export const BomVersionsModal: React.FC<BomVersionsModalProps> = ({ isOpen, onCl
       setSelectedId(null);
       setDraft(null);
       setNewVersionCode('');
+      openOnLoadRef.current = Boolean(openVersionOnLoad);
       void load();
     }
+    // openVersionOnLoad is read when the window opens, not tracked afterwards.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isOpen, load]);
 
   const selected = versions.find((v) => v.id === selectedId) ?? null;
@@ -233,6 +262,8 @@ export const BomVersionsModal: React.FC<BomVersionsModalProps> = ({ isOpen, onCl
       customerLabel: customerLabel ?? '',
       previewQuantity: fromEditor ? previewQuantity : null,
       printedAt: new Date().toLocaleString('en-GB'),
+      // Absolute, so the print frame loads it whatever its own address is.
+      logoUrl: new URL(logoSrc, window.location.href).href,
     });
     printDocument(bomPrintHtml(model));
   };

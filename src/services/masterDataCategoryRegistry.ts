@@ -187,7 +187,9 @@ export const MASTER_DATA_CATEGORIES: MasterDataCategory[] = [
     productionFilter: 'productId',
     legacyProductionFields: ['productId', 'productCode'],
     // Bills of Materials (Phase 1 Step 2) and Routings (Step 3) sit beneath Products.
-    subCategoryIds: ['products', 'boms', 'routings'],
+    // 3.23.0: shown Routing, then BOM, then Products - the order the user asked for.
+    // Opening Products still lands on the Products list; only the buttons' order changed.
+    subCategoryIds: ['routings', 'boms', 'products'],
   },
   {
     id: 'customers',
