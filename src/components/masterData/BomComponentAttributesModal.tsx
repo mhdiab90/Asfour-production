@@ -15,7 +15,7 @@
  * source (costingSetupPure.ts).
  */
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { RefreshCw, Save, Search } from 'lucide-react';
+import { RefreshCw, Save, Search, UploadCloud } from 'lucide-react';
 import { Modal } from '../common/Modal';
 import { useLanguage } from '../../i18n/LanguageContext';
 import { BOM_UNITS, BOM_UNIT_LABELS } from '../../services/bomPure';
@@ -37,6 +37,10 @@ interface BomComponentAttributesModalProps {
   canEdit: boolean;
   /** Told after a save, so lists already on screen are read again. */
   onSaved?: () => void;
+  /** Opens the Excel price import (3.25.0). */
+  onOpenPriceImport?: () => void;
+  /** Changes after prices were imported elsewhere - the screen then reads them again. */
+  refreshNonce?: number;
 }
 
 /** One write, bounded - a save that does not answer is reported, never waited on forever. */
@@ -47,7 +51,7 @@ function withTimeout<T>(work: Promise<T>, ms: number): Promise<T> {
   });
 }
 
-export const BomComponentAttributesModal: React.FC<BomComponentAttributesModalProps> = ({ isOpen, onClose, canEdit, onSaved }) => {
+export const BomComponentAttributesModal: React.FC<BomComponentAttributesModalProps> = ({ isOpen, onClose, canEdit, onSaved, onOpenPriceImport, refreshNonce = 0 }) => {
   const { language } = useLanguage();
   const isAr = language === 'ar';
   const [materials, setMaterials] = useState<any[]>([]);
@@ -78,6 +82,12 @@ export const BomComponentAttributesModal: React.FC<BomComponentAttributesModalPr
   useEffect(() => {
     if (isOpen) void load();
   }, [isOpen, load]);
+
+  /* Prices imported from Excel while this screen is open: read them again (an unsaved edit here is replaced by what was imported). */
+  useEffect(() => {
+    if (isOpen && refreshNonce > 0) void load(true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [refreshNonce]);
 
   const originals = useMemo(
     () => Object.fromEntries(materials.map((m) => [String(m.id), draftFromMaterial(m)])),
@@ -177,6 +187,18 @@ export const BomComponentAttributesModal: React.FC<BomComponentAttributesModalPr
           <button type="button" onClick={() => void load(true)} disabled={isLoading || isSaving} className="p-2 rounded-lg bg-slate-100 hover:bg-slate-200 cursor-pointer disabled:opacity-50" title={isAr ? 'تحديث' : 'Refresh'}>
             <RefreshCw className={`w-3.5 h-3.5 ${isLoading ? 'animate-spin' : ''}`} />
           </button>
+          {onOpenPriceImport && (
+            <button
+              id="bom-attributes-price-import-btn"
+              type="button"
+              onClick={onOpenPriceImport}
+              disabled={isSaving}
+              className="flex items-center gap-1.5 px-3 py-2 font-bold text-emerald-800 bg-emerald-50 border border-emerald-200 hover:bg-emerald-100 rounded-xl cursor-pointer disabled:opacity-50"
+            >
+              <UploadCloud className="w-3.5 h-3.5" />
+              {isAr ? 'استيراد الأسعار من Excel' : 'Import prices from Excel'}
+            </button>
+          )}
           {canEdit && (
             <button
               id="bom-attributes-save-btn"

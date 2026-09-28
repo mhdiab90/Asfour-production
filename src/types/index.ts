@@ -1131,6 +1131,8 @@ export interface Material extends WithExternalReferences {
   priceUnit?: string | null;
   /** When either price or the price unit last changed (ISO). */
   pricesUpdatedAt?: string | null;
+  /** Where the prices last came from: typed in the attributes screen, or an Excel import (3.25.0). */
+  pricesSource?: 'MANUAL' | 'EXCEL_IMPORT' | null;
   /** Explicit item kind for this material. Optional - unset means unclassified. Not implied by living in `materials`. */
   itemKind?: ItemKind;
   /** The role the reconciled master data package states, e.g. RAW_MATERIAL_PURCHASED - kept as written. */

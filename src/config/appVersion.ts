@@ -37,7 +37,7 @@ const DEPLOYMENT_ID_INJECTED = typeof __BUILD_DEPLOYMENT_ID__ === 'string' ? __B
 
 export const CURRENT_APP_VERSION: AppVersionInfo = {
   /** Set by the automatic release planner from the classified change set - see releasePlannerPure.ts. */
-  version: '3.24.1',
+  version: '3.25.0',
   buildId: BUILD_ID_INJECTED,
   buildTimestamp: BUILD_TIMESTAMP_INJECTED,
   gitCommit: COMMIT_SHA_INJECTED,
@@ -46,6 +46,16 @@ export const CURRENT_APP_VERSION: AppVersionInfo = {
   environment: 'production',
   releaseDate: '2026-08-22',
   changelog: [
+    {
+      version: '3.25.0',
+      date: '2026-09-28',
+      highlights: [
+        'شاشة "استيراد أسعار الخامات" من Excel: آخر سعر شراء ومتوسط سعر المنصرف ووحدة السعر، بالربط على كود الخامة',
+        'نموذج Excel جاهز بكل الخامات وأسعارها الحالية: املأ الأسعار ثم استورد نفس الملف',
+        'مراجعة كل سطر قبل الحفظ: الكود غير الموجود أو المكرر، والسعر غير الصالح، والوحدة غير المعتمدة تظهر كأخطاء ولا تُحفظ',
+        'يُحفظ فقط ما تغيّر، مع تاريخ التحديث ومصدر السعر (استيراد Excel أو إدخال يدوي)'
+      ]
+    },
     {
       version: '3.24.1',
       date: '2026-09-28',

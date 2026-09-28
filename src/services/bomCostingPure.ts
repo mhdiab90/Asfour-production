@@ -326,7 +326,11 @@ export function materialCostAttributesPatch(
     patch.priceUnit = txt(draft.priceUnit) || null;
     pricesChanged = true;
   }
-  if (pricesChanged) patch.pricesUpdatedAt = now;
+  if (pricesChanged) {
+    patch.pricesUpdatedAt = now;
+    // Where the prices came from (3.25.0): typed here, as opposed to an Excel import.
+    patch.pricesSource = 'MANUAL';
+  }
   return patch;
 }
 

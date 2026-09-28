@@ -171,7 +171,8 @@ test('C1. only the changed fields are written; a cleared field becomes null, nev
   const patch = c.materialCostAttributesPatch(original, { ...original, aluminaPercentage: '', origin: 'LOCAL' }, 'T');
   assert.deepEqual(patch, { aluminaPercentage: null, origin: 'LOCAL' }, 'no price changed, so no price date');
   const priced = c.materialCostAttributesPatch(original, { ...original, lastPurchasePrice: '19000' }, '2026-09-28T00:00:00Z');
-  assert.deepEqual(priced, { lastPurchasePrice: 19000, pricesUpdatedAt: '2026-09-28T00:00:00Z' });
+  // 3.25.0: a typed price also records its source, beside the Excel import's.
+  assert.deepEqual(priced, { lastPurchasePrice: 19000, pricesUpdatedAt: '2026-09-28T00:00:00Z', pricesSource: 'MANUAL' });
   for (const k of ['code', 'name', 'unit', 'active']) assert.equal(k in priced, false, `${k} is never touched`);
 });
 

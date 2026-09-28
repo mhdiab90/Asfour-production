@@ -123,6 +123,7 @@ import { SmartEntitySelect, SmartOption } from '../common/SmartEntitySelect';
 import { BomVersionsModal } from './BomVersionsModal';
 import { RecordDetailsModal } from './RecordDetailsModal';
 import { BomComponentAttributesModal } from './BomComponentAttributesModal';
+import { MaterialPriceImportModal } from './MaterialPriceImportModal';
 import { MATERIAL_ORIGIN_LABELS, readOrigin } from '../../services/bomCostingPure';
 import { ROW_CONTROL_SELECTOR } from '../../services/masterDataDetailsPure';
 import { RoutingVersionsModal } from './RoutingVersionsModal';
@@ -991,6 +992,10 @@ export const MasterDataView: React.FC<MasterDataViewProps> = ({ onNavigate }) =>
   const [detailsItem, setDetailsItem] = useState<any | null>(null);
   /** The BOM component attributes screen - alumina %, local / imported, prices (3.24.0). */
   const [isComponentAttributesOpen, setIsComponentAttributesOpen] = useState<boolean>(false);
+  /** The material price import from Excel (3.25.0). */
+  const [isPriceImportOpen, setIsPriceImportOpen] = useState<boolean>(false);
+  /** Bumped after prices were imported, so an open attributes screen reads them again. */
+  const [materialPricesNonce, setMaterialPricesNonce] = useState<number>(0);
 
   /*
    * Products, customers and job references for the Job/Batch pickers and
@@ -2644,6 +2649,18 @@ export const MasterDataView: React.FC<MasterDataViewProps> = ({ onNavigate }) =>
             >
               <ListTree className="w-3.5 h-3.5 text-sky-600" />
               <span>{language === 'ar' ? 'خصائص وأسعار مكونات BOM' : 'BOM component attributes & prices'}</span>
+            </button>
+          )}
+          {(activeTab === 'boms' || activeTab === 'materials') && (
+            <button
+              id="master-data-material-price-import-btn"
+              type="button"
+              onClick={() => setIsPriceImportOpen(true)}
+              className="flex items-center gap-1.5 px-3 py-2 text-xs font-bold text-emerald-800 bg-emerald-50 border border-emerald-300 hover:bg-emerald-100 rounded-xl transition-colors cursor-pointer"
+              title={language === 'ar' ? 'استيراد آخر سعر شراء ومتوسط سعر المنصرف للخامات من ملف Excel' : 'Import the last purchase and average issue prices of materials from an Excel file'}
+            >
+              <UploadCloud className="w-3.5 h-3.5 text-emerald-600" />
+              <span>{language === 'ar' ? 'استيراد أسعار الخامات' : 'Import material prices'}</span>
             </button>
           )}
 
@@ -4930,6 +4947,19 @@ export const MasterDataView: React.FC<MasterDataViewProps> = ({ onNavigate }) =>
         onSaved={() => {
           // The BOM window values its lines from these materials - re-read them so it shows what was saved.
           fetchMasterData<any>(MASTER_DATA_COLLECTIONS.materials, { skipCache: true }).then(setReferenceMaterials).catch(() => {});
+        }}
+        onOpenPriceImport={() => setIsPriceImportOpen(true)}
+        refreshNonce={materialPricesNonce}
+      />
+
+      <MaterialPriceImportModal
+        isOpen={isPriceImportOpen}
+        onClose={() => setIsPriceImportOpen(false)}
+        canImport={canImportMasterData}
+        onImported={() => {
+          // The BOM window and the attributes screen read these prices - re-read them.
+          fetchMasterData<any>(MASTER_DATA_COLLECTIONS.materials, { skipCache: true }).then(setReferenceMaterials).catch(() => {});
+          setMaterialPricesNonce((n) => n + 1);
         }}
       />
 

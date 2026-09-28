@@ -64,6 +64,7 @@ export const DETAIL_FIELD_LABELS: Record<string, { ar: string; en: string }> = {
   averageIssuePrice: { ar: 'متوسط سعر المنصرف', en: 'Average issue price' },
   priceUnit: { ar: 'السعر لكل', en: 'Price per' },
   pricesUpdatedAt: { ar: 'آخر تحديث للأسعار', en: 'Prices updated' },
+  pricesSource: { ar: 'مصدر الأسعار', en: 'Prices source' },
   notes: { ar: 'ملاحظات', en: 'Notes' },
   active: { ar: 'نشط', en: 'Active' },
   status: { ar: 'الحالة', en: 'Status' },
