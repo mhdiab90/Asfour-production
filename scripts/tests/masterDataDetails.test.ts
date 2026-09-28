@@ -68,17 +68,28 @@ async function bootstrap() {
 // A. SECTION ORDER UNDER PRODUCTS
 // ==================================================
 
-test('A1. under Products the sections read Routing, BOM, Products', () => {
-  assert.deepEqual(reg.subCategories('products').map((c: any) => c.tab), ['routings', 'boms', 'products']);
+test('A1. under Products the sections read Products, BOM, Routing (3.24.1)', () => {
+  assert.deepEqual(reg.subCategories('products').map((c: any) => c.tab), ['products', 'boms', 'routings']);
 });
 
-test('A2. opening Products still lands on the Products list', () => {
+test('A2. clicking Products opens on Routing, not on Products (3.24.1)', () => {
   const nav = panels.panelCategories();
+  assert.equal(reg.getCategory('products').defaultSubCategoryTab, 'routings');
+  // Coming from another section, the group opens on its default: Routing.
+  assert.equal(lazy.resolveOpenTab({ activeCategoryId: 'products', activeTab: 'customers' }, nav), 'routings');
+  // The button sets it explicitly, in the same render as the category, so only Routing is read.
+  const view = readCode(VIEW);
+  assert.ok(/setActiveCategoryId\(category\.id\);\s*if \(category\.defaultSubCategoryTab\) setActiveTab\(category\.defaultSubCategoryTab as MasterDataTab\);/.test(view));
+  // A section chosen inside the group stays chosen.
+  assert.equal(lazy.resolveOpenTab({ activeCategoryId: 'products', activeTab: 'boms' }, nav), 'boms');
   assert.equal(lazy.resolveOpenTab({ activeCategoryId: 'products', activeTab: 'products' }, nav), 'products');
-  // A tab from another section falls back to the group's own tab - Products, not Routing.
-  assert.equal(lazy.resolveOpenTab({ activeCategoryId: 'products', activeTab: 'customers' }, nav), 'products');
-  // And a routing already chosen stays chosen.
-  assert.equal(lazy.resolveOpenTab({ activeCategoryId: 'products', activeTab: 'routings' }, nav), 'routings');
+});
+
+test('A3. groups without a default keep their behaviour - Equipment still opens on its own tab', () => {
+  const nav = panels.panelCategories();
+  const equipment = reg.getCategory('equipment');
+  assert.equal(equipment.defaultSubCategoryTab, undefined);
+  assert.equal(lazy.resolveOpenTab({ activeCategoryId: 'equipment', activeTab: 'customers' }, nav), equipment.tab);
 });
 
 // ==================================================

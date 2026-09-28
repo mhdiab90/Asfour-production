@@ -606,7 +606,7 @@ export const MasterDataView: React.FC<MasterDataViewProps> = ({ onNavigate }) =>
     // A group (Equipment) keeps whichever of its own tabs is already open.
     if (category.subCategoryIds) {
       const groupTabs = subCategories(category.id).map((sc) => sc.tab);
-      setActiveTab((current) => (groupTabs.includes(current) ? current : (category.tab as MasterDataTab)));
+      setActiveTab((current) => (groupTabs.includes(current) ? current : ((category.defaultSubCategoryTab ?? category.tab) as MasterDataTab)));
       return;
     }
     setActiveTab(category.tab as MasterDataTab);
@@ -2308,7 +2308,13 @@ export const MasterDataView: React.FC<MasterDataViewProps> = ({ onNavigate }) =>
               key={category.id}
               id={`master-data-category-${category.id}`}
               type="button"
-              onClick={() => { setActiveCategoryId(category.id); setCostCenterDigits([]); }}
+              onClick={() => {
+                setActiveCategoryId(category.id);
+                // A group with a default sub-category opens on it when its button is clicked
+                // (Products -> Routing), set in the same render so only that section is read.
+                if (category.defaultSubCategoryTab) setActiveTab(category.defaultSubCategoryTab as MasterDataTab);
+                setCostCenterDigits([]);
+              }}
               className={`flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-bold transition-all shrink-0 cursor-pointer ${
                 isActive ? 'bg-amber-400 text-slate-950 shadow-xs' : 'text-slate-600 hover:text-slate-900 hover:bg-slate-50'
               }`}

@@ -37,7 +37,7 @@ const DEPLOYMENT_ID_INJECTED = typeof __BUILD_DEPLOYMENT_ID__ === 'string' ? __B
 
 export const CURRENT_APP_VERSION: AppVersionInfo = {
   /** Set by the automatic release planner from the classified change set - see releasePlannerPure.ts. */
-  version: '3.24.0',
+  version: '3.24.1',
   buildId: BUILD_ID_INJECTED,
   buildTimestamp: BUILD_TIMESTAMP_INJECTED,
   gitCommit: COMMIT_SHA_INJECTED,
@@ -46,6 +46,14 @@ export const CURRENT_APP_VERSION: AppVersionInfo = {
   environment: 'production',
   releaseDate: '2026-08-22',
   changelog: [
+    {
+      version: '3.24.1',
+      date: '2026-09-28',
+      highlights: [
+        'ترتيب الأقسام تحت المنتجات عاد: المنتجات ثم قوائم المواد (BOM) ثم مسارات التصنيع (Routing)',
+        'الضغط على أيقونة المنتجات يفتح تلقائيًا على مسارات التصنيع (Routing) بدل المنتجات'
+      ]
+    },
     {
       version: '3.24.0',
       date: '2026-09-28',

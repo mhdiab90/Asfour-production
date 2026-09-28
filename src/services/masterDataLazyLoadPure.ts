@@ -53,7 +53,8 @@ export function resolveOpenTab(
   if (!category?.tab) return null;
   if (category.subCategoryIds) {
     const groupTabs = subCategories(category.id).map((sc) => sc.tab);
-    return groupTabs.includes(state.activeTab) ? state.activeTab : category.tab;
+    // Otherwise the group's default sub-category (Products opens on Routing), else its own tab.
+    return groupTabs.includes(state.activeTab) ? state.activeTab : (category.defaultSubCategoryTab ?? category.tab);
   }
   return category.tab;
 }

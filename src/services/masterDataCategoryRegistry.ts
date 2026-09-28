@@ -135,6 +135,11 @@ export interface MasterDataCategory {
    */
   subCategoryIds?: string[];
   /**
+   * The sub-category a group opens on when its button is clicked (3.24.1).
+   * Unset: the category's own tab, as before.
+   */
+  defaultSubCategoryTab?: string;
+  /**
    * Phase 1 Step 8C: the field a STAGE RECORD stores to name the machine of this
    * equipment category (e.g. a rotary kiln record's `rotaryKilnId`). Distinct
    * from `legacyProductionFields`, which are the pressing-record fields the
@@ -187,9 +192,10 @@ export const MASTER_DATA_CATEGORIES: MasterDataCategory[] = [
     productionFilter: 'productId',
     legacyProductionFields: ['productId', 'productCode'],
     // Bills of Materials (Phase 1 Step 2) and Routings (Step 3) sit beneath Products.
-    // 3.23.0: shown Routing, then BOM, then Products - the order the user asked for.
-    // Opening Products still lands on the Products list; only the buttons' order changed.
-    subCategoryIds: ['routings', 'boms', 'products'],
+    subCategoryIds: ['products', 'boms', 'routings'],
+    // 3.24.1: clicking Products opens on Routing - the section the user works in
+    // first - while the buttons keep the order Products, BOM, Routing.
+    defaultSubCategoryTab: 'routings',
   },
   {
     id: 'customers',
