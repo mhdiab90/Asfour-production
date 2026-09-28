@@ -37,7 +37,7 @@ const DEPLOYMENT_ID_INJECTED = typeof __BUILD_DEPLOYMENT_ID__ === 'string' ? __B
 
 export const CURRENT_APP_VERSION: AppVersionInfo = {
   /** Set by the automatic release planner from the classified change set - see releasePlannerPure.ts. */
-  version: '3.23.0',
+  version: '3.24.0',
   buildId: BUILD_ID_INJECTED,
   buildTimestamp: BUILD_TIMESTAMP_INJECTED,
   gitCommit: COMMIT_SHA_INJECTED,
@@ -46,6 +46,17 @@ export const CURRENT_APP_VERSION: AppVersionInfo = {
   environment: 'production',
   releaseDate: '2026-08-22',
   changelog: [
+    {
+      version: '3.24.0',
+      date: '2026-09-28',
+      highlights: [
+        'جدول مكونات الـ BOM أصبح: م / النوع / المصدر / كود الصنف / الصنف / الألومينا % / النسبة / الكمية / الوحدة / قيمة الصنف',
+        'عرض الـ BOM "بالكميات فقط" أو "بالتكلفة"، مع اختيار السعر: آخر سعر شراء أو متوسط سعر المنصرف',
+        'أسفل الـ BOM: إجمالي تكلفة البند، ونسبة الألومينا الإجمالية للخلطة، وقيمة المستورد ونسبته من إجمالي التكلفة',
+        'شاشة "خصائص وأسعار مكونات BOM" لتحديد نسبة الألومينا، ومحلي أو مستورد، وأسعار كل خامة، مع فلتر للبيانات الناقصة',
+        'الطباعة تتبع طريقة العرض المختارة (بالكميات أو بالتكلفة)'
+      ]
+    },
     {
       version: '3.23.0',
       date: '2026-09-28',

@@ -1121,6 +1121,16 @@ export interface Material extends WithExternalReferences {
   notes?: string;
   /** Optional (Comprehensive Historical Import task, §13) - mirrors Product.aluminaPercentage's exact meaning for a raw material, e.g. detected from an embedded "جريت40%" pattern during import. Never guessed - only set when explicitly present in the source or already on the record. */
   aluminaPercentage?: number | null;
+  /** LOCAL or IMPORTED - set in the BOM component attributes screen (3.24.0); unset means not yet known. */
+  origin?: 'LOCAL' | 'IMPORTED' | null;
+  /** The last purchase price, per `priceUnit` (EGP) - the costing design's pricing reference price, entered manually. */
+  lastPurchasePrice?: number | null;
+  /** The average price of the stores' issues to manufacturing, per `priceUnit` (EGP) - the costing design's actual issue cost, entered manually. */
+  averageIssuePrice?: number | null;
+  /** The unit both prices are per; unset means the material's own `unit`. */
+  priceUnit?: string | null;
+  /** When either price or the price unit last changed (ISO). */
+  pricesUpdatedAt?: string | null;
   /** Explicit item kind for this material. Optional - unset means unclassified. Not implied by living in `materials`. */
   itemKind?: ItemKind;
   /** The role the reconciled master data package states, e.g. RAW_MATERIAL_PURCHASED - kept as written. */

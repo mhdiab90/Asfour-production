@@ -42,6 +42,20 @@ import { createBomVersion, listBomVersions, saveBomVersionDraft, transitionBomVe
 import { loadLogicalItemState } from '../../services/logicalItemService';
 import { bomPrintHtml, buildBomPrintModel } from '../../services/bomPrintPure';
 import { versionToShowFirst } from '../../services/masterDataDetailsPure';
+/*
+ * 3.24.0: the cost view - each component valued at the last purchase price or
+ * the average issue price, the mix's alumina %, and the imported share.
+ */
+import {
+  BomView,
+  PRICE_BASES,
+  PRICE_BASIS_LABELS,
+  PriceBasis,
+  bomCosting,
+  formatMoney,
+  formatShare,
+  valueReasonLabel,
+} from '../../services/bomCostingPure';
 import { useBranding } from '../../context/BrandingContext';
 import { ORIGINAL_LOGO_SRC } from '../common/AsfourLogo';
 import type { LogicalItemRecord } from '../../services/logicalItemPure';
@@ -58,6 +72,8 @@ interface BomVersionsModalProps {
   customerLabel?: string;
   /** Opened by a double-click: open the ACTIVE version (else the newest) as soon as the list arrives. */
   openVersionOnLoad?: boolean;
+  /** Opens the component attributes screen (alumina %, local / imported, prices), where they are missing. */
+  onOpenComponentAttributes?: () => void;
 }
 
 /**
@@ -101,7 +117,7 @@ function printDocument(html: string): void {
 const toOptions = (list: any[]): SmartOption[] =>
   list.map((x) => ({ id: x.id || '', code: x.code || x.productCode || '', name: x.name || '' }));
 
-export const BomVersionsModal: React.FC<BomVersionsModalProps> = ({ isOpen, onClose, bom, canEdit, products, materials, customerLabel, openVersionOnLoad }) => {
+export const BomVersionsModal: React.FC<BomVersionsModalProps> = ({ isOpen, onClose, bom, canEdit, products, materials, customerLabel, openVersionOnLoad, onOpenComponentAttributes }) => {
   const { language } = useLanguage();
   /** The company logo the rest of the app shows - printed at the top of the mixture. */
   let logoSrc = ORIGINAL_LOGO_SRC;
@@ -122,6 +138,10 @@ export const BomVersionsModal: React.FC<BomVersionsModalProps> = ({ isOpen, onCl
   const [newVersionCode, setNewVersionCode] = useState('');
   /** Read-only scaling preview: a production quantity in the basis unit. Never saved. */
   const [previewQuantity, setPreviewQuantity] = useState('');
+  /** Quantities only (as before), or the cost view. Printing follows the choice. */
+  const [view, setView] = useState<BomView>('QUANTITIES');
+  /** Which material price values the cost view. */
+  const [priceBasis, setPriceBasis] = useState<PriceBasis>('LAST_PURCHASE');
   /** Logical items (Step 2A), so a mapped product and material are validated as one item. */
   const [logicalItems, setLogicalItems] = useState<LogicalItemRecord[]>([]);
 
@@ -141,6 +161,14 @@ export const BomVersionsModal: React.FC<BomVersionsModalProps> = ({ isOpen, onCl
     const found = list.find((x) => x.id === id);
     return found ? [found.code || found.productCode, found.name].filter(Boolean).join(' - ') : id || '-';
   };
+
+  /** A component's record by id - indexed once, since the product list can be tens of thousands long. */
+  const productIndex = useMemo(() => new Map(products.map((p) => [String(p.id), p])), [products]);
+  const materialIndex = useMemo(() => new Map(materials.map((m) => [String(m.id), m])), [materials]);
+  const lookupRecord = useCallback(
+    (source: string, id: string) => (source === 'materials' ? materialIndex : productIndex).get(String(id)) ?? null,
+    [productIndex, materialIndex],
+  );
 
   const load = useCallback(async (skipCache = false) => {
     if (!bom?.id) return;
@@ -240,6 +268,9 @@ export const BomVersionsModal: React.FC<BomVersionsModalProps> = ({ isOpen, onCl
   const formula = formulaInput ? bomFormula(formulaInput) : null;
   const formulaIssues = formulaInput ? bomFormulaIssues(formulaInput) : [];
   const formulaLine = (lineId: string) => formula?.lines.find((l) => l.lineId === lineId) ?? null;
+  const costing = draft ? bomCosting(draft, lookupRecord, priceBasis) : null;
+  const costedLine = (lineId: string) => costing?.lines.find((l) => l.lineId === lineId) ?? null;
+  const isCostView = view === 'COST';
   const previewValue = Number(previewQuantity);
   const previewFactor = formula?.basisValid && previewQuantity.trim() !== '' && Number.isFinite(previewValue) && previewValue > 0 ? previewValue / (formula.basisQuantity as number) : null;
   const pct = (n: number) => n.toLocaleString('en-US', { minimumFractionDigits: 1, maximumFractionDigits: 4 });
@@ -264,6 +295,10 @@ export const BomVersionsModal: React.FC<BomVersionsModalProps> = ({ isOpen, onCl
       printedAt: new Date().toLocaleString('en-GB'),
       // Absolute, so the print frame loads it whatever its own address is.
       logoUrl: new URL(logoSrc, window.location.href).href,
+      // The paper follows the view on screen: quantities only, or with the chosen prices.
+      lookup: lookupRecord,
+      view,
+      priceBasis,
     });
     printDocument(bomPrintHtml(model));
   };
@@ -444,17 +479,58 @@ export const BomVersionsModal: React.FC<BomVersionsModalProps> = ({ isOpen, onCl
               </label>
             </div>
 
+            <div id="bom-view-controls" className="flex items-center gap-2 flex-wrap">
+              <span className="font-bold text-slate-600">{isAr ? 'العرض:' : 'View:'}</span>
+              <div className="flex items-center gap-1 bg-slate-100 p-1 rounded-xl">
+                {(['QUANTITIES', 'COST'] as const).map((v) => (
+                  <button
+                    key={v}
+                    id={v === 'COST' ? 'bom-view-cost-btn' : 'bom-view-quantities-btn'}
+                    type="button"
+                    onClick={() => setView(v)}
+                    className={`px-3 py-1 rounded-lg font-bold cursor-pointer ${view === v ? 'bg-white text-slate-900 shadow-xs' : 'text-slate-600 hover:text-slate-900'}`}
+                  >
+                    {v === 'COST' ? (isAr ? 'بالتكلفة' : 'With cost') : (isAr ? 'الكميات فقط' : 'Quantities only')}
+                  </button>
+                ))}
+              </div>
+              {isCostView && (
+                <select
+                  id="bom-price-basis"
+                  value={priceBasis}
+                  onChange={(e) => setPriceBasis(e.target.value as PriceBasis)}
+                  className="bg-white border border-slate-200 rounded-lg px-2 py-1 font-bold"
+                >
+                  {PRICE_BASES.map((b) => <option key={b} value={b}>{isAr ? PRICE_BASIS_LABELS[b].ar : PRICE_BASIS_LABELS[b].en}</option>)}
+                </select>
+              )}
+              {onOpenComponentAttributes && (
+                <button
+                  id="bom-open-attributes-btn"
+                  type="button"
+                  onClick={onOpenComponentAttributes}
+                  className="px-3 py-1 rounded-lg font-bold text-sky-800 bg-sky-50 border border-sky-200 hover:bg-sky-100 cursor-pointer"
+                  title={isAr ? 'تحديد نسبة الألومينا ومحلي/مستورد وأسعار الخامات' : 'Set the alumina %, local / imported and prices of the materials'}
+                >
+                  {isAr ? 'خصائص وأسعار المكونات' : 'Component attributes & prices'}
+                </button>
+              )}
+            </div>
+
             <div className="overflow-x-auto">
-              <table id="bom-component-lines" className="w-full text-[11px] min-w-[860px]">
+              <table id="bom-component-lines" className="w-full text-[11px] min-w-[1040px]">
                 <thead className="text-slate-500">
                   <tr>
                     <th className="text-start px-1 py-1">#</th>
                     <th className="text-start px-1 py-1">{isAr ? 'النوع' : 'Type'}</th>
                     <th className="text-start px-1 py-1">{isAr ? 'المصدر' : 'Source'}</th>
+                    <th className="text-start px-1 py-1">{isAr ? 'كود الصنف' : 'Item code'}</th>
                     <th className="text-start px-1 py-1 w-64">{isAr ? 'الصنف' : 'Item'}</th>
-                    <th className="text-start px-1 py-1">%</th>
+                    <th className="text-start px-1 py-1">{isAr ? 'الألومينا %' : 'Alumina %'}</th>
+                    <th className="text-start px-1 py-1">{isAr ? 'النسبة %' : '%'}</th>
                     <th className="text-start px-1 py-1">{formula?.basisValid ? `${isAr ? 'الكمية /' : 'Qty /'} ${qty(formula.basisQuantity)} ${unitLabel(formula.basisUnit)}` : (isAr ? 'الكمية' : 'Quantity')}</th>
                     <th className="text-start px-1 py-1">{isAr ? 'الوحدة' : 'Unit'}</th>
+                    {isCostView && <th className="text-start px-1 py-1">{isAr ? 'قيمة الصنف (ج.م)' : 'Item value (EGP)'}</th>}
                     {previewFactor !== null && <th className="text-start px-1 py-1">{isAr ? 'متوقع للمعاينة' : 'Preview'}</th>}
                     <th className="text-start px-1 py-1">{isAr ? 'ملاحظات' : 'Notes'}</th>
                     <th className="px-1 py-1" />
@@ -464,6 +540,7 @@ export const BomVersionsModal: React.FC<BomVersionsModalProps> = ({ isOpen, onCl
                   {[...draft.components].sort((a: any, b: any) => a.sequence - b.sequence).map((c: any) => {
                     const fl = formulaLine(c.lineId);
                     const isAdditive = fl?.componentType === 'ADDITIVE';
+                    const cl = costedLine(c.lineId);
                     return (
                     <tr key={c.lineId} className={isAdditive ? 'bg-purple-50/40' : ''}>
                       <td className="px-1 py-1 font-mono">{c.sequence}</td>
@@ -478,6 +555,7 @@ export const BomVersionsModal: React.FC<BomVersionsModalProps> = ({ isOpen, onCl
                           {BOM_ITEM_SOURCES.map((s) => <option key={s} value={s}>{s === 'products' ? (isAr ? 'منتج' : 'Product') : (isAr ? 'خامة' : 'Material')}</option>)}
                         </select>
                       </td>
+                      <td className="px-1 py-1 font-mono font-bold whitespace-nowrap" data-bom-line-code>{cl?.attributes.code || '-'}</td>
                       <td className="px-1 py-1">
                         {editable ? (
                           <SmartEntitySelect
@@ -488,8 +566,14 @@ export const BomVersionsModal: React.FC<BomVersionsModalProps> = ({ isOpen, onCl
                             onChange={(id) => updateLine(c.lineId, { itemId: id ?? '' })}
                           />
                         ) : (
-                          <span>{itemLabel(c.itemSource, c.itemId)}</span>
+                          <span>{cl?.attributes.found ? (cl.attributes.name || itemLabel(c.itemSource, c.itemId)) : itemLabel(c.itemSource, c.itemId)}</span>
                         )}
+                        {cl?.attributes.origin === 'IMPORTED' && (
+                          <span className="ms-1 inline-block px-1.5 rounded bg-sky-100 text-sky-800 text-[10px] font-bold">{isAr ? 'مستورد' : 'Imported'}</span>
+                        )}
+                      </td>
+                      <td className="px-1 py-1 font-mono" data-bom-line-alumina>
+                        {cl?.attributes.aluminaPercentage != null ? `${pct(cl.attributes.aluminaPercentage)}%` : <span className="text-slate-400">-</span>}
                       </td>
                       <td className="px-1 py-1 w-28">
                         {editable ? (
@@ -512,6 +596,13 @@ export const BomVersionsModal: React.FC<BomVersionsModalProps> = ({ isOpen, onCl
                           {BOM_UNITS.map((u) => <option key={u} value={u}>{isAr ? BOM_UNIT_LABELS[u].ar : BOM_UNIT_LABELS[u].en}</option>)}
                         </select>
                       </td>
+                      {isCostView && (
+                        <td className="px-1 py-1 font-mono font-bold" data-bom-line-value>
+                          {cl?.value != null
+                            ? formatMoney(cl.value)
+                            : <span className="text-[10px] font-semibold text-amber-700">{valueReasonLabel(cl?.valueReason ?? 'NO_PRICE', isAr ? 'ar' : 'en')}</span>}
+                        </td>
+                      )}
                       {previewFactor !== null && <td className="px-1 py-1 font-mono font-bold">{fl?.effectiveQuantity != null ? `${qty(fl.effectiveQuantity * previewFactor)} ${unitLabel(fl.unit)}` : '-'}</td>}
                       <td className="px-1 py-1"><input disabled={!editable} value={c.notes ?? ''} onChange={(e) => updateLine(c.lineId, { notes: e.target.value })} className={inputClass} /></td>
                       <td className="px-1 py-1">
@@ -545,7 +636,42 @@ export const BomVersionsModal: React.FC<BomVersionsModalProps> = ({ isOpen, onCl
                   <span>{isAr ? 'الإضافات:' : 'Additives:'} <span className="font-black font-mono text-purple-700">+{pct(formula.additiveTotal)}%</span></span>
                   <span>{isAr ? 'إجمالي المطبق:' : 'Total Applied:'} <span className="font-black font-mono">{pct(formula.totalApplied)}%</span></span>
                   <span className="text-slate-500">{isAr ? 'الأساس:' : 'Basis:'} {formula.basisValid ? `${qty(formula.basisQuantity)} ${unitLabel(formula.basisUnit)}` : (isAr ? 'غير محدد' : 'not set')}</span>
+                  {costing && (
+                    <span id="bom-alumina-total">
+                      {isAr ? 'نسبة الألومينا الإجمالية:' : 'Total alumina:'}{' '}
+                      <span className="font-black font-mono">{formatShare(costing.aluminaTotal)}</span>
+                      {!costing.aluminaComplete && costing.lines.length > 0 && (
+                        <span className="text-amber-700"> ({isAr ? `غير مكتمل - ${costing.missingAlumina} بدون نسبة` : `incomplete - ${costing.missingAlumina} without a value`})</span>
+                      )}
+                    </span>
+                  )}
                 </div>
+                {isCostView && costing && (
+                  <div id="bom-cost-summary" className="flex flex-wrap items-center gap-x-5 gap-y-1 border-t border-slate-200 pt-2">
+                    <span>
+                      {isAr ? 'إجمالي تكلفة البند' : 'Total cost'} ({isAr ? PRICE_BASIS_LABELS[priceBasis].ar : PRICE_BASIS_LABELS[priceBasis].en}):{' '}
+                      <span className="font-black font-mono">{formatMoney(costing.totalCost)}</span> {isAr ? 'ج.م' : 'EGP'}
+                    </span>
+                    <span>{isAr ? 'قيمة المستورد:' : 'Imported value:'} <span className="font-black font-mono text-sky-800">{formatMoney(costing.importedValue)}</span> {isAr ? 'ج.م' : 'EGP'}</span>
+                    <span>{isAr ? 'نسبة المستورد:' : 'Imported share:'} <span className="font-black font-mono text-sky-800">{formatShare(costing.importedShare)}</span></span>
+                    {(costing.unvaluedLines > 0 || costing.missingOrigin > 0) && (
+                      <span className="w-full text-[11px] font-semibold text-amber-800">
+                        {costing.unvaluedLines > 0 && (isAr ? `${costing.unvaluedLines} مكون بدون قيمة - الإجمالي لا يشملها. ` : `${costing.unvaluedLines} component(s) without a value - not in the total. `)}
+                        {costing.missingOrigin > 0 && (isAr ? `${costing.missingOrigin} مكون غير محدد محلي/مستورد.` : `${costing.missingOrigin} component(s) not marked local / imported.`)}
+                        {onOpenComponentAttributes && (
+                          <button type="button" onClick={onOpenComponentAttributes} className="ms-2 underline font-bold text-sky-800 cursor-pointer">
+                            {isAr ? 'استكمال البيانات' : 'Complete the data'}
+                          </button>
+                        )}
+                      </span>
+                    )}
+                    <span className="w-full text-[10px] text-slate-500">
+                      {isAr
+                        ? 'القيم محسوبة لكمية الأساس. التحويل الوحيد المعتمد في التكلفة هو طن ↔ كجم (1 طن = 1000 كجم).'
+                        : 'Values are for the basis quantity. The only conversion approved for costing is ton <-> kg (1 ton = 1000 kg).'}
+                    </span>
+                  </div>
+                )}
                 {formulaIssues.length > 0 ? (
                   <ul id="bom-formula-issues" className="list-disc ps-5 font-bold text-rose-800 space-y-0.5">
                     {formulaIssues.map((i, n) => <li key={n}>{isAr ? i.messageAr : i.messageEn}</li>)}

@@ -122,6 +122,8 @@ import { OperationSeedModal } from './OperationSeedModal';
 import { SmartEntitySelect, SmartOption } from '../common/SmartEntitySelect';
 import { BomVersionsModal } from './BomVersionsModal';
 import { RecordDetailsModal } from './RecordDetailsModal';
+import { BomComponentAttributesModal } from './BomComponentAttributesModal';
+import { MATERIAL_ORIGIN_LABELS, readOrigin } from '../../services/bomCostingPure';
 import { ROW_CONTROL_SELECTOR } from '../../services/masterDataDetailsPure';
 import { RoutingVersionsModal } from './RoutingVersionsModal';
 /*
@@ -987,6 +989,8 @@ export const MasterDataView: React.FC<MasterDataViewProps> = ({ onNavigate }) =>
   const [openVersionOnLoad, setOpenVersionOnLoad] = useState<boolean>(false);
   /** The record whose details window is open (a double-click on any other row). */
   const [detailsItem, setDetailsItem] = useState<any | null>(null);
+  /** The BOM component attributes screen - alumina %, local / imported, prices (3.24.0). */
+  const [isComponentAttributesOpen, setIsComponentAttributesOpen] = useState<boolean>(false);
 
   /*
    * Products, customers and job references for the Job/Batch pickers and
@@ -2172,6 +2176,10 @@ export const MasterDataView: React.FC<MasterDataViewProps> = ({ onNavigate }) =>
       return text === String(value) ? null : text;
     }
     if (key === 'hierarchyNodeId') return hierarchyNodes.length ? hierarchyLabelFor(value) : null;
+    if (key === 'origin') {
+      const origin = readOrigin(value);
+      return origin ? (language === 'ar' ? MATERIAL_ORIGIN_LABELS[origin].ar : MATERIAL_ORIGIN_LABELS[origin].en) : null;
+    }
     return null;
   };
 
@@ -2615,6 +2623,23 @@ export const MasterDataView: React.FC<MasterDataViewProps> = ({ onNavigate }) =>
             <RefreshCw className={`w-3.5 h-3.5 ${isLoading ? 'animate-spin' : ''}`} />
             <span>{language === 'ar' ? 'تحديث' : 'Refresh'}</span>
           </button>
+
+          {/*
+            Alumina %, local / imported and the two prices of every material -
+            what the BOM cost view reads. Offered where BOMs and materials are.
+          */}
+          {(activeTab === 'boms' || activeTab === 'materials') && (
+            <button
+              id="master-data-bom-attributes-btn"
+              type="button"
+              onClick={() => setIsComponentAttributesOpen(true)}
+              className="flex items-center gap-1.5 px-3 py-2 text-xs font-bold text-sky-800 bg-sky-50 border border-sky-300 hover:bg-sky-100 rounded-xl transition-colors cursor-pointer"
+              title={language === 'ar' ? 'نسبة الألومينا ومحلي/مستورد وأسعار الخامات المستخدمة في تكلفة الـ BOM' : 'Alumina %, local / imported and the material prices the BOM cost view uses'}
+            >
+              <ListTree className="w-3.5 h-3.5 text-sky-600" />
+              <span>{language === 'ar' ? 'خصائص وأسعار مكونات BOM' : 'BOM component attributes & prices'}</span>
+            </button>
+          )}
 
           <button
             id="master-data-export-btn"
@@ -4889,6 +4914,17 @@ export const MasterDataView: React.FC<MasterDataViewProps> = ({ onNavigate }) =>
         materials={referenceMaterials}
         customerLabel={bomForVersions ? scopeLabel(bomForVersions.customerId) : ''}
         openVersionOnLoad={openVersionOnLoad}
+        onOpenComponentAttributes={() => setIsComponentAttributesOpen(true)}
+      />
+
+      <BomComponentAttributesModal
+        isOpen={isComponentAttributesOpen}
+        onClose={() => setIsComponentAttributesOpen(false)}
+        canEdit={canImportMasterData}
+        onSaved={() => {
+          // The BOM window values its lines from these materials - re-read them so it shows what was saved.
+          fetchMasterData<any>(MASTER_DATA_COLLECTIONS.materials, { skipCache: true }).then(setReferenceMaterials).catch(() => {});
+        }}
       />
 
       <RecordDetailsModal

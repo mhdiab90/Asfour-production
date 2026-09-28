@@ -298,7 +298,14 @@ test('16/17. a BOM is not Routing and embeds no operations, stages, equipment or
 
 test('18. BOM code never creates production, jobs, batches or costs', () => {
   const code = readCode(PURE) + readCode(SERVICE) + readCode(MODAL);
-  assert.equal(/stage_|'production'|productionService|stageRecordService|jobReferences|'batches'|financialTransactions|costing/i.test(code), false);
+  // 3.24.0: the versions window gained a read-only COST VIEW (bomCostingPure) at
+  // the user's request - it values the lines on screen and writes nothing. What
+  // this test guards is unchanged: BOM code never creates a cost record, a
+  // costing period, a snapshot or a financial transaction.
+  assert.equal(/stage_|'production'|productionService|stageRecordService|jobReferences|'batches'|financialTransactions|costingSetup|costingPeriod|periodCostSnapshot|costRecord/i.test(code), false);
+  const view = readCode('src/services/bomCostingPure.ts');
+  assert.equal(/firebase|getDocs|setDoc|updateDoc|addDoc|writeBatch|createMasterDataItem|updateMasterDataItem/.test(view), false,
+    'the cost view reads and writes nothing');
   const service = readCode(SERVICE);
   assert.equal(/deleteMasterDataItem|deleteDoc|writeBatch|setDoc/.test(service), false, 'no delete or raw writes');
   assert.equal((service.match(/createMasterDataItem\(/g) || []).length, 1);

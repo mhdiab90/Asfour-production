@@ -14,10 +14,24 @@
  * every printed page - the developer on the right, the issuing department
  * (Finance & Costing) in the centre - in a small but legible type.
  *
+ * 3.24.0: the columns follow the window - #, type, source, item CODE, item,
+ * alumina %, percentage, quantity, unit, and (in the cost view) the item's value
+ * - and the summary adds the mix's alumina %, and in the cost view the total
+ * cost, the imported value and the imported share, from bomCostingPure.
+ *
  * Pure: it builds a model and an HTML document and nothing else - the window
  * hands the document to the browser's print dialog. It reads nothing, writes
  * nothing and changes no BOM.
  */
+import {
+  BomView,
+  PRICE_BASIS_LABELS,
+  PriceBasis,
+  bomCosting,
+  formatMoney,
+  formatShare,
+  valueReasonLabel,
+} from './bomCostingPure';
 import {
   BOM_UNIT_LABELS,
   bomFormula,
@@ -30,7 +44,12 @@ export interface BomPrintLine {
   sequence: string;
   type: string;
   source: string;
+  /** The item's code - its own column (3.24.0). Empty when the item is not in the loaded lists. */
+  code: string;
   item: string;
+  /** "Imported" beside an imported item; empty otherwise. */
+  origin: string;
+  alumina: string;
   percentage: string;
   /** "= 12.5%" when the percentage is derived from the quantity, else empty. */
   percentageDerived: string;
@@ -41,6 +60,8 @@ export interface BomPrintLine {
   preview: string;
   notes: string;
   additive: boolean;
+  /** The item's value in the cost view, or why it has none. */
+  value: string;
 }
 
 export interface BomPrintModel {
@@ -65,7 +86,21 @@ export interface BomPrintModel {
     totalApplied: string;
     basis: string;
     issues: string[];
+    /** The mix's alumina %. */
+    aluminaTotal: string;
+    /** "(incomplete)" when a component has no alumina %, else empty - kept apart so it never sits inside the number. */
+    aluminaNote: string;
   };
+  view: BomView;
+  /** Set in the cost view. */
+  costing: {
+    priceBasisLabel: string;
+    totalCost: string;
+    importedValue: string;
+    importedShare: string;
+    /** What the totals do not cover - components without a value or an origin. */
+    notes: string[];
+  } | null;
   notes: string;
   printedAt: string;
   /** Absolute address of the company logo, or null to print without one. */
@@ -98,6 +133,11 @@ export function buildBomPrintModel(input: {
   printedAt: string;
   /** Absolute address of the company logo. */
   logoUrl?: string | null;
+  /** The product / material record of a component - codes, alumina, origin and prices come from it. */
+  lookup?: (source: string, id: string) => Record<string, any> | null | undefined;
+  /** QUANTITIES (default) or COST, as chosen in the window. */
+  view?: BomView;
+  priceBasis?: PriceBasis;
 }): BomPrintModel {
   const isAr = input.language === 'ar';
   const unitLabel = (u: string | null | undefined) =>
@@ -110,6 +150,10 @@ export function buildBomPrintModel(input: {
     ? previewValue / (formula.basisQuantity as number)
     : null;
   const basis = formula.basisValid ? `${qty(formula.basisQuantity)} ${unitLabel(formula.basisUnit)}` : (isAr ? 'غير محدد' : 'not set');
+  const view: BomView = input.view ?? 'QUANTITIES';
+  const priceBasis: PriceBasis = input.priceBasis ?? 'LAST_PURCHASE';
+  const costing = bomCosting(normalised, input.lookup ?? (() => null), priceBasis);
+  const costed = (lineId: string) => costing.lines.find((l) => l.lineId === lineId) ?? null;
 
   const lines: BomPrintLine[] = [...normalised.components]
     .sort((a, b) => (a.sequence ?? 0) - (b.sequence ?? 0))
@@ -120,7 +164,10 @@ export function buildBomPrintModel(input: {
         sequence: String(c.sequence ?? ''),
         type: additive ? (isAr ? '+ إضافة' : '+ Additive') : (isAr ? 'خلطة أساسية' : 'Base formula'),
         source: c.itemSource === 'products' ? (isAr ? 'منتج' : 'Product') : (isAr ? 'خامة' : 'Material'),
-        item: input.itemLabel(c.itemSource, c.itemId),
+        code: costed(c.lineId)?.attributes.code ?? '',
+        item: costed(c.lineId)?.attributes.found ? (costed(c.lineId)?.attributes.name || input.itemLabel(c.itemSource, c.itemId)) : input.itemLabel(c.itemSource, c.itemId),
+        origin: costed(c.lineId)?.attributes.origin === 'IMPORTED' ? (isAr ? 'مستورد' : 'Imported') : '',
+        alumina: costed(c.lineId)?.attributes.aluminaPercentage != null ? `${pct(costed(c.lineId)?.attributes.aluminaPercentage as number)}%` : '-',
         percentage: formatFormulaPercentage(fl?.componentType ?? 'BASE', fl?.percentage),
         percentageDerived: fl?.percentageDerived ? `= ${formatFormulaPercentage(fl.componentType, fl.effectivePercentage)}` : '',
         quantity: typeof c.quantity === 'number' && Number.isFinite(c.quantity) ? qty(c.quantity) : '-',
@@ -131,8 +178,19 @@ export function buildBomPrintModel(input: {
           : '',
         notes: c.notes || '',
         additive,
+        value: costed(c.lineId)?.value != null
+          ? formatMoney(costed(c.lineId)?.value)
+          : valueReasonLabel(costed(c.lineId)?.valueReason ?? 'NO_PRICE', input.language),
       };
     });
+
+  const costNotes: string[] = [];
+  if (costing.unvaluedLines > 0) {
+    costNotes.push(isAr ? `${costing.unvaluedLines} مكون بدون قيمة - الإجمالي لا يشملها.` : `${costing.unvaluedLines} component(s) without a value - not in the total.`);
+  }
+  if (costing.missingOrigin > 0) {
+    costNotes.push(isAr ? `${costing.missingOrigin} مكون غير محدد محلي/مستورد.` : `${costing.missingOrigin} component(s) not marked local / imported.`);
+  }
 
   return {
     language: input.language,
@@ -159,7 +217,19 @@ export function buildBomPrintModel(input: {
       totalApplied: `${pct(formula.totalApplied)}%`,
       basis,
       issues: issues.map((i) => (isAr ? i.messageAr : i.messageEn)),
+      aluminaTotal: formatShare(costing.aluminaTotal),
+      aluminaNote: costing.aluminaTotal !== null && !costing.aluminaComplete ? (isAr ? '(غير مكتمل)' : '(incomplete)') : '',
     },
+    view,
+    costing: view === 'COST'
+      ? {
+        priceBasisLabel: isAr ? PRICE_BASIS_LABELS[priceBasis].ar : PRICE_BASIS_LABELS[priceBasis].en,
+        totalCost: formatMoney(costing.totalCost),
+        importedValue: formatMoney(costing.importedValue),
+        importedShare: formatShare(costing.importedShare),
+        notes: costNotes,
+      }
+      : null,
     notes: normalised.notes,
     printedAt: input.printedAt,
     logoUrl: input.logoUrl || null,
@@ -182,6 +252,8 @@ export function bomPrintHtml(model: BomPrintModel): string {
   const e = escapeHtml;
   const L = (ar: string, en: string) => e(isAr ? ar : en);
   const withPreview = model.previewHeader !== null;
+  const withValue = model.costing !== null;
+  const columns = 10 + (withPreview ? 1 : 0) + (withValue ? 1 : 0);
 
   const headerRows: Array<[string, string]> = [
     [isAr ? 'كود قائمة المواد' : 'BOM code', model.bomCode],
@@ -197,16 +269,19 @@ export function bomPrintHtml(model: BomPrintModel): string {
   ];
 
   const lineRows = model.lines.length === 0
-    ? `<tr><td colspan="${withPreview ? 9 : 8}" class="empty">${L('لا توجد مكونات', 'No components')}</td></tr>`
+    ? `<tr><td colspan="${columns}" class="empty">${L('لا توجد مكونات', 'No components')}</td></tr>`
     : model.lines.map((l) => `
         <tr class="${l.additive ? 'additive' : ''}">
           <td class="num">${e(l.sequence)}</td>
           <td>${e(l.type)}</td>
           <td>${e(l.source)}</td>
-          <td class="item">${e(l.item)}</td>
+          <td class="num code">${e(l.code || '-')}</td>
+          <td class="item">${e(l.item)}${l.origin ? ` <span class="origin">${e(l.origin)}</span>` : ''}</td>
+          <td class="num">${e(l.alumina)}</td>
           <td class="num">${e(l.percentage)}${l.percentageDerived ? `<div class="derived">${e(l.percentageDerived)}</div>` : ''}</td>
           <td class="num">${e(l.quantity)}${l.quantityDerived ? `<div class="derived">${e(l.quantityDerived)}</div>` : ''}</td>
           <td>${e(l.unit)}</td>
+          ${withValue ? `<td class="num strong">${e(l.value)}</td>` : ''}
           ${withPreview ? `<td class="num strong">${e(l.preview)}</td>` : ''}
           <td>${e(l.notes)}</td>
         </tr>`).join('');
@@ -246,7 +321,12 @@ export function bomPrintHtml(model: BomPrintModel): string {
   .lines tr.additive td { background: #faf5ff; }
   .num { font-family: Consolas, 'Courier New', monospace; direction: ltr; unicode-bidi: plaintext; }
   .strong { font-weight: 700; }
-  .item { width: 30%; }
+  .item { width: 26%; }
+  .code { white-space: nowrap; }
+  .origin { display: inline-block; margin-inline-start: 4px; padding: 0 4px; border-radius: 3px; background: #e0f2fe; color: #075985; font-size: 9px; font-weight: 700; }
+  .cost { margin-top: 6px; border: 1px solid #0f172a; padding: 6px 8px; display: flex; gap: 18px; flex-wrap: wrap; font-weight: 700; background: #f8fafc; }
+  .incomplete { color: #9a3412; font-weight: 600; font-size: 10px; }
+  .cost .note { width: 100%; font-weight: 600; color: #9a3412; font-size: 10px; }
   .derived { color: #64748b; font-size: 9px; }
   .empty { text-align: center; color: #94a3b8; padding: 12px; }
   .summary { margin-top: 10px; border: 1px solid #cbd5e1; padding: 6px 8px; display: flex; gap: 18px; flex-wrap: wrap; font-weight: 700; }
@@ -284,10 +364,13 @@ export function bomPrintHtml(model: BomPrintModel): string {
         <th>#</th>
         <th>${L('النوع', 'Type')}</th>
         <th>${L('المصدر', 'Source')}</th>
+        <th>${L('كود الصنف', 'Item code')}</th>
         <th>${L('الصنف', 'Item')}</th>
-        <th>%</th>
+        <th>${L('الألومينا %', 'Alumina %')}</th>
+        <th>${L('النسبة %', '%')}</th>
         <th>${e(model.quantityHeader)}</th>
         <th>${L('الوحدة', 'Unit')}</th>
+        ${withValue ? `<th>${L('قيمة الصنف (ج.م)', 'Item value (EGP)')}</th>` : ''}
         ${withPreview ? `<th>${e(model.previewHeader)}</th>` : ''}
         <th>${L('ملاحظات', 'Notes')}</th>
       </tr>
@@ -301,7 +384,16 @@ export function bomPrintHtml(model: BomPrintModel): string {
     <span>${L('الإضافات', 'Additives')}: <b class="pct">${e(model.summary.additiveTotal)}</b></span>
     <span>${L('إجمالي المطبق', 'Total Applied')}: <b class="pct">${e(model.summary.totalApplied)}</b></span>
     <span>${L('الأساس', 'Basis')}: <b>${e(model.summary.basis)}</b></span>
+    <span>${L('نسبة الألومينا الإجمالية', 'Total alumina')}: <b class="pct">${e(model.summary.aluminaTotal)}</b>${model.summary.aluminaNote ? ` <span class="incomplete">${e(model.summary.aluminaNote)}</span>` : ''}</span>
   </div>
+  ${model.costing ? `
+  <div class="cost" id="bom-print-cost">
+    <span>${L('إجمالي تكلفة البند', 'Total cost')} (${e(model.costing.priceBasisLabel)}): <b class="pct">${e(model.costing.totalCost)}</b> ${L('ج.م', 'EGP')}</span>
+    <span>${L('قيمة المستورد', 'Imported value')}: <b class="pct">${e(model.costing.importedValue)}</b> ${L('ج.م', 'EGP')}</span>
+    <span>${L('نسبة المستورد', 'Imported share')}: <b class="pct">${e(model.costing.importedShare)}</b></span>
+    <span>${L('نسبة الألومينا الإجمالية', 'Total alumina')}: <b class="pct">${e(model.summary.aluminaTotal)}</b>${model.summary.aluminaNote ? ` <span class="incomplete">${e(model.summary.aluminaNote)}</span>` : ''}</span>
+    ${model.costing.notes.map((n) => `<span class="note">${e(n)}</span>`).join('')}
+  </div>` : ''}
   ${issues}
 
   <div class="notes"><b>${L('ملاحظات الإصدار', 'Version notes')}:</b> ${e(model.notes)}</div>

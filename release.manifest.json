@@ -1,10 +1,10 @@
 {
   "_doc": "Release Manifest precursor. Describes WHAT is being released so the gate checks a committed declaration rather than whatever flags an operator typed. commitSha/buildId/deploymentId are left null until a release is cut - the gate fills the comparison from the build itself, and only enforces a field that is set here. This is NOT the Change Registry: no change IDs, no Firestore, no UI.",
-  "version": "3.23.0",
-  "releaseId": "REL-2026-0031",
+  "version": "3.24.0",
+  "releaseId": "REL-2026-0032",
   "changeIds": [
-    "MOD-0046",
-    "UI-0047"
+    "MOD-0048",
+    "MOD-0049"
   ],
   "commitSha": null,
   "buildId": null,
@@ -58,7 +58,11 @@
     "master-data-record-details",
     "master-data-double-click-hint",
     "bom-print-footer",
-    "bom-print-logo"
+    "bom-print-logo",
+    "bom-view-cost-btn",
+    "bom-cost-summary",
+    "bom-component-attributes-modal",
+    "master-data-bom-attributes-btn"
   ],
   "_markerNotes": {
     "ai-provider-management": "AI Provider Management route - absent means the AI Assistant closure was dropped",
@@ -109,7 +113,11 @@
     "master-data-record-details": "The details window a double-click on a Master Data row opens - absent means double-click details were dropped",
     "master-data-double-click-hint": "The hint under the table that a row opens on double-click",
     "bom-print-footer": "The footer of the printed mixture (developer / Finance & Costing) - absent means the print lost its footer",
-    "bom-print-logo": "The company logo on the printed mixture - absent means the print lost its logo"
+    "bom-print-logo": "The company logo on the printed mixture - absent means the print lost its logo",
+    "bom-view-cost-btn": "The BOM window's cost view - absent means the BOM can again only be read as quantities",
+    "bom-cost-summary": "The BOM total cost / imported value / imported share line - absent means the cost view lost its totals",
+    "bom-component-attributes-modal": "The screen that sets alumina %, local / imported and the material prices the cost view reads",
+    "master-data-bom-attributes-btn": "The Master Data entry point to the BOM component attributes screen"
   },
   "tests": [
     "buildIdentity",
@@ -164,11 +172,14 @@
     "masterDataLazyLoad",
     "masterDataBrowse",
     "bomPrint",
-    "masterDataDetails"
+    "masterDataDetails",
+    "bomCosting"
   ],
   "deployCommand": "firebase deploy --only hosting --project asfourproduction-70e6e",
   "treeClean": true,
   "_changeNotes": {
+    "MOD-0048": "BOM cost view. The versions window shows the components as # / type / source / item code / item / alumina % / % / quantity / unit / item value, and offers QUANTITIES only (as before) or COST, valued at the LAST_PURCHASE price or the AVERAGE_ISSUE price of each material (the costing design's PRICING_REFERENCE_PRICE and ACTUAL_ISSUE_COST, held on the material). Value of a line = its quantity for the basis x the price, per the material's price unit; a unit other than the price unit is converted only through the COSTING conversion approved here, طن <-> كجم (1000, a physical identity) - any other pair, a missing unit, a missing price or a missing quantity leaves the line without a value, with the reason, and out of the total (never zero). Below: total cost of the item, imported value (sum of the IMPORTED components) and its share of the total, and the mix's alumina % (weighted by effective percentage; a component without alumina marks it incomplete instead of counting as 0). Products used as components count as LOCAL with their own alumina and no price. The print follows the chosen view. Pure computation (bomCostingPure.ts) - nothing is read or written to cost a BOM",
+    "MOD-0049": "BOM component attributes screen (Master Data -> BOM or Materials). Every material with its alumina %, LOCAL / IMPORTED, last purchase price, average issue price, price unit and price date, with search and a 'missing only' filter. Saves write ONLY the changed fields of each changed material through updateMasterDataItem (sanitised, cache-invalidating, audited), one bounded write at a time, validated first (alumina 0-100, prices >= 0, known origin and unit); an emptied field is cleared (null), never zeroed; a failed row keeps its edit and says why. Behind the existing Master Data edit gate (canImportMasterData); read-only otherwise. Prices entered here are the costing design's MANUAL_APPROVED_INPUT source. New optional Material fields: origin, lastPurchasePrice, averageIssuePrice, priceUnit, pricesUpdatedAt (aluminaPercentage already existed). No Firestore rule, import, or existing data changed",
     "MOD-0046": "Double-click a Master Data row to open it in full. A BOM opens its versions window with the ACTIVE version (else the newest; versionToShowFirst) already open - its complete components, and the Print mixture button; a routing opens with its active version's steps; any other record opens a read-only details window listing every field it carries (recordDetailFields: identity first, the rest alphabetically, bookkeeping last; only the search-index ...Normalized copies are hidden; ids shown as the label the table shows; timestamps in the viewer's local time). A double-click on the row's checkbox or action buttons is ignored, and the row's own versions buttons still open the plain list. Nothing is read or written to open a record - it is the row already on screen",
     "UI-0047": "Under Products the sections now read Routing, BOM, Products (registry subCategoryIds order); opening Products still lands on the Products list. The printed mixture carries the company logo (the app's branding logo, as an absolute address, waited for up to 3 s before the print dialog) at the top left, and a footer repeated on every printed page - 'Developed by MHDIAB' on the right and 'إدارة المالية والتكاليف' in the centre, 8.5 px semibold",
     "PERF-0044": "Master Data sections open one screen at a time. 3.21.6 stopped the screen reading before a section was chosen, but choosing Products still attached a listener to the whole products collection and rendered every record - a long wait and a full read for a user who usually wants one record. Now a section opens with one page (window height / 40 px, 20-50 rows) read with orderBy(documentId()) + limit - the order the old listener delivered - and the total from getCountFromServer (reads no documents). The search box asks the SERVER: one limited single-field range query per search field (the category's own code/name fields) per form of the term (as typed / upper / lower), debounced 400 ms, from 2 characters, stale answers dropped, bounded by a 30 s timeout. Firestore has no 'contains', so the server search matches the START of a code or name, and the screen says so; \"Load all data\" attaches the previous full live listener on request, after which the existing local search matches any part of any field again. The Products prefix filter is answered by an equality query. The table renders one screen of the matched rows with Show more / Show all; selection, export and counts still cover every match. Hierarchies (financial accounts, cost centres) and the small reference lists (product types, operations) still open whole - a tree needs its parents. VALIDATION IS NOT WEAKENED: every save / status change whose rule compares against all records (financial accounts, operations, tube-ball mills, bunkers, rotary kilns, job references, batches, BOMs, routings) binds `items` to the FULL list (read once if not in hand, bounded 60 s, refused on failure) - never the page; Analyze Current Codes still analyses every product. A page is not live, so a saved / toggled / deleted row is re-read by id (one document) or dropped. Pages and search results are never written to the collection cache. Opening one BOM now reads only its own versions (where bomId ==, no limit, so the version rules still see every version of that BOM) instead of the whole bomVersions collection. No business rule, permission, audit, importer, Firestore rule or data changed",
@@ -209,8 +220,8 @@
     "UI-0010": "Financial Accounts import opens a dedicated Master Data importer instead of the Historical Excel Import screen: the action no longer navigates to the bulk-entry route (which App.tsx renders as DataImportView); a new in-place modal reuses the existing financialAccounts schema, XLSX reader, row validation, duplicate detection and chunked commit, adds sheet selection and parent/cycle relationship checks, and keeps partial import so invalid rows never block valid ones",
     "DB-0009": "Category-first Master Data over an extensible registry; Financial Accounts master data with Excel import and hierarchical editing (new financialAccounts collection and its Firestore rule); one shared generic hierarchy resolver reused by Master Data, Production Review and production aggregation; hierarchical cost-centre editing with cycle, self-parent and unknown-parent protection"
   },
-  "previousVersion": "3.22.0",
+  "previousVersion": "3.23.0",
   "versionBump": "MINOR",
   "classificationConfidence": "HIGH",
-  "previousReleaseId": "REL-2026-0030"
+  "previousReleaseId": "REL-2026-0031"
 }

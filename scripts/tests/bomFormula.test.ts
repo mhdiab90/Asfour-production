@@ -298,8 +298,15 @@ test('19v/27. the legacy bag spelling scales against a "شكارة" basis; other
 });
 
 test('28. quantities only - no cost, price or money anywhere in the formula or variance code', () => {
-  const code = [BOM_PURE, VARIANCE, VARIANCE_PANEL, MODAL].map(readCode).join('\n').replace(/['"`][^'"`\n]*['"`]/g, '""');
+  // 3.24.0: the BOM WINDOW (MODAL) gained a cost view at the user's request, so
+  // it is no longer in this list. The formula and the variance stay quantity-only
+  // exactly as before, and the window's prices come only from the separate,
+  // read-only bomCostingPure module - never from the formula.
+  const code = [BOM_PURE, VARIANCE, VARIANCE_PANEL].map(readCode).join('\n').replace(/['"`][^'"`\n]*['"`]/g, '""');
   assert.equal(/costPerUnit|unitCost|totalCost|standardCost|actualCost|materialRate|price|currency|overhead/i.test(code), false);
+  const modal = readCode(MODAL);
+  assert.ok(/from '\.\.\/\.\.\/services\/bomCostingPure'/.test(modal), 'the window prices lines through the cost view module');
+  assert.equal(/costPerUnit|standardCost|actualCost|materialRate|overhead/i.test(modal), false, 'and through nothing else');
 });
 
 // ==================================================
