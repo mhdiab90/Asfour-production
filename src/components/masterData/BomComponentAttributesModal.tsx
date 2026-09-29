@@ -196,7 +196,7 @@ export const BomComponentAttributesModal: React.FC<BomComponentAttributesModalPr
               className="flex items-center gap-1.5 px-3 py-2 font-bold text-emerald-800 bg-emerald-50 border border-emerald-200 hover:bg-emerald-100 rounded-xl cursor-pointer disabled:opacity-50"
             >
               <UploadCloud className="w-3.5 h-3.5" />
-              {isAr ? 'استيراد الأسعار من Excel' : 'Import prices from Excel'}
+              {isAr ? 'استيراد من Excel' : 'Import from Excel'}
             </button>
           )}
           {canEdit && (

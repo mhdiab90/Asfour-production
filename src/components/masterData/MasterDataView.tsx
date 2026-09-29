@@ -2657,10 +2657,10 @@ export const MasterDataView: React.FC<MasterDataViewProps> = ({ onNavigate }) =>
               type="button"
               onClick={() => setIsPriceImportOpen(true)}
               className="flex items-center gap-1.5 px-3 py-2 text-xs font-bold text-emerald-800 bg-emerald-50 border border-emerald-300 hover:bg-emerald-100 rounded-xl transition-colors cursor-pointer"
-              title={language === 'ar' ? 'استيراد آخر سعر شراء ومتوسط سعر المنصرف للخامات من ملف Excel' : 'Import the last purchase and average issue prices of materials from an Excel file'}
+              title={language === 'ar' ? 'استيراد أسعار الخامات ونسبة الألومينا ومحلي/مستورد من ملف Excel' : 'Import material prices, alumina % and local / imported from an Excel file'}
             >
               <UploadCloud className="w-3.5 h-3.5 text-emerald-600" />
-              <span>{language === 'ar' ? 'استيراد أسعار الخامات' : 'Import material prices'}</span>
+              <span>{language === 'ar' ? 'استيراد خصائص وأسعار الخامات' : 'Import material data'}</span>
             </button>
           )}
 

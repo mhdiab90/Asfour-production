@@ -1,5 +1,6 @@
 /**
- * Material price import from Excel (3.25.0).
+ * Material price import from Excel (3.25.0) - and, since 3.26.0, the alumina %
+ * and LOCAL / IMPORTED of each material from the same sheet.
  *
  * One row per material, matched by its code: the last purchase price, the
  * average issue price and, optionally, the unit the prices are per. The file is
@@ -26,8 +27,9 @@ import { BOM_UNIT_LABELS } from '../../services/bomPure';
 import { fetchMasterData, updateMasterDataItem, MASTER_DATA_COLLECTIONS } from '../../services/masterDataService';
 import { listImportSheetNames, parseImportFile } from '../../services/bulkImportService';
 import { logAuditAction } from '../../services/auditService';
-import { formatMoney } from '../../services/bomCostingPure';
+import { MATERIAL_ORIGIN_LABELS, MaterialOrigin, formatMoney } from '../../services/bomCostingPure';
 import {
+  DATA_COLUMNS,
   PRICE_COLUMNS,
   PRICE_COLUMN_LABELS,
   PRICE_ROW_ERROR_LABELS,
@@ -134,8 +136,8 @@ export const MaterialPriceImportModal: React.FC<MaterialPriceImportModalProps> =
   );
   const mappingIssue = !mapping.code
     ? (isAr ? 'اختر عمود كود الخامة.' : 'Choose the material code column.')
-    : !mapping.lastPurchasePrice && !mapping.averageIssuePrice
-      ? (isAr ? 'اختر عمود سعر واحد على الأقل.' : 'Choose at least one price column.')
+    : !DATA_COLUMNS.some((c) => mapping[c])
+      ? (isAr ? 'اختر عمودًا واحدًا على الأقل من: آخر سعر شراء، متوسط سعر المنصرف، نسبة الألومينا، محلي / مستورد.' : 'Choose at least one of: last purchase price, average issue price, alumina %, local / imported.')
       : null;
   const visibleRows = useMemo(
     () => (plan ? plan.rows.filter((r) => filter === 'ALL' || r.status === filter) : []),
@@ -145,8 +147,8 @@ export const MaterialPriceImportModal: React.FC<MaterialPriceImportModalProps> =
   const handleDownloadTemplate = () => {
     const ws = XLSX.utils.json_to_sheet(priceTemplateRows(materials, isAr ? 'ar' : 'en'));
     const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, isAr ? 'أسعار الخامات' : 'Material prices');
-    XLSX.writeFile(wb, `ASFOUR_Material_Prices_${new Date().toISOString().slice(0, 10)}.xlsx`);
+    XLSX.utils.book_append_sheet(wb, ws, isAr ? 'خصائص وأسعار الخامات' : 'Material data');
+    XLSX.writeFile(wb, `ASFOUR_Material_Data_${new Date().toISOString().slice(0, 10)}.xlsx`);
   };
 
   /** Writes every READY row, one bounded write at a time; stops nothing else on a failure. */
@@ -154,8 +156,8 @@ export const MaterialPriceImportModal: React.FC<MaterialPriceImportModalProps> =
     if (!canImport || !plan || mappingIssue || plan.ready === 0) return;
     const ready = plan.rows.filter((r) => r.status === 'READY' && r.materialId);
     if (!window.confirm(isAr
-      ? `سيتم تحديث أسعار ${ready.length} خامة. متابعة؟`
-      : `Prices of ${ready.length} material(s) will be updated. Continue?`)) return;
+      ? `سيتم تحديث بيانات ${ready.length} خامة. متابعة؟`
+      : `${ready.length} material(s) will be updated. Continue?`)) return;
     setIsImporting(true);
     setResult(null);
     setProgress({ done: 0, total: ready.length });
@@ -180,14 +182,14 @@ export const MaterialPriceImportModal: React.FC<MaterialPriceImportModalProps> =
         'BULK_IMPORT',
         MASTER_DATA_COLLECTIONS.materials,
         'material-prices',
-        `استيراد أسعار الخامات من Excel (${file?.name ?? ''}${sheet ? ` / ${sheet}` : ''}): تم تحديث ${written} خامة${failed ? `، تعذر ${failed}` : ''}`,
+        `استيراد خصائص وأسعار الخامات من Excel (${file?.name ?? ''}${sheet ? ` / ${sheet}` : ''}): تم تحديث ${written} خامة${failed ? `، تعذر ${failed}` : ''}`,
       ).catch(() => {});
       onImported?.();
     }
     setWriteErrors(errors);
     setIsImporting(false);
     setResult(isAr
-      ? `تم تحديث أسعار ${written} خامة${failed ? ` - تعذر ${failed}، راجع الأسطر المعلّمة` : ''}.`
+      ? `تم تحديث بيانات ${written} خامة${failed ? ` - تعذر ${failed}، راجع الأسطر المعلّمة` : ''}.`
       : `${written} material(s) updated${failed ? ` - ${failed} failed, see the marked rows` : ''}.`);
     // Re-read, so the preview now compares against what was written (written rows turn UNCHANGED).
     await loadMaterials();
@@ -200,6 +202,13 @@ export const MaterialPriceImportModal: React.FC<MaterialPriceImportModalProps> =
       ? <span className="font-mono">{formatMoney(to)}</span>
       : <span className="font-mono"><span className="text-slate-400 line-through">{formatMoney(from)}</span> <span className="font-black text-emerald-700">{formatMoney(to)}</span></span>
   );
+  const valueCell = (from: string, to: string) => (
+    from === to
+      ? <span>{to}</span>
+      : <span><span className="text-slate-400 line-through">{from}</span> <span className="font-black text-emerald-700">{to}</span></span>
+  );
+  const aluminaText = (v: number | null) => (v === null ? '-' : `${v.toLocaleString('en-US', { maximumFractionDigits: 2 })}%`);
+  const originText = (v: MaterialOrigin | null) => (v ? (isAr ? MATERIAL_ORIGIN_LABELS[v].ar : MATERIAL_ORIGIN_LABELS[v].en) : '-');
   const statusBadge = (r: PlannedPriceRow) => {
     if (writeErrors[r.rowNumber]) return <span className="px-1.5 rounded bg-rose-100 text-rose-800 font-bold">{isAr ? 'فشل الحفظ' : 'Save failed'}</span>;
     if (r.status === 'READY') return <span className="px-1.5 rounded bg-emerald-100 text-emerald-800 font-bold">{isAr ? 'جاهز' : 'Ready'}</span>;
@@ -212,10 +221,10 @@ export const MaterialPriceImportModal: React.FC<MaterialPriceImportModalProps> =
       id="material-price-import-modal"
       isOpen={isOpen}
       onClose={() => { if (!isImporting) onClose(); }}
-      title={isAr ? 'استيراد أسعار الخامات من Excel' : 'Import material prices from Excel'}
+      title={isAr ? 'استيراد خصائص وأسعار الخامات من Excel' : 'Import material data from Excel'}
       subtitle={isAr
-        ? 'آخر سعر شراء ومتوسط سعر المنصرف لكل خامة، بالربط على كود الخامة'
-        : 'Last purchase price and average issue price per material, matched by material code'}
+        ? 'آخر سعر شراء، متوسط سعر المنصرف، نسبة الألومينا، ومحلي أو مستورد - بالربط على كود الخامة'
+        : 'Last purchase price, average issue price, alumina % and local / imported - matched by material code'}
       maxWidth="4xl"
     >
       <div className="space-y-3 text-xs" dir={isAr ? 'rtl' : 'ltr'}>
@@ -249,7 +258,7 @@ export const MaterialPriceImportModal: React.FC<MaterialPriceImportModalProps> =
             onClick={handleDownloadTemplate}
             disabled={isLoadingMaterials || materials.length === 0}
             className="flex items-center gap-1.5 px-3 py-2 font-bold text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-xl cursor-pointer disabled:opacity-50 ms-auto"
-            title={isAr ? 'كل الخامات بأسعارها الحالية - املأ الأسعار ثم استورد نفس الملف' : 'Every material with its current prices - fill in the prices, then import the same file'}
+            title={isAr ? 'كل الخامات ببياناتها الحالية - املأ الناقص ثم استورد نفس الملف' : 'Every material with its current data - fill in what is missing, then import the same file'}
           >
             <Download className="w-3.5 h-3.5" />
             {isAr ? 'تحميل نموذج Excel' : 'Download template'}
@@ -263,7 +272,7 @@ export const MaterialPriceImportModal: React.FC<MaterialPriceImportModalProps> =
         {headers.length > 0 && (
           <div id="material-price-import-mapping" className="border border-slate-200 rounded-xl p-3 space-y-2">
             <p className="font-black text-slate-700">{isAr ? 'ربط الأعمدة' : 'Columns'}</p>
-            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+            <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
               {PRICE_COLUMNS.map((field) => (
                 <label key={field} className="space-y-1">
                   <span className="font-bold text-slate-600">
@@ -285,8 +294,8 @@ export const MaterialPriceImportModal: React.FC<MaterialPriceImportModalProps> =
             {mappingIssue && <p className="font-bold text-amber-800">{mappingIssue}</p>}
             <p className="text-[10px] text-slate-500">
               {isAr
-                ? 'الخلية الفارغة في عمود السعر تترك السعر الحالي كما هو. عمود الوحدة اختياري؛ إن لم يُحدد تبقى وحدة السعر الحالية.'
-                : 'An empty price cell leaves that price as it is. The unit column is optional; without it the current price unit is kept.'}
+                ? 'الخلية الفارغة تترك القيمة الحالية كما هي. نسبة الألومينا من 0 إلى 100، ومحلي/مستورد تُكتب "محلي" أو "مستورد". عمود الوحدة اختياري.'
+                : 'An empty cell leaves the current value as it is. Alumina is 0 to 100; write "Local" or "Imported". The unit column is optional.'}
             </p>
           </div>
         )}
@@ -319,7 +328,7 @@ export const MaterialPriceImportModal: React.FC<MaterialPriceImportModalProps> =
                   {isImporting ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <UploadCloud className="w-3.5 h-3.5" />}
                   {isImporting && progress
                     ? (isAr ? `جاري الحفظ ${progress.done} / ${progress.total}` : `Saving ${progress.done} / ${progress.total}`)
-                    : (isAr ? `استيراد الأسعار (${plan.ready})` : `Import prices (${plan.ready})`)}
+                    : (isAr ? `استيراد البيانات (${plan.ready})` : `Import (${plan.ready})`)}
                 </button>
               ) : (
                 <span className="ms-auto font-semibold text-slate-500">{isAr ? 'للمراجعة فقط - لا تملك صلاحية تعديل البيانات الأساسية.' : 'Review only - you do not have permission to edit Master Data.'}</span>
@@ -328,7 +337,7 @@ export const MaterialPriceImportModal: React.FC<MaterialPriceImportModalProps> =
             {result && <p id="material-price-import-result" className="font-bold text-slate-800 bg-emerald-50 border border-emerald-200 rounded-xl px-3 py-2">{result}</p>}
 
             <div className="border border-slate-200 rounded-xl overflow-auto max-h-[50vh]">
-              <table id="material-price-import-preview" className="w-full text-[11px] min-w-[860px]">
+              <table id="material-price-import-preview" className="w-full text-[11px] min-w-[1040px]">
                 <thead className="bg-slate-50 text-slate-600 sticky top-0 z-10">
                   <tr>
                     <th className="text-start px-2 py-2">{isAr ? 'السطر' : 'Row'}</th>
@@ -337,12 +346,14 @@ export const MaterialPriceImportModal: React.FC<MaterialPriceImportModalProps> =
                     <th className="text-start px-2 py-2">{isAr ? 'آخر سعر شراء' : 'Last purchase price'}</th>
                     <th className="text-start px-2 py-2">{isAr ? 'متوسط سعر المنصرف' : 'Average issue price'}</th>
                     <th className="text-start px-2 py-2">{isAr ? 'السعر لكل' : 'Per'}</th>
+                    <th className="text-start px-2 py-2">{isAr ? 'الألومينا %' : 'Alumina %'}</th>
+                    <th className="text-start px-2 py-2">{isAr ? 'محلي / مستورد' : 'Local / Imported'}</th>
                     <th className="text-start px-2 py-2">{isAr ? 'الحالة' : 'Status'}</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
                   {visibleRows.length === 0 && (
-                    <tr><td colSpan={7} className="px-3 py-6 text-center text-slate-400">{isAr ? 'لا توجد أسطر' : 'No rows'}</td></tr>
+                    <tr><td colSpan={9} className="px-3 py-6 text-center text-slate-400">{isAr ? 'لا توجد أسطر' : 'No rows'}</td></tr>
                   )}
                   {visibleRows.slice(0, 1000).map((r) => (
                     <tr key={r.rowNumber} className={r.status === 'ERROR' || writeErrors[r.rowNumber] ? 'bg-rose-50/50' : r.status === 'READY' ? 'bg-emerald-50/40' : ''}>
@@ -352,6 +363,8 @@ export const MaterialPriceImportModal: React.FC<MaterialPriceImportModalProps> =
                       <td className="px-2 py-1.5">{priceCell(r.current.lastPurchasePrice, r.next.lastPurchasePrice)}</td>
                       <td className="px-2 py-1.5">{priceCell(r.current.averageIssuePrice, r.next.averageIssuePrice)}</td>
                       <td className="px-2 py-1.5">{unitLabel(r.next.priceUnit)}</td>
+                      <td className="px-2 py-1.5 font-mono">{valueCell(aluminaText(r.current.aluminaPercentage), aluminaText(r.next.aluminaPercentage))}</td>
+                      <td className="px-2 py-1.5">{valueCell(originText(r.current.origin), originText(r.next.origin))}</td>
                       <td className="px-2 py-1.5">
                         {statusBadge(r)}
                         {r.errors.length > 0 && (

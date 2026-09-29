@@ -188,7 +188,7 @@ test('D1. download the template, fill a price, import it back: exactly that pric
   const back = XLSX.read(new Uint8Array(buffer), { type: 'array' });
   const rows = XLSX.utils.sheet_to_json(back.Sheets[back.SheetNames[0]], { defval: '' });
   const mapping = p.detectPriceColumns(Object.keys(rows[0]));
-  assert.deepEqual(Object.keys(mapping).sort(), ['averageIssuePrice', 'code', 'lastPurchasePrice', 'priceUnit'], 'every column recognised');
+  assert.deepEqual(Object.keys(mapping).sort(), ['aluminaPercentage', 'averageIssuePrice', 'code', 'lastPurchasePrice', 'origin', 'priceUnit'], 'every column recognised');
   const res = p.planPriceImport(rows, mapping, MATERIALS, NOW);
   const ready = res.rows.filter((r: any) => r.status === 'READY');
   assert.equal(ready.length, 1, 'only the edited row');
@@ -199,7 +199,82 @@ test('D1. download the template, fill a price, import it back: exactly that pric
 
 test('D2. the English template is recognised too', () => {
   const rows = p.priceTemplateRows(MATERIALS.slice(0, 1), 'en');
-  assert.deepEqual(Object.keys(p.detectPriceColumns(Object.keys(rows[0]))).sort(), ['averageIssuePrice', 'code', 'lastPurchasePrice', 'priceUnit']);
+  assert.deepEqual(Object.keys(p.detectPriceColumns(Object.keys(rows[0]))).sort(), ['aluminaPercentage', 'averageIssuePrice', 'code', 'lastPurchasePrice', 'origin', 'priceUnit']);
+});
+
+// ==================================================
+// F. ALUMINA AND LOCAL / IMPORTED (3.26.0)
+// ==================================================
+
+const AMAP = { code: 'code', aluminaPercentage: 'al', origin: 'org' };
+
+test('F1. alumina and origin headers are recognised, with or without %', () => {
+  assert.deepEqual(p.detectPriceColumns(['كود الخامة', 'نسبة الألومينا %', 'محلي / مستورد']), {
+    code: 'كود الخامة', aluminaPercentage: 'نسبة الألومينا %', origin: 'محلي / مستورد',
+  });
+  assert.deepEqual(p.detectPriceColumns(['Code', 'Alumina', 'Origin']), { code: 'Code', aluminaPercentage: 'Alumina', origin: 'Origin' });
+});
+
+test('F2. alumina cells: "36", "36%", Arabic digits read; outside 0-100 or text refused; empty leaves it', () => {
+  assert.equal(p.parseAluminaCell(36), 36);
+  assert.equal(p.parseAluminaCell('36.5 %'), 36.5);
+  assert.equal(p.parseAluminaCell('٤٥٪'), 45);
+  assert.equal(p.parseAluminaCell(''), null);
+  assert.ok(Number.isNaN(p.parseAluminaCell('high')));
+  const res = p.planPriceImport([{ code: 'M-CR', al: '120', org: '' }, { code: 'M-BND', al: 'x', org: '' }], AMAP, MATERIALS, NOW);
+  assert.deepEqual(res.rows.map((r: any) => r.errors), [['INVALID_ALUMINA'], ['INVALID_ALUMINA']]);
+});
+
+test('F3. origin cells: Arabic, English and short forms; anything else refused', () => {
+  for (const v of ['محلي', 'محلية', 'Local', 'LOCAL', 'L']) assert.equal(p.parseOriginCell(v), 'LOCAL', v);
+  for (const v of ['مستورد', 'مستوردة', 'Imported', 'IMPORT', 'i']) assert.equal(p.parseOriginCell(v), 'IMPORTED', v);
+  assert.equal(p.parseOriginCell(''), null);
+  assert.equal(p.parseOriginCell('China'), 'INVALID');
+  const r = p.planPriceImport([{ code: 'M-CR', al: '', org: 'Egypt' }], AMAP, MATERIALS, NOW).rows[0];
+  assert.deepEqual(r.errors, ['INVALID_ORIGIN']);
+});
+
+test('F4. only the changed alumina / origin is written - and the PRICE date is not stamped for them', () => {
+  const r = p.planPriceImport([{ code: 'M-CR', al: '12', org: 'مستورد' }], AMAP, MATERIALS, NOW).rows[0];
+  assert.equal(r.status, 'READY');
+  assert.deepEqual(r.patch, { aluminaPercentage: 12, origin: 'IMPORTED' }, 'no pricesUpdatedAt / pricesSource without a price change');
+  const same = p.planPriceImport([{ code: 'M-CR', al: '12', org: 'مستورد' }], AMAP,
+    [{ id: 'm2', code: 'M-CR', unit: 'طن', aluminaPercentage: 12, origin: 'IMPORTED' }], NOW).rows[0];
+  assert.equal(same.status, 'UNCHANGED');
+});
+
+test('F5. prices and attributes in one row: both written, the price date only because a price changed', () => {
+  const r = p.planPriceImport([{ code: 'M-CR', last: '9000', al: '12', org: 'محلي' }],
+    { code: 'code', lastPurchasePrice: 'last', aluminaPercentage: 'al', origin: 'org' }, MATERIALS, NOW).rows[0];
+  assert.deepEqual(r.patch, { lastPurchasePrice: 9000, pricesUpdatedAt: NOW, pricesSource: 'EXCEL_IMPORT', aluminaPercentage: 12, origin: 'LOCAL' });
+});
+
+test('F6. a row with no price, alumina or origin is "nothing to import"', () => {
+  const r = p.planPriceImport([{ code: 'M-CR', al: '', org: '' }], AMAP, MATERIALS, NOW).rows[0];
+  assert.deepEqual(r.errors, ['NO_PRICE']);
+});
+
+test('F7. the template carries alumina and origin, and filling them round-trips', () => {
+  const template = p.priceTemplateRows([{ id: 'm2', code: 'M-CR', name: 'Chromite', unit: 'طن' }], 'ar');
+  template[0]['نسبة الألومينا %'] = 12;
+  template[0]['محلي / مستورد'] = 'مستورد';
+  const ws = XLSX.utils.json_to_sheet(template);
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, 'x');
+  const back = XLSX.read(new Uint8Array(XLSX.write(wb, { type: 'array', bookType: 'xlsx' })), { type: 'array' });
+  const rows = XLSX.utils.sheet_to_json(back.Sheets[back.SheetNames[0]], { defval: '' });
+  const res = p.planPriceImport(rows, p.detectPriceColumns(Object.keys(rows[0])), [{ id: 'm2', code: 'M-CR', unit: 'طن' }], NOW);
+  assert.deepEqual(res.rows[0].patch, { aluminaPercentage: 12, origin: 'IMPORTED' });
+  // An existing origin is written back as a word the import reads.
+  const t2 = p.priceTemplateRows([{ id: 'm1', code: 'A', unit: 'طن', origin: 'LOCAL', aluminaPercentage: 60 }], 'en');
+  assert.equal(t2[0]['Local / Imported'], 'Local');
+  assert.equal(t2[0]['Alumina %'], 60);
+});
+
+test('F8. the screen accepts a sheet with only alumina / origin columns', () => {
+  const src = readCode(MODAL);
+  assert.ok(/!DATA_COLUMNS\.some\(\(c\) => mapping\[c\]\)/.test(src));
+  assert.deepEqual([...p.DATA_COLUMNS], ['lastPurchasePrice', 'averageIssuePrice', 'aluminaPercentage', 'origin']);
 });
 
 // ==================================================

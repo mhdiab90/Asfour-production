@@ -1,9 +1,9 @@
 {
   "_doc": "Release Manifest precursor. Describes WHAT is being released so the gate checks a committed declaration rather than whatever flags an operator typed. commitSha/buildId/deploymentId are left null until a release is cut - the gate fills the comparison from the build itself, and only enforces a field that is set here. This is NOT the Change Registry: no change IDs, no Firestore, no UI.",
-  "version": "3.25.0",
-  "releaseId": "REL-2026-0034",
+  "version": "3.26.0",
+  "releaseId": "REL-2026-0035",
   "changeIds": [
-    "MOD-0051"
+    "MOD-0052"
   ],
   "commitSha": null,
   "buildId": null,
@@ -64,7 +64,8 @@
     "master-data-bom-attributes-btn",
     "material-price-import-modal",
     "master-data-material-price-import-btn",
-    "material-price-template-btn"
+    "material-price-template-btn",
+    "استيراد خصائص وأسعار الخامات"
   ],
   "_markerNotes": {
     "ai-provider-management": "AI Provider Management route - absent means the AI Assistant closure was dropped",
@@ -122,7 +123,8 @@
     "master-data-bom-attributes-btn": "The Master Data entry point to the BOM component attributes screen",
     "material-price-import-modal": "The Excel material price import - absent means prices can again only be typed one by one",
     "master-data-material-price-import-btn": "The Master Data entry point to the material price import",
-    "material-price-template-btn": "The price template download - the file the import is designed to take back"
+    "material-price-template-btn": "The price template download - the file the import is designed to take back",
+    "استيراد خصائص وأسعار الخامات": "The import entry point covering alumina % and local / imported as well as prices - absent means those two can again only be typed one by one"
   },
   "tests": [
     "buildIdentity",
@@ -184,6 +186,7 @@
   "deployCommand": "firebase deploy --only hosting --project asfourproduction-70e6e",
   "treeClean": true,
   "_changeNotes": {
+    "MOD-0052": "Alumina % and LOCAL / IMPORTED from Excel, in the same material import as the prices (one sheet, same code matching, same pre-save review). Two optional columns, detected from Arabic or English headers ('%' ignored): alumina 0-100 ('36', '36%', Arabic-Indic digits read; outside the range or text is an error, never clipped); origin 'محلي' / 'مستورد', 'local' / 'imported' and short forms (anything else is an error). An empty cell leaves the value as it is; only a change is written (aluminaPercentage, origin); pricesUpdatedAt / pricesSource are stamped only when a PRICE changed. A sheet may carry any of the four data columns - at least one must be mapped. The template now includes both columns with the current values (origin written as a word the import reads back). Preview shows current -> new for both. Same audited, bounded, gated write path as 3.25.0. No rule or other data changed",
     "MOD-0051": "Material price import from Excel (Master Data -> BOM / Materials, and from the component attributes screen). Read with the shared XLSX reader (listImportSheetNames / parseImportFile, sheet picker); columns detected from Arabic or English headers (materialPriceImportPure.detectPriceColumns) and changeable. Each row is matched to exactly ONE material by code (trimmed, case-insensitive): not found, found twice in Master Data, or repeated in the file is an error, never a guess. An empty price cell leaves that price as it is; a filled one must be a number >= 0 (thousands separators, currency words, Arabic-Indic digits read); the unit, when given, must be approved (known spellings accepted) and is written only when it changes the unit the prices are read in, so re-importing an untouched template writes nothing. The preview shows current -> new per row with READY / UNCHANGED / ERROR and the reason. Only READY rows are written, after a confirmation, through updateMasterDataItem (sanitised, cache-invalidating, audited) with ONLY the changed price fields plus pricesUpdatedAt and pricesSource = EXCEL_IMPORT - one bounded (30 s) write at a time, a failed write keeps its row marked with the reason; one BULK_IMPORT summary line in the audit log. A template download gives every material with its current prices under the recognised headers. Behind the existing Master Data edit gate. The attributes screen now also records pricesSource = MANUAL when a typed price changes. No Firestore rule or other data changed",
     "UI-0050": "Master Data -> Products: the sub-sections read Products, BOM, Routing again (the 3.23.0 order is reverted), and clicking the Products button now opens on ROUTING. New optional registry field defaultSubCategoryTab ('routings' on products): the button sets it in the same render as the category, so only the routings page is read; resolveOpenTab and the category sync fall back to it when the current tab is outside the group. A section chosen inside the group stays chosen; a deep link to a tab still opens that tab; groups without a default (Equipment, Jobs & Batches) behave as before. No data, rule, permission or read path changed",
     "MOD-0048": "BOM cost view. The versions window shows the components as # / type / source / item code / item / alumina % / % / quantity / unit / item value, and offers QUANTITIES only (as before) or COST, valued at the LAST_PURCHASE price or the AVERAGE_ISSUE price of each material (the costing design's PRICING_REFERENCE_PRICE and ACTUAL_ISSUE_COST, held on the material). Value of a line = its quantity for the basis x the price, per the material's price unit; a unit other than the price unit is converted only through the COSTING conversion approved here, طن <-> كجم (1000, a physical identity) - any other pair, a missing unit, a missing price or a missing quantity leaves the line without a value, with the reason, and out of the total (never zero). Below: total cost of the item, imported value (sum of the IMPORTED components) and its share of the total, and the mix's alumina % (weighted by effective percentage; a component without alumina marks it incomplete instead of counting as 0). Products used as components count as LOCAL with their own alumina and no price. The print follows the chosen view. Pure computation (bomCostingPure.ts) - nothing is read or written to cost a BOM",
@@ -228,8 +231,8 @@
     "UI-0010": "Financial Accounts import opens a dedicated Master Data importer instead of the Historical Excel Import screen: the action no longer navigates to the bulk-entry route (which App.tsx renders as DataImportView); a new in-place modal reuses the existing financialAccounts schema, XLSX reader, row validation, duplicate detection and chunked commit, adds sheet selection and parent/cycle relationship checks, and keeps partial import so invalid rows never block valid ones",
     "DB-0009": "Category-first Master Data over an extensible registry; Financial Accounts master data with Excel import and hierarchical editing (new financialAccounts collection and its Firestore rule); one shared generic hierarchy resolver reused by Master Data, Production Review and production aggregation; hierarchical cost-centre editing with cycle, self-parent and unknown-parent protection"
   },
-  "previousVersion": "3.24.1",
+  "previousVersion": "3.25.0",
   "versionBump": "MINOR",
   "classificationConfidence": "HIGH",
-  "previousReleaseId": "REL-2026-0033"
+  "previousReleaseId": "REL-2026-0034"
 }

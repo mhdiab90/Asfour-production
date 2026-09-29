@@ -37,7 +37,7 @@ const DEPLOYMENT_ID_INJECTED = typeof __BUILD_DEPLOYMENT_ID__ === 'string' ? __B
 
 export const CURRENT_APP_VERSION: AppVersionInfo = {
   /** Set by the automatic release planner from the classified change set - see releasePlannerPure.ts. */
-  version: '3.25.0',
+  version: '3.26.0',
   buildId: BUILD_ID_INJECTED,
   buildTimestamp: BUILD_TIMESTAMP_INJECTED,
   gitCommit: COMMIT_SHA_INJECTED,
@@ -46,6 +46,16 @@ export const CURRENT_APP_VERSION: AppVersionInfo = {
   environment: 'production',
   releaseDate: '2026-08-22',
   changelog: [
+    {
+      version: '3.26.0',
+      date: '2026-09-29',
+      highlights: [
+        'استيراد نسبة الألومينا ومحلي/مستورد للخامات من Excel، من نفس شاشة استيراد الأسعار وبنفس الملف',
+        'نموذج Excel أصبح يحتوي على عمودي نسبة الألومينا ومحلي/مستورد بالقيم الحالية',
+        'نسبة الألومينا من 0 إلى 100 (تُقرأ "36" و"36%" والأرقام العربية)، ومحلي/مستورد تُقرأ بالعربي أو الإنجليزي',
+        'تاريخ ومصدر الأسعار يُسجلان فقط عند تغيير سعر'
+      ]
+    },
     {
       version: '3.25.0',
       date: '2026-09-28',
