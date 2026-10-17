@@ -115,6 +115,21 @@ export const PIECE_QUANTITY_FIELD: Readonly<Record<string, string>> = {
   sorting: 'totalCount',
 };
 
+/**
+ * Press and shift identity for pressing rows, 3.28.0.
+ *
+ * Odoo gives a press NAME ("مكبس بوخر 2") and a shift NUMBER; the production record needs the press and
+ * the shift of Master Data. Both lookups are supplied by the screen from Master Data and answer ONLY a
+ * single unambiguous match - a name that matches no press or more than one, a number that matches no
+ * shift or more than one, answers null and the row says so. Nothing is guessed.
+ */
+export interface PressIdentity { code: string; name: string }
+export interface ShiftIdentity { id: string; name: string; code?: string }
+export interface OdooIdentityLookups {
+  pressByName?: (rawName: string) => PressIdentity | null;
+  shiftByNumber?: (shiftNumber: number) => ShiftIdentity | null;
+}
+
 export interface OdooSessionInput {
   importSessionId: string;
   createdBy: string;
@@ -124,6 +139,7 @@ export interface OdooSessionInput {
   scrap: readonly OdooScrapRow[];
   approvedWorkCenters?: readonly ApprovedWorkCenterMapping[];
   pieceConversion?: PieceConversionOptions;
+  identity?: OdooIdentityLookups;
 }
 
 export interface OdooSessionResult {
@@ -144,7 +160,7 @@ const issue = (field: string, messageAr: string, messageEn: string): ImportIssue
 export function productionPayloadFromWorkOrder(
   workOrder: OdooWorkOrderRow,
   mo: OdooProductionRow | null,
-  options: { attachComponents: boolean; pieceConversion?: PieceConversionOptions },
+  options: { attachComponents: boolean; pieceConversion?: PieceConversionOptions; identity?: OdooIdentityLookups },
 ): { payload: Record<string, unknown> | null; errors: ImportIssue[]; warnings: ImportIssue[] } {
   const errors: ImportIssue[] = [];
   const warnings: ImportIssue[] = [];
@@ -250,6 +266,30 @@ export function productionPayloadFromWorkOrder(
     else if (stage === 'handmade_brick') payload.pieceWeightKg = convertedFrom.pieceWeightKg;
   }
   if (n.shiftNumber != null) payload.shiftNumber = n.shiftNumber;
+  if (stage === 'pressing' && options.identity) {
+    const rawPress = (n.equipmentRaw || n.workCenterRaw || '').trim();
+    const press = rawPress && options.identity.pressByName ? options.identity.pressByName(rawPress) : null;
+    if (press) {
+      payload.pressCode = press.code;
+      payload.pressName = press.name;
+    } else if (options.identity.pressByName) {
+      warnings.push(issue('pressCode',
+        `المكبس "${rawPress || '-'}" لا يطابق مكبسًا واحدًا بالضبط في البيانات الأساسية - يُكتب السجل بدون مكبس.`,
+        `Press "${rawPress || '-'}" does not match exactly one press in Master Data - the record is written without a press.`));
+    }
+    if (n.shiftNumber != null && options.identity.shiftByNumber) {
+      const shift = options.identity.shiftByNumber(n.shiftNumber);
+      if (shift) {
+        payload.shiftId = shift.id;
+        payload.shiftName = shift.name;
+        if (shift.code) payload.shiftCode = shift.code;
+      } else {
+        warnings.push(issue('shiftId',
+          `الوردية رقم ${n.shiftNumber} لا تطابق وردية واحدة بالضبط في البيانات الأساسية - يُكتب السجل بدون وردية.`,
+          `Shift ${n.shiftNumber} does not match exactly one shift in Master Data - the record is written without a shift.`));
+      }
+    }
+  }
   if (mo?.normalized.quantityToProduce !== undefined && mo?.normalized.quantityToProduce !== null) {
     // Planned, kept as planned - never a production quantity.
     payload.plannedQuantity = mo.normalized.quantityToProduce;
@@ -375,7 +415,7 @@ export function buildOdooImportSession(input: OdooSessionInput): OdooSessionResu
   for (const row of input.workOrders) {
     const mo = moByKey.get(moKey(row.normalized.moReference)) ?? null;
     const single = (workOrderCountByMo.get(moKey(row.normalized.moReference)) ?? 0) === 1;
-    const built = productionPayloadFromWorkOrder(row, mo, { attachComponents: single, pieceConversion: input.pieceConversion });
+    const built = productionPayloadFromWorkOrder(row, mo, { attachComponents: single, pieceConversion: input.pieceConversion, identity: input.identity });
     const orphanKinds = orphanKindsOf(link.orphans, row.rowId);
     const conflicts = conflictsOf(link.conflicts, row.normalized.moReference);
     const errors: ImportIssue[] = [...row.issues, ...built.errors];

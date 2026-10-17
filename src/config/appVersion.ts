@@ -37,7 +37,7 @@ const DEPLOYMENT_ID_INJECTED = typeof __BUILD_DEPLOYMENT_ID__ === 'string' ? __B
 
 export const CURRENT_APP_VERSION: AppVersionInfo = {
   /** Set by the automatic release planner from the classified change set - see releasePlannerPure.ts. */
-  version: '3.27.0',
+  version: '3.28.0',
   buildId: BUILD_ID_INJECTED,
   buildTimestamp: BUILD_TIMESTAMP_INJECTED,
   gitCommit: COMMIT_SHA_INJECTED,
@@ -46,6 +46,15 @@ export const CURRENT_APP_VERSION: AppVersionInfo = {
   environment: 'production',
   releaseDate: '2026-08-22',
   changelog: [
+    {
+      version: '3.28.0',
+      date: '2026-10-17',
+      highlights: [
+        'استيراد أودو: سجل الكبس يُربط بالمكبس الموجود في البيانات الأساسية (بمطابقة اسم المركز لاسم أو كود المكبس)، وبالوردية من رقم أمر العمل',
+        'الربط فقط عند وجود مطابقة واحدة بالضبط؛ المكبس غير المطابق أو المكرر أو غير النشط، والوردية غير المطابقة أو المكررة، تُكتب بدون ربط مع تنبيه ظاهر على السطر',
+        'تحويل الطن إلى قطع (الكبس والفرز والطوب اليدوي) خيار واحد يُطبَّق على كل الأسطر دفعة واحدة عند القراءة، بدل التعديل سطرًا سطرًا'
+      ]
+    },
     {
       version: '3.27.0',
       date: '2026-10-17',

@@ -178,6 +178,51 @@ function millKindOfText(normalized: string): TubeBallMillKind | null {
   return null;
 }
 
+/**
+ * A name -> press lookup from the presses of Master Data (3.28.0). A press matches a raw name when its
+ * NAME or its CODE equals it after normalisation. Only ONE match answers; none or several answer null.
+ */
+export function buildPressLookup(presses: ReadonlyArray<Record<string, any>>): (rawName: string) => { code: string; name: string } | null {
+  const byKey = new Map<string, Array<Record<string, any>>>();
+  for (const p of presses) {
+    if (p.active === false) continue;
+    for (const field of ['name', 'code']) {
+      const key = normaliseWorkCenterText(p[field]);
+      if (!key) continue;
+      const list = byKey.get(key) ?? [];
+      if (!list.includes(p)) list.push(p);
+      byKey.set(key, list);
+    }
+  }
+  return (rawName) => {
+    const matches = byKey.get(normaliseWorkCenterText(rawName)) ?? [];
+    if (matches.length !== 1 || !String(matches[0].code ?? '').trim()) return null;
+    return { code: String(matches[0].code).trim(), name: String(matches[0].name ?? matches[0].code).trim() };
+  };
+}
+
+/**
+ * A shift-number -> shift lookup from the shifts of Master Data. A shift matches number N when its
+ * `shiftNumber` / `number` field is N, or its code is N or ends in N after a non-digit prefix ("S1",
+ * "SH-1"). Only ONE match answers; none or several answer null.
+ */
+export function buildShiftLookup(shifts: ReadonlyArray<Record<string, any>>): (shiftNumber: number) => { id: string; name: string; code?: string } | null {
+  const numberOf = (s: Record<string, any>): number | null => {
+    for (const field of ['shiftNumber', 'number']) {
+      const n = Number(s[field]);
+      if (s[field] !== undefined && s[field] !== null && s[field] !== '' && Number.isInteger(n)) return n;
+    }
+    const m = /^\D*(\d+)$/.exec(String(s.code ?? '').trim());
+    return m ? Number(m[1]) : null;
+  };
+  return (shiftNumber) => {
+    const matches = shifts.filter((s) => s.active !== false && numberOf(s) === shiftNumber);
+    if (matches.length !== 1 || !String(matches[0].id ?? '').trim()) return null;
+    const s = matches[0];
+    return { id: String(s.id), name: String(s.name ?? s.code ?? ''), ...(s.code ? { code: String(s.code) } : {}) };
+  };
+}
+
 /** A user-approved mapping for a raw name the registry does not know (collection 'workCenters'). */
 export interface ApprovedWorkCenterMapping {
   rawNormalized: string;

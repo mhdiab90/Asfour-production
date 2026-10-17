@@ -31,7 +31,7 @@ import {
   saveWorkCenterMapping,
 } from '../../services/odooImportService';
 import { buildImportReferenceIndexes, loadImportValidationContext } from '../../services/entityImportService';
-import { WORK_CENTERS, type ApprovedWorkCenterMapping } from '../../services/workCenterRegistryPure';
+import { WORK_CENTERS, buildPressLookup, buildShiftLookup, type ApprovedWorkCenterMapping } from '../../services/workCenterRegistryPure';
 import { conflictReport, orphanReport } from '../../services/odooImportReportsPure';
 import type { ImportSessionRecord, OdooSourceType, ProductionStageType } from '../../types';
 
@@ -148,6 +148,21 @@ export const OdooHistoricalImportPanel: React.FC<Props> = ({ isOpen, onClose }) 
         pieceConversion = { enabled: true, pieceWeightKg: (code) => weights.get(String(code).trim().toUpperCase()) ?? null };
       }
 
+      // Press and shift identity of pressing rows: the presses and shifts of Master Data (two small
+      // collections), matched only when exactly one fits. Failing to read them only leaves rows without one.
+      let identity: { pressByName: ReturnType<typeof buildPressLookup>; shiftByNumber: ReturnType<typeof buildShiftLookup> } | undefined;
+      if (workOrders?.rows.some((w) => w.normalized.stageType === 'pressing')) {
+        try {
+          const [presses, shifts] = await Promise.all([
+            fetchMasterData<any>(MASTER_DATA_COLLECTIONS.presses),
+            fetchMasterData<any>(MASTER_DATA_COLLECTIONS.shifts),
+          ]);
+          identity = { pressByName: buildPressLookup(presses), shiftByNumber: buildShiftLookup(shifts) };
+        } catch {
+          /* pressing rows then carry the "no press / no shift" warning */
+        }
+      }
+
       const sheetIssues = [...(production?.sheetIssues ?? []), ...(workOrders?.sheetIssues ?? []), ...(scrap?.sheetIssues ?? [])];
       const built = buildOdooImportSession({
         importSessionId: id,
@@ -158,6 +173,7 @@ export const OdooHistoricalImportPanel: React.FC<Props> = ({ isOpen, onClose }) 
         scrap: scrap?.rows ?? [],
         approvedWorkCenters: approved,
         pieceConversion,
+        identity,
       });
       setSession(built);
       setStaged(built.staged);

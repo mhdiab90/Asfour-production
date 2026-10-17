@@ -176,6 +176,89 @@ test('C8. the Hand-made Brick centre is offered for approval but no name maps to
   assert.equal(reg.WORK_CENTER_ALIASES.some((a: any) => a.centerId === 'handmade_brick'), false);
 });
 
+// ==================================================
+// D. PRESS AND SHIFT IDENTITY OF PRESSING ROWS (3.28.0)
+// ==================================================
+
+const PRESSES = [
+  { id: 'p2', code: 'PR-02', name: 'مكبس بوخر 2' },
+  { id: 'p3', code: 'PR-03', name: 'مكبس بوخر 3' },
+  { id: 'x1', code: 'DUP-1', name: 'مكبس مكرر' },
+  { id: 'x2', code: 'DUP-2', name: 'مكبس مكرر' },
+  { id: 'p9', code: 'PR-09', name: 'مكبس قديم', active: false },
+];
+const SHIFTS = [
+  { id: 's1', code: 'S1', name: 'الوردية الأولى' },
+  { id: 's2', code: 'SH-2', name: 'الوردية الثانية' },
+  { id: 's3a', code: '3', name: 'الثالثة أ' },
+  { id: 's3b', code: 'S3', name: 'الثالثة ب' },
+];
+const identity = () => ({ pressByName: reg.buildPressLookup(PRESSES), shiftByNumber: reg.buildShiftLookup(SHIFTS) });
+const pressingBuilt = (center: string, order = '1') => {
+  const p = prod.readMrpProduction([{ ...MO_ROW, 'Work Orders/Work Center': center }], ctx('mo.xlsx'));
+  const w = wo.readMrpWorkOrder([{ ...WO_ROW, 'Work Center': center, Quantity: 0.5, 'Work Order': order }], ctx('wo.xlsx'), []);
+  return session.buildOdooImportSession({
+    importSessionId: 'S', createdBy: 'u', createdAt: 'now', production: p.rows, workOrders: w.rows, scrap: [], approvedWorkCenters: [],
+    pieceConversion: { enabled: true, pieceWeightKg: () => 2.5 }, identity: identity(),
+  });
+};
+
+test('D1. a press named like one press of Master Data gets its code and name; the shift gets its id', () => {
+  const row = woRow(pressingBuilt('مكبس بوخر 2', '2'));
+  assert.equal(row.payload.pressCode, 'PR-02');
+  assert.equal(row.payload.pressName, 'مكبس بوخر 2');
+  assert.equal(row.payload.shiftId, 's2', 'work order "2" is shift 2 on a pressing centre');
+  assert.equal(row.payload.shiftName, 'الوردية الثانية');
+  assert.equal(row.payload.shiftCode, 'SH-2');
+});
+
+test('D2. a press that matches nothing, or an inactive press, is written without a press - and says so', () => {
+  for (const center of ['مكبس بوخر 4', 'مكبس قديم']) {
+    const row = woRow(pressingBuilt(center));
+    assert.equal('pressCode' in row.payload, false, center);
+    assert.ok((row.row.warnings ?? []).some((w: any) => /لا يطابق مكبسًا واحدًا بالضبط/.test(w.messageAr)), center);
+  }
+});
+
+test('D3. two presses with the same name are ambiguous: no press is picked', () => {
+  const row = woRow(pressingBuilt('مكبس مكرر'));
+  assert.equal('pressCode' in row.payload, false);
+});
+
+test('D4. two shifts that fit number 3 are ambiguous: no shift is picked, and the row says so', () => {
+  const row = woRow(pressingBuilt('مكبس بوخر 2', '3'));
+  assert.equal('shiftId' in row.payload, false);
+  assert.ok((row.row.warnings ?? []).some((w: any) => /لا تطابق وردية واحدة بالضبط/.test(w.messageAr)));
+  assert.equal(row.payload.pressCode, 'PR-02', 'the press is still found');
+});
+
+test('D5. a stage that is not pressing is untouched by the identity lookups', () => {
+  const p = prod.readMrpProduction([MO_ROW], ctx('mo.xlsx'));
+  const w = wo.readMrpWorkOrder([WO_ROW], ctx('wo.xlsx'), []);
+  const built = session.buildOdooImportSession({ importSessionId: 'S', createdBy: 'u', createdAt: 'now', production: p.rows, workOrders: w.rows, scrap: [], approvedWorkCenters: [], identity: identity() });
+  const row = woRow(built);
+  assert.equal('pressCode' in row.payload, false);
+  assert.equal('shiftId' in row.payload, false);
+});
+
+test('D6. without lookups nothing changes (the screen could not read Master Data)', () => {
+  const built = withConversion({ LCC8001: 2.5 }, [PRESS_WO], [PRESS_MO]);
+  const row = woRow(built);
+  assert.equal('pressCode' in row.payload, false);
+  assert.equal((row.row.warnings ?? []).some((w: any) => /مكبس/.test(w.messageAr) && /بالضبط/.test(w.messageAr)), false);
+});
+
+test('D7. the lookups themselves: name or code, one match only', () => {
+  const press = reg.buildPressLookup(PRESSES);
+  assert.deepEqual(press('PR-03'), { code: 'PR-03', name: 'مكبس بوخر 3' }, 'by code');
+  assert.equal(press('  مكبس   بوخر 3 ')?.code, 'PR-03', 'spacing is normalised');
+  const shift = reg.buildShiftLookup(SHIFTS);
+  assert.equal(shift(1)?.id, 's1');
+  assert.equal(shift(3), null);
+  assert.equal(shift(4), null);
+  assert.equal(reg.buildShiftLookup([{ id: 'a', name: 'x', shiftNumber: 2 }])(2)?.id, 'a', 'a shiftNumber field is read');
+});
+
 (async () => {
   await bootstrap();
   for (const { name, fn } of registered) {
