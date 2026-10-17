@@ -37,7 +37,7 @@ import type {
   ProductionStageType,
   StageWorkerItem,
 } from '../types';
-import { applyValidation, createImportRow, type ImportIssue, type ImportRow } from './entityImportPure';
+import { acceptRowWarnings, applyValidation, createImportRow, setRowSelection, type ImportIssue, type ImportRow } from './entityImportPure';
 import { ODOO_QUANTITY_FIELD } from './odooManufacturingImportPure';
 import { stageUomRow } from './uomReadinessPure';
 import { summariseWorkCenters, workCenterById, type ApprovedWorkCenterMapping } from './workCenterRegistryPure';
@@ -514,6 +514,96 @@ export function buildOdooImportSession(input: OdooSessionInput): OdooSessionResu
 }
 
 /** A manufacturing-order row is context: it is never written, however it is selected. */
+/**
+ * BULK APPROVAL (3.31.0).
+ *
+ * A row is written only when it is INCLUDED and its warnings were accepted - which the review screen
+ * offered one row at a time. On a real export that is hundreds of clicks, so a whole set can be approved
+ * at once. What it approves is exactly what a person would approve row by row and nothing more:
+ *   - only work-order and scrap rows (a manufacturing order is context and is never written);
+ *   - only rows with NO error and a ready payload (an error is never accepted this way);
+ *   - never a row that was already imported or has failed (a failure waits for an explicit decision);
+ *   - optionally narrowed to some stages and to the first N rows (a small pilot batch first).
+ * Each approved row records who approved it and when, in its own history, like a single approval.
+ */
+export interface BulkApprovalFilter {
+  /** 'scrap' or a stage type; empty / omitted = every stage. */
+  groups?: readonly string[];
+  /** The most rows to approve, in sheet order; null / omitted = all of them. */
+  limit?: number | null;
+}
+
+/** The group a row belongs to for the bulk filter: its stage, or 'scrap'. */
+export function bulkGroupOf(staged: OdooStagedRow): string {
+  return staged.kind === 'odooScrap' ? 'scrap' : String(staged.targetStage ?? 'unknown');
+}
+
+/** The rows a bulk approval would touch: eligible, not yet writable, inside the filter. */
+export function bulkApprovalCandidates(staged: readonly OdooStagedRow[], filter: BulkApprovalFilter = {}): OdooStagedRow[] {
+  const groups = filter.groups && filter.groups.length ? new Set(filter.groups) : null;
+  const eligible = staged.filter((s) => {
+    if (s.kind === 'odooProduction') return false;
+    if (s.row.errors.length > 0) return false;
+    if (!s.payload) return false;
+    if (s.row.status === 'IMPORTED' || s.row.status === 'FAILED') return false;
+    if (isOdooRowWritable(s)) return false;
+    return groups ? groups.has(bulkGroupOf(s)) : true;
+  });
+  const limit = filter.limit && filter.limit > 0 ? Math.floor(filter.limit) : null;
+  return limit ? eligible.slice(0, limit) : eligible;
+}
+
+/** What the candidates are, before anything changes: per group, and which warnings the user is accepting. */
+export function bulkApprovalSummary(candidates: readonly OdooStagedRow[], language: 'ar' | 'en' = 'ar'): {
+  total: number;
+  byGroup: Array<{ group: string; count: number }>;
+  warnings: Array<{ message: string; count: number }>;
+} {
+  const groups = new Map<string, number>();
+  const warnings = new Map<string, number>();
+  for (const c of candidates) {
+    groups.set(bulkGroupOf(c), (groups.get(bulkGroupOf(c)) ?? 0) + 1);
+    for (const w of c.row.warnings) {
+      // The numbers differ row to row; the kind of warning is what is being accepted.
+      const text = (language === 'ar' ? w.messageAr : w.messageEn).replace(/"[^"]*"/g, '"..."').replace(/\d+(\.\d+)?/g, '#');
+      warnings.set(text, (warnings.get(text) ?? 0) + 1);
+    }
+  }
+  return {
+    total: candidates.length,
+    byGroup: [...groups.entries()].map(([group, count]) => ({ group, count })).sort((a, b) => b.count - a.count),
+    warnings: [...warnings.entries()].map(([message, count]) => ({ message, count })).sort((a, b) => b.count - a.count),
+  };
+}
+
+/** Includes the rows and accepts their warnings. Returns a new list; the input is untouched. */
+export function approveRowsInBulk(
+  staged: readonly OdooStagedRow[],
+  filter: BulkApprovalFilter,
+  meta: { user: string; at: string },
+): { staged: OdooStagedRow[]; approved: number } {
+  const ids = new Set(bulkApprovalCandidates(staged, filter).map((s) => s.row.rowId));
+  const reason = 'BULK_APPROVAL';
+  const next = staged.map((s) => {
+    if (!ids.has(s.row.rowId)) return s;
+    let row = setRowSelection(s.row, 'INCLUDED', { ...meta, reason });
+    row = acceptRowWarnings(row, { ...meta, reason });
+    return { ...s, row };
+  });
+  return { staged: next, approved: ids.size };
+}
+
+/** Takes the selection back from the rows that are READY TO WRITE right now - what an approval made ready. */
+export function clearBulkSelection(staged: readonly OdooStagedRow[], meta: { user: string; at: string }): { staged: OdooStagedRow[]; cleared: number } {
+  let cleared = 0;
+  const next = staged.map((s) => {
+    if (!isOdooRowWritable(s)) return s;
+    cleared += 1;
+    return { ...s, row: setRowSelection(s.row, 'EXCLUDED', { ...meta, reason: 'BULK_CLEAR' }) };
+  });
+  return { staged: next, cleared };
+}
+
 export function isOdooRowWritable(staged: OdooStagedRow): boolean {
   if (staged.kind === 'odooProduction') return false;
   if (staged.row.selection !== 'INCLUDED') return false;

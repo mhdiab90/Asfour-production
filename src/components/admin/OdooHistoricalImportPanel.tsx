@@ -21,7 +21,7 @@ import { readMrpProduction } from '../../services/odooProductionReaderPure';
 import { readMrpWorkOrder } from '../../services/odooWorkOrderReaderPure';
 import { readStockScrap } from '../../services/odooScrapReaderPure';
 import { fetchMasterData, MASTER_DATA_COLLECTIONS } from '../../services/masterDataService';
-import { buildOdooImportSession, isOdooRowWritable, type OdooSessionResult, type OdooStagedRow } from '../../services/odooImportSessionPure';
+import { approveRowsInBulk, bulkApprovalCandidates, bulkApprovalSummary, clearBulkSelection, buildOdooImportSession, isOdooRowWritable, type OdooSessionResult, type OdooStagedRow } from '../../services/odooImportSessionPure';
 import {
   executeOdooImport,
   listOdooImportSessions,
@@ -267,6 +267,39 @@ export const OdooHistoricalImportPanel: React.FC<Props> = ({ isOpen, onClose }) 
 
   const updateRow = (rowId: string, next: OdooStagedRow) => setStaged((rows) => rows.map((r) => (r.row.rowId === rowId ? next : r)));
 
+  /* ---- bulk approval (3.31.0) ---- */
+  const [bulkGroup, setBulkGroup] = useState<string>('ALL');
+  const [bulkLimit, setBulkLimit] = useState<string>('');
+  const bulkFilter = useMemo(
+    () => ({ groups: bulkGroup === 'ALL' ? [] : [bulkGroup], limit: bulkLimit.trim() ? Number(bulkLimit) : null }),
+    [bulkGroup, bulkLimit],
+  );
+  /** Every group that has something to approve, with its count - the filter's choices. */
+  const bulkGroups = useMemo(() => bulkApprovalSummary(bulkApprovalCandidates(staged, {})).byGroup, [staged]);
+  const bulkCandidates = useMemo(() => bulkApprovalCandidates(staged, bulkFilter), [staged, bulkFilter]);
+
+  const approveInBulk = () => {
+    if (bulkCandidates.length === 0) return;
+    const summary = bulkApprovalSummary(bulkCandidates, isAr ? 'ar' : 'en');
+    const lines = [
+      isAr ? `سيتم اختيار ${summary.total} سطرًا وقبول تحذيراتها:` : `${summary.total} row(s) will be included and their warnings accepted:`,
+      ...summary.byGroup.map((g) => `  ${g.group}: ${g.count}`),
+      isAr ? 'التحذيرات التي ستُقبل:' : 'Warnings being accepted:',
+      ...summary.warnings.slice(0, 6).map((w) => `  (${w.count}) ${w.message}`),
+      isAr ? 'لن يُكتب شيء الآن - الكتابة بزر "اعتماد وكتابة السجلات".' : 'Nothing is written yet - writing is the "Approve & write records" button.',
+    ];
+    if (!window.confirm(lines.join('\n'))) return;
+    const out = approveRowsInBulk(staged, bulkFilter, { user, at: now() });
+    setStaged(out.staged);
+    setNotice(isAr ? `تم اختيار ${out.approved} سطرًا وقبول تحذيراتها.` : `${out.approved} row(s) included and their warnings accepted.`);
+  };
+
+  const clearBulk = () => {
+    const out = clearBulkSelection(staged, { user, at: now() });
+    setStaged(out.staged);
+    setNotice(isAr ? `أُلغي اختيار ${out.cleared} سطرًا.` : `${out.cleared} row(s) un-selected.`);
+  };
+
   const acceptWarnings = (item: OdooStagedRow) =>
     updateRow(item.row.rowId, { ...item, row: acceptRowWarnings(item.row, { user, at: now() }) });
 
@@ -436,6 +469,57 @@ export const OdooHistoricalImportPanel: React.FC<Props> = ({ isOpen, onClose }) 
                   {t}
                 </button>
               ))}
+            </div>
+
+            {/* Bulk approval: a whole stage, or the first N rows as a pilot batch, instead of one row at a time. */}
+            <div id="odoo-import-bulk" className="flex flex-wrap items-center gap-2 p-3 rounded-xl border border-amber-200 bg-amber-50/60">
+              <span className="font-black text-slate-800">{isAr ? 'اعتماد جماعي' : 'Bulk approval'}</span>
+              <select
+                id="odoo-bulk-group"
+                value={bulkGroup}
+                onChange={(e) => setBulkGroup(e.target.value)}
+                disabled={busy}
+                className="bg-white border border-slate-200 rounded-lg px-2 py-1.5 font-bold"
+              >
+                <option value="ALL">{isAr ? 'كل المراحل والهالك' : 'All stages and scrap'}</option>
+                {bulkGroups.map((g) => <option key={g.group} value={g.group}>{`${g.group} (${g.count})`}</option>)}
+              </select>
+              <label className="inline-flex items-center gap-1.5 font-bold text-slate-700">
+                {isAr ? 'أول' : 'First'}
+                <input
+                  id="odoo-bulk-limit"
+                  type="number"
+                  min="1"
+                  value={bulkLimit}
+                  onChange={(e) => setBulkLimit(e.target.value)}
+                  placeholder={isAr ? 'الكل' : 'all'}
+                  className="w-20 bg-white border border-slate-200 rounded-lg px-2 py-1.5 font-mono"
+                />
+                {isAr ? 'سطر (دفعة تجريبية)' : 'rows (pilot batch)'}
+              </label>
+              <button
+                id="odoo-bulk-approve"
+                type="button"
+                disabled={!canImport || busy || bulkCandidates.length === 0}
+                onClick={approveInBulk}
+                className="px-3 py-1.5 font-extrabold text-slate-950 bg-amber-400 hover:bg-amber-500 disabled:opacity-40 rounded-lg cursor-pointer"
+              >
+                {isAr ? `اختيار وقبول التحذيرات (${bulkCandidates.length})` : `Include & accept warnings (${bulkCandidates.length})`}
+              </button>
+              <button
+                id="odoo-bulk-clear"
+                type="button"
+                disabled={busy || writable.length === 0}
+                onClick={clearBulk}
+                className="px-3 py-1.5 font-bold text-slate-700 bg-slate-100 hover:bg-slate-200 disabled:opacity-40 rounded-lg cursor-pointer"
+              >
+                {isAr ? 'إلغاء اختيار الكل' : 'Un-select all'}
+              </button>
+              <span className="text-[10px] text-slate-500">
+                {isAr
+                  ? 'يشمل الأسطر بلا أخطاء فقط. الكتابة تتم بزر "اعتماد وكتابة السجلات" بعد ذلك.'
+                  : 'Only rows without errors. Writing is the "Approve & write records" button afterwards.'}
+              </span>
             </div>
 
             {result && (

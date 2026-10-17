@@ -37,7 +37,7 @@ const DEPLOYMENT_ID_INJECTED = typeof __BUILD_DEPLOYMENT_ID__ === 'string' ? __B
 
 export const CURRENT_APP_VERSION: AppVersionInfo = {
   /** Set by the automatic release planner from the classified change set - see releasePlannerPure.ts. */
-  version: '3.30.0',
+  version: '3.31.0',
   buildId: BUILD_ID_INJECTED,
   buildTimestamp: BUILD_TIMESTAMP_INJECTED,
   gitCommit: COMMIT_SHA_INJECTED,
@@ -46,6 +46,16 @@ export const CURRENT_APP_VERSION: AppVersionInfo = {
   environment: 'production',
   releaseDate: '2026-08-22',
   changelog: [
+    {
+      version: '3.31.0',
+      date: '2026-10-17',
+      highlights: [
+        'استيراد أودو: اعتماد جماعي بدل سطر سطر - اختيار الأسطر وقبول تحذيراتها دفعة واحدة، لكل المراحل أو لمرحلة واحدة، مع حد "أول N سطر" لدفعة تجريبية',
+        'يشمل فقط أسطر أوامر العمل والهالك التي بلا أخطاء؛ أوامر التصنيع لا تُكتب أبدًا، والخطأ لا يُقبل أبدًا، ولا يُلمس سطر مستورد أو فاشل',
+        'قبل التنفيذ تظهر رسالة تأكيد بعدد الأسطر لكل مرحلة وأنواع التحذيرات التي ستُقبل، وكل سطر يسجل من اعتمده ومتى، وزر "إلغاء اختيار الكل"',
+        'لا يُكتب شيء عند الاعتماد الجماعي؛ الكتابة تبقى بزر "اعتماد وكتابة السجلات"'
+      ]
+    },
     {
       version: '3.30.0',
       date: '2026-10-17',

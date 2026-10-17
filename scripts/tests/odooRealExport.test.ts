@@ -336,6 +336,79 @@ test('E7. a hand-made brick work order counts PIECES: refused as tons, converted
   assert.equal(row.payload.pieceWeightKg, 2.5);
 });
 
+// ==================================================
+// F. BULK APPROVAL (3.31.0)
+// ==================================================
+
+const META = { user: 'tester', at: '2026-10-17T00:00:00Z' };
+/** Four work orders that can be written, one with an error (unknown centre) and five manufacturing orders of context. */
+const bulkSession = () => {
+  const mk = (ref: string, center: string, qty: number) => ({ ...WO_ROW, 'Manufacturing Order': ref, 'Work Center': center, Quantity: qty });
+  const mos = ['A', 'B', 'C', 'D', 'E'].map((x) => ({ ...MO_ROW, Reference: `خلط/MO/${x}`, 'Work Orders/Work Center': 'الخلاطات' }));
+  const wos = [
+    mk('خلط/MO/A', 'الخلاطات', 1), mk('خلط/MO/B', 'الخلاطات', 2), mk('خلط/MO/C', 'الخلاطات', 3),
+    mk('خلط/MO/D', 'الفرن الدوار', 4), mk('خلط/MO/E', 'مركز غير معروف', 5),
+  ];
+  const p = prod.readMrpProduction(mos, ctx('mo.xlsx'));
+  const w = wo.readMrpWorkOrder(wos, ctx('wo.xlsx'), []);
+  return session.buildOdooImportSession({ importSessionId: 'S', createdBy: 'u', createdAt: 'now', production: p.rows, workOrders: w.rows, scrap: [], approvedWorkCenters: [] });
+};
+
+test('F1. nothing is writable until approved - and the candidates are only error-free work orders', () => {
+  const built = bulkSession();
+  assert.equal(built.staged.filter(session.isOdooRowWritable).length, 0);
+  const c = session.bulkApprovalCandidates(built.staged, {});
+  assert.equal(c.length, 4, 'the unknown-centre row (an error) and the 5 context MOs are not candidates');
+  assert.ok(c.every((s: any) => s.kind === 'odooWorkOrder' && s.row.errors.length === 0 && s.payload));
+});
+
+test('F2. bulk approval makes exactly those rows writable and records who approved them', () => {
+  const built = bulkSession();
+  const out = session.approveRowsInBulk(built.staged, {}, META);
+  assert.equal(out.approved, 4);
+  assert.equal(out.staged.filter(session.isOdooRowWritable).length, 4);
+  const row = out.staged.find((s: any) => s.kind === 'odooWorkOrder' && session.isOdooRowWritable(s));
+  const history = row.row.resolutionHistory.map((h: any) => `${h.action}:${h.user}:${h.reason}`);
+  assert.ok(history.includes('INCLUDED:tester:BULK_APPROVAL') && history.includes('APPROVED_WARNINGS:tester:BULK_APPROVAL'));
+  assert.equal(built.staged.filter(session.isOdooRowWritable).length, 0, 'the input list is untouched');
+});
+
+test('F3. an error is never accepted, a manufacturing order is never written', () => {
+  const out = session.approveRowsInBulk(bulkSession().staged, {}, META);
+  assert.equal(out.staged.filter((s: any) => s.row.errors.length > 0 && session.isOdooRowWritable(s)).length, 0);
+  assert.equal(out.staged.filter((s: any) => s.kind === 'odooProduction' && session.isOdooRowWritable(s)).length, 0);
+});
+
+test('F4. a stage filter and a limit give a small pilot batch', () => {
+  const built = bulkSession();
+  assert.deepEqual(session.bulkApprovalSummary(session.bulkApprovalCandidates(built.staged, {})).byGroup.map((g: any) => [g.group, g.count]).sort(),
+    [['mixing', 3], ['rotary_furnace', 1]]);
+  const pilot = session.approveRowsInBulk(built.staged, { groups: ['mixing'], limit: 2 }, META);
+  assert.equal(pilot.approved, 2);
+  assert.equal(pilot.staged.filter(session.isOdooRowWritable).length, 2);
+  assert.equal(session.approveRowsInBulk(built.staged, { groups: ['tunnel_kiln'] }, META).approved, 0, 'a group with nothing eligible approves nothing');
+});
+
+test('F5. running it again approves nothing new, and an imported or failed row is never touched', () => {
+  const once = session.approveRowsInBulk(bulkSession().staged, {}, META);
+  assert.equal(session.approveRowsInBulk(once.staged, {}, META).approved, 0);
+  const marked = once.staged.map((s: any, i: number) => (i === 0 ? { ...s, row: { ...s.row, status: 'FAILED', selection: 'EXCLUDED' } } : s));
+  assert.equal(session.bulkApprovalCandidates(marked, {}).some((s: any) => s.row.status === 'FAILED'), false);
+});
+
+test('F6. the summary says which warnings are being accepted before anything changes', () => {
+  const sum = session.bulkApprovalSummary(session.bulkApprovalCandidates(bulkSession().staged, {}));
+  assert.equal(sum.total, 4);
+  assert.ok(sum.warnings.some((w: any) => /أُخذت من أمر التصنيع/.test(w.message) && w.count === 4));
+});
+
+test('F7. un-select all takes the selection back', () => {
+  const once = session.approveRowsInBulk(bulkSession().staged, {}, META);
+  const cleared = session.clearBulkSelection(once.staged, META);
+  assert.equal(cleared.cleared, 4);
+  assert.equal(cleared.staged.filter(session.isOdooRowWritable).length, 0);
+});
+
 (async () => {
   await bootstrap();
   for (const { name, fn } of registered) {

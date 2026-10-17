@@ -1,9 +1,9 @@
 {
   "_doc": "Release Manifest precursor. Describes WHAT is being released so the gate checks a committed declaration rather than whatever flags an operator typed. commitSha/buildId/deploymentId are left null until a release is cut - the gate fills the comparison from the build itself, and only enforces a field that is set here. This is NOT the Change Registry: no change IDs, no Firestore, no UI.",
-  "version": "3.30.0",
-  "releaseId": "REL-2026-0040",
+  "version": "3.31.0",
+  "releaseId": "REL-2026-0041",
   "changeIds": [
-    "MOD-0057"
+    "MOD-0058"
   ],
   "commitSha": null,
   "buildId": null,
@@ -66,7 +66,8 @@
     "master-data-material-price-import-btn",
     "material-price-template-btn",
     "استيراد خصائص وأسعار الخامات",
-    "odoo-convert-pieces"
+    "odoo-convert-pieces",
+    "odoo-import-bulk"
   ],
   "_markerNotes": {
     "ai-provider-management": "AI Provider Management route - absent means the AI Assistant closure was dropped",
@@ -126,7 +127,8 @@
     "master-data-material-price-import-btn": "The Master Data entry point to the material price import",
     "material-price-template-btn": "The price template download - the file the import is designed to take back",
     "استيراد خصائص وأسعار الخامات": "The import entry point covering alumina % and local / imported as well as prices - absent means those two can again only be typed one by one",
-    "odoo-convert-pieces": "The opt-in ton -> pieces switch of the Odoo import - absent means piece-counting stages can only refuse Odoo tonnages"
+    "odoo-convert-pieces": "The opt-in ton -> pieces switch of the Odoo import - absent means piece-counting stages can only refuse Odoo tonnages",
+    "odoo-import-bulk": "The bulk approval bar of the Odoo import - absent means approving a real export is again one row at a time"
   },
   "tests": [
     "buildIdentity",
@@ -189,6 +191,7 @@
   "deployCommand": "firebase deploy --only hosting --project asfourproduction-70e6e",
   "treeClean": true,
   "_changeNotes": {
+    "MOD-0058": "Odoo import: BULK APPROVAL. On the first real export the screen showed 911 production rows ready but 'ready to write: 0', because a row is written only when INCLUDED with its warnings accepted and the screen offered that one row at a time. Now a bar above the tabs includes rows and accepts their warnings in one action (odooImportSessionPure: bulkApprovalCandidates / bulkApprovalSummary / approveRowsInBulk / clearBulkSelection). It touches only work-order and scrap rows with NO error and a ready payload, never a manufacturing order (context), never an IMPORTED or FAILED row, and never a row already writable; it can be narrowed to one stage (or scrap) and to the first N rows for a pilot batch. A confirmation lists the rows per stage and the kinds of warning being accepted; each row records who approved it and when (INCLUDED / APPROVED_WARNINGS, reason BULK_APPROVAL). 'Un-select all' reverses it. Nothing is written by the approval - writing stays the 'Approve & write records' button, behind the existing import permission. Replay on the real files: writable 0 -> 1,221 (911 production + 310 scrap). No data was imported or written",
     "MOD-0057": "Two business decisions coded. (1) The casting & foam centre (صب الفوم / الصب والفوم / الصب والفرم) now has stageType = lightweight_foam: its work orders are written to the light-weight / foam record type in tons (the stage's own unit - no conversion), as Odoo gives them. The mixer of the foam line ('خلاط الفوم') stays a mixing machine. (2) 'اليدوى والشاكوش' is an exact alias of the hand-made brick centre (stage handmade_brick); that stage counts PIECES, so its tonnage is still refused unless the opt-in ton -> pieces switch is on (product piece weight). It is the only name that maps to that centre; any unlisted name still needs an approved mapping. The earlier tests that pinned the old 'no record type for casting & foam' decision were updated to the new one. Replay on the real files: rows ready 894 -> 911, unmapped centres 2 -> 0. No data was imported or written",
     "MOD-0056": "Work centres as the business defined them. (1) Rotary-kiln SUB-CENTRES: rotary_shakers (الهزازات, هزاز الشلاوى) and rotary_crushers (كسارات, كسارة 11 / 12), each with parentCenterId = rotary_furnace and stageType = rotary_furnace, matched by the machine-name aliases 'هزاز', 'كسارة', 'كسارات' (the whole raw text stays as the machine). Their work orders are written to the rotary-kiln record type in tons; the record carries subCenterId, subCenterName, parentCenterId and subCenterMachine so a sub-centre's tonnage can be told apart from the kiln's own, which carries none of them. (2) 'صب الفوم' is an exact alias of the EXISTING casting_foam_center; that centre still has no record type (no stage was invented), so its rows stay refused with the reason. The sard centre and every other centre resolve as before. Replay on the real files: rows ready to write 615 -> 894, unmapped centres 7 -> 2 (hand-made brick still awaits the user's approval). NOTE for reporting: sub-centre tonnage is downstream processing of the kiln's material, so a report summing the whole rotary-kiln stage must filter on subCenterId to avoid counting the same material twice. No data was imported or written",
     "MOD-0055": "Odoo import: press and shift identity for pressing rows. Odoo gives a press NAME and a work-order number; the production record needs the press and shift of Master Data and the reference resolver reads pressCode (-> pressId). The screen now loads the presses and shifts (two small collections, only when pressing rows exist) and the session writes pressCode / pressName from the work-centre name, and shiftId / shiftName / shiftCode from the shift number - ONLY on exactly one match (press: name or code equal after normalisation, inactive presses ignored; shift: shiftNumber / number field, or a code that is N or ends in N). No match, several matches, or Master Data unreadable -> the field is left out and the row carries a warning; nothing is guessed. Other stages are untouched. The 3.27.0 opt-in ton -> pieces conversion is a single switch applied to every row at read time. No data was imported or written",
@@ -239,8 +242,8 @@
     "UI-0010": "Financial Accounts import opens a dedicated Master Data importer instead of the Historical Excel Import screen: the action no longer navigates to the bulk-entry route (which App.tsx renders as DataImportView); a new in-place modal reuses the existing financialAccounts schema, XLSX reader, row validation, duplicate detection and chunked commit, adds sheet selection and parent/cycle relationship checks, and keeps partial import so invalid rows never block valid ones",
     "DB-0009": "Category-first Master Data over an extensible registry; Financial Accounts master data with Excel import and hierarchical editing (new financialAccounts collection and its Firestore rule); one shared generic hierarchy resolver reused by Master Data, Production Review and production aggregation; hierarchical cost-centre editing with cycle, self-parent and unknown-parent protection"
   },
-  "previousVersion": "3.29.0",
+  "previousVersion": "3.30.0",
   "versionBump": "MINOR",
   "classificationConfidence": "HIGH",
-  "previousReleaseId": "REL-2026-0039"
+  "previousReleaseId": "REL-2026-0040"
 }
