@@ -53,6 +53,9 @@ export const WORK_CENTERS: readonly WorkCenterDefinition[] = [
   { id: 'rotary_furnace', nameAr: 'الفرن الدوار', nameEn: 'Rotary Kiln', stageType: 'rotary_furnace' },
   { id: 'sorting', nameAr: 'الفرز', nameEn: 'Sorting', stageType: 'sorting' },
   { id: 'mortar_concrete_center', nameAr: 'مركز المونة والخرسانة', nameEn: 'Mortar & Concrete Center', stageType: 'mortar_concrete' },
+  // 3.27.0: the stage already exists end to end (form, matrix, duplicate identity). The centre is offered
+  // in the approval list only - NO alias maps a name to it; the user approves each raw name himself.
+  { id: 'handmade_brick', nameAr: 'الطوب اليدوي', nameEn: 'Hand-made Brick', stageType: 'handmade_brick' },
   {
     // السرد is a SEPARATE downstream sizing / sorting stage in the rotary-kiln
     // area - it is NOT the rotary furnace operation. `parentCenterId` records

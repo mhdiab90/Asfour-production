@@ -95,6 +95,26 @@ export interface OdooStagedRow {
   targetStage?: ProductionStageType | null;
 }
 
+/**
+ * OPT-IN conversion of an Odoo TON quantity into PIECES for the stages that count pieces (pressing,
+ * sorting, hand-made brick), 3.27.0. Off unless the user switches it on, because it is a business
+ * rule, not a unit spelling: pieces = tons x 1000 / the PRODUCT's own piece weight (kg), rounded to
+ * the nearest whole piece. A product without a piece weight is refused - never a default weight - and
+ * the tons the source gave are kept on the record (sourceQuantityTons).
+ */
+export interface PieceConversionOptions {
+  enabled: boolean;
+  /** The piece weight in kg of a product, by code - from Master Data; null / 0 = unknown. */
+  pieceWeightKg: (productCode: string) => number | null | undefined;
+}
+
+/** The field a converted piece count is written to, per piece-counting stage. */
+export const PIECE_QUANTITY_FIELD: Readonly<Record<string, string>> = {
+  pressing: 'productionQuantity',
+  handmade_brick: 'productionQuantity',
+  sorting: 'totalCount',
+};
+
 export interface OdooSessionInput {
   importSessionId: string;
   createdBy: string;
@@ -103,6 +123,7 @@ export interface OdooSessionInput {
   workOrders: readonly OdooWorkOrderRow[];
   scrap: readonly OdooScrapRow[];
   approvedWorkCenters?: readonly ApprovedWorkCenterMapping[];
+  pieceConversion?: PieceConversionOptions;
 }
 
 export interface OdooSessionResult {
@@ -123,7 +144,7 @@ const issue = (field: string, messageAr: string, messageEn: string): ImportIssue
 export function productionPayloadFromWorkOrder(
   workOrder: OdooWorkOrderRow,
   mo: OdooProductionRow | null,
-  options: { attachComponents: boolean },
+  options: { attachComponents: boolean; pieceConversion?: PieceConversionOptions },
 ): { payload: Record<string, unknown> | null; errors: ImportIssue[]; warnings: ImportIssue[] } {
   const errors: ImportIssue[] = [];
   const warnings: ImportIssue[] = [];
@@ -163,14 +184,43 @@ export function productionPayloadFromWorkOrder(
   const date = n.date ?? n.startDate ?? mo?.normalized.scheduledDate ?? mo?.normalized.startDate ?? null;
   const productCode = n.productCode || mo?.normalized.productCode || '';
 
+  // Opt-in ton -> pieces for a piece-counting stage (see PieceConversionOptions).
+  let quantity = n.quantity;
+  let field: string | null = quantityField;
+  let convertedFrom: { tons: number; pieceWeightKg: number } | null = null;
+  const pieceField = PIECE_QUANTITY_FIELD[stage] ?? null;
+  if (options.pieceConversion?.enabled && pieceField && unit === 'طن' && n.quantity !== null && n.quantity > 0) {
+    const weight = Number(options.pieceConversion.pieceWeightKg(productCode));
+    if (!(weight > 0)) {
+      errors.push(issue('quantity',
+        `لا يوجد وزن قطعة للمنتج "${productCode || '-'}" - لا يمكن تحويل الطن إلى قطع (لا يُفترض وزن).`,
+        `Product "${productCode || '-'}" has no piece weight - the tons cannot be converted to pieces (no weight is assumed).`));
+    } else {
+      const pieces = Math.round((n.quantity * 1000) / weight);
+      if (pieces < 1) {
+        errors.push(issue('quantity',
+          `${n.quantity} طن بوزن قطعة ${weight} كجم أقل من قطعة واحدة.`,
+          `${n.quantity} t at a piece weight of ${weight} kg is less than one piece.`));
+      } else {
+        quantity = pieces;
+        field = pieceField;
+        unit = 'قطعة';
+        convertedFrom = { tons: n.quantity, pieceWeightKg: weight };
+        warnings.push(issue('quantity',
+          `حُوّلت ${n.quantity} طن إلى ${pieces} قطعة بوزن قطعة ${weight} كجم (مقرَّبة لأقرب قطعة).`,
+          `${n.quantity} t converted to ${pieces} pieces at ${weight} kg per piece (rounded to the nearest piece).`));
+      }
+    }
+  }
+
   if (!date) errors.push(issue('date', 'لا يوجد تاريخ للسجل.', 'The record has no date.'));
   if (!productCode) errors.push(issue('productCode', 'لا يوجد كود منتج.', 'There is no product code.'));
-  if (n.quantity === null) {
+  if (quantity === null) {
     errors.push(issue('quantity', 'لا توجد كمية فعلية على أمر العمل - الكمية المخططة لا تُستخدم.', 'The work order has no actual quantity - the planned quantity is never used.'));
   }
   if (!unit) {
     errors.push(issue('unit', `وحدة "${n.unitOriginal || '-'}" غير معتمدة.`, `Unit "${n.unitOriginal || '-'}" is not an approved unit.`));
-  } else if (!quantityField || (stageUnit && unit !== stageUnit)) {
+  } else if (!field || (stageUnit && unit !== stageUnit)) {
     errors.push(issue('quantity',
       `عدم تطابق الوحدة: المرحلة تسجل الإنتاج بوحدة "${stageUnit ?? '-'}" والمصدر يعطي "${unit}" - لا يتم أي تحويل.`,
       `Unit mismatch: this stage records production in "${stageUnit ?? '-'}" and the source gives "${unit}" - nothing is converted.`));
@@ -183,7 +233,7 @@ export function productionPayloadFromWorkOrder(
     date,
     productCode,
     productName: n.productName || mo?.normalized.productName || '',
-    [quantityField as string]: n.quantity,
+    [field as string]: quantity,
     productionUnit: unit,
     manufacturingOrderNumber: n.moReference,
     sourceDocumentReference: mo?.normalized.sourceDocument ?? null,
@@ -193,6 +243,12 @@ export function productionPayloadFromWorkOrder(
     ],
   };
 
+  if (convertedFrom) {
+    // The tons the source gave, and the weight that turned them into pieces, stay on the record.
+    payload.sourceQuantityTons = convertedFrom.tons;
+    if (stage === 'pressing') payload.pieceWeight = convertedFrom.pieceWeightKg;
+    else if (stage === 'handmade_brick') payload.pieceWeightKg = convertedFrom.pieceWeightKg;
+  }
   if (n.shiftNumber != null) payload.shiftNumber = n.shiftNumber;
   if (mo?.normalized.quantityToProduce !== undefined && mo?.normalized.quantityToProduce !== null) {
     // Planned, kept as planned - never a production quantity.
@@ -319,7 +375,7 @@ export function buildOdooImportSession(input: OdooSessionInput): OdooSessionResu
   for (const row of input.workOrders) {
     const mo = moByKey.get(moKey(row.normalized.moReference)) ?? null;
     const single = (workOrderCountByMo.get(moKey(row.normalized.moReference)) ?? 0) === 1;
-    const built = productionPayloadFromWorkOrder(row, mo, { attachComponents: single });
+    const built = productionPayloadFromWorkOrder(row, mo, { attachComponents: single, pieceConversion: input.pieceConversion });
     const orphanKinds = orphanKindsOf(link.orphans, row.rowId);
     const conflicts = conflictsOf(link.conflicts, row.normalized.moReference);
     const errors: ImportIssue[] = [...row.issues, ...built.errors];

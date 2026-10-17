@@ -103,6 +103,79 @@ test('B2. a centre nobody has approved is still unknown and still needs approval
   }
 });
 
+// ==================================================
+// C. OPT-IN TON -> PIECES (3.26.2)
+// ==================================================
+
+const PRESS_WO = { ...WO_ROW, 'Work Center': 'مكبس بوخر 2', Quantity: 0.5 };
+const PRESS_MO = { ...MO_ROW, 'Work Orders/Work Center': 'مكبس بوخر 2' };
+const withConversion = (weights: Record<string, number>, workOrders: any[], production: any[]) => {
+  const p = prod.readMrpProduction(production, ctx('mo.xlsx'));
+  const w = wo.readMrpWorkOrder(workOrders, ctx('wo.xlsx'), []);
+  return session.buildOdooImportSession({
+    importSessionId: 'S', createdBy: 'u', createdAt: 'now', production: p.rows, workOrders: w.rows, scrap: [], approvedWorkCenters: [],
+    pieceConversion: { enabled: true, pieceWeightKg: (code: string) => weights[code] ?? null },
+  });
+};
+
+test('C1. OFF by default: pressing still refuses tons (nothing changes unless the user switches it on)', () => {
+  const built = build([PRESS_WO], [PRESS_MO]);
+  assert.equal(built.counts.productionRowsToWrite, 0);
+});
+
+test('C2. ON with the product piece weight: tons x 1000 / weight, rounded, written as pieces with the tons kept', () => {
+  const built = withConversion({ LCC8001: 2.5 }, [PRESS_WO], [PRESS_MO]);
+  assert.equal(built.counts.productionRowsToWrite, 1);
+  const row = woRow(built);
+  assert.equal(row.payload.productionQuantity, 200, '0.5 t x 1000 / 2.5 kg');
+  assert.equal(row.payload.productionUnit, 'قطعة');
+  assert.equal(row.payload.sourceQuantityTons, 0.5, 'the source tons stay on the record');
+  assert.equal(row.payload.pieceWeight, 2.5);
+  assert.ok((row.row.warnings ?? []).some((w: any) => /حُوّلت 0.5 طن إلى 200 قطعة/.test(w.messageAr)), 'and the row says exactly what was done');
+});
+
+test('C3. the conversion rounds to the nearest whole piece', () => {
+  const built = withConversion({ LCC8001: 3.3 }, [{ ...PRESS_WO, Quantity: 0.1 }], [PRESS_MO]);
+  assert.equal(woRow(built).payload.productionQuantity, 30, '100 / 3.3 = 30.3');
+});
+
+test('C4. a product with no piece weight is refused - no weight is ever assumed', () => {
+  const built = withConversion({}, [PRESS_WO], [PRESS_MO]);
+  assert.equal(built.counts.productionRowsToWrite, 0);
+  assert.ok((woRow(built).row.errors ?? []).some((e: any) => /لا يوجد وزن قطعة/.test(e.messageAr)));
+});
+
+test('C5. less than one piece is refused', () => {
+  const built = withConversion({ LCC8001: 800 }, [{ ...PRESS_WO, Quantity: 0.0001 }], [PRESS_MO]);
+  assert.equal(built.counts.productionRowsToWrite, 0);
+  assert.ok((woRow(built).row.errors ?? []).some((e: any) => /أقل من قطعة واحدة/.test(e.messageAr)));
+});
+
+test('C6. sorting writes the converted count to totalCount', () => {
+  const sort = { ...WO_ROW, 'Work Center': 'الفرز', Quantity: 1 };
+  const built = withConversion({ LCC8001: 4 }, [sort], [{ ...MO_ROW, 'Work Orders/Work Center': 'الفرز' }]);
+  const row = woRow(built);
+  assert.equal(row.payload.totalCount, 250);
+  assert.equal('productionQuantity' in row.payload, false);
+});
+
+test('C7. a stage that already counts tons is never touched by the conversion', () => {
+  const built = withConversion({ LCC8001: 2.5 }, [WO_ROW], [MO_ROW]);
+  const row = woRow(built);
+  assert.equal(row.payload.productionQuantity, 2);
+  assert.equal(row.payload.productionUnit, 'طن');
+  assert.equal('sourceQuantityTons' in row.payload, false);
+});
+
+test('C8. the Hand-made Brick centre is offered for approval but no name maps to it by itself', () => {
+  assert.equal(reg.workCenterById('handmade_brick')?.stageType, 'handmade_brick');
+  assert.equal(reg.resolveWorkCenter('اليدوى والشاكوش', []).status, 'UNMAPPED_CENTER', 'still needs the user to approve it');
+  const approved = [{ rawNormalized: reg.normaliseWorkCenterText('اليدوى والشاكوش'), mainCenterId: 'handmade_brick', active: true }];
+  const r = reg.resolveWorkCenter('اليدوى والشاكوش', approved);
+  assert.equal(r.stageType, 'handmade_brick');
+  assert.equal(reg.WORK_CENTER_ALIASES.some((a: any) => a.centerId === 'handmade_brick'), false);
+});
+
 (async () => {
   await bootstrap();
   for (const { name, fn } of registered) {

@@ -37,7 +37,7 @@ const DEPLOYMENT_ID_INJECTED = typeof __BUILD_DEPLOYMENT_ID__ === 'string' ? __B
 
 export const CURRENT_APP_VERSION: AppVersionInfo = {
   /** Set by the automatic release planner from the classified change set - see releasePlannerPure.ts. */
-  version: '3.26.1',
+  version: '3.27.0',
   buildId: BUILD_ID_INJECTED,
   buildTimestamp: BUILD_TIMESTAMP_INJECTED,
   gitCommit: COMMIT_SHA_INJECTED,
@@ -46,6 +46,16 @@ export const CURRENT_APP_VERSION: AppVersionInfo = {
   environment: 'production',
   releaseDate: '2026-08-22',
   changelog: [
+    {
+      version: '3.27.0',
+      date: '2026-10-17',
+      highlights: [
+        'استيراد أودو: خيار اختياري (مطفأ افتراضيًا) لتحويل الطن إلى قطع في الكبس والفرز والطوب اليدوي = الطن × 1000 ÷ وزن قطعة المنتج، مقرّبة لأقرب قطعة',
+        'المنتج بلا وزن قطعة يُرفض ولا يُفترض له وزن، والطن الأصلي يُحفظ على السجل، وكل سطر محوَّل يُظهر ما حدث بالضبط',
+        'مركز "الطوب اليدوي" متاح الآن في اعتماد مراكز العمل (لا يُربط أي اسم به تلقائيًا)',
+        'الإصدار يشمل تصحيحات 3.26.1: تاريخ أمر العمل، والوحدة من أمر التصنيع، وأسماء المراكز'
+      ]
+    },
     {
       version: '3.26.1',
       date: '2026-10-17',

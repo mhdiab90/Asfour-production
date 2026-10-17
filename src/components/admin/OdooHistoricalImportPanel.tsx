@@ -20,6 +20,7 @@ import { acceptRowWarnings, applyRowCorrection, setRowSelection, type ImportRowS
 import { readMrpProduction } from '../../services/odooProductionReaderPure';
 import { readMrpWorkOrder } from '../../services/odooWorkOrderReaderPure';
 import { readStockScrap } from '../../services/odooScrapReaderPure';
+import { fetchMasterData, MASTER_DATA_COLLECTIONS } from '../../services/masterDataService';
 import { buildOdooImportSession, isOdooRowWritable, type OdooSessionResult, type OdooStagedRow } from '../../services/odooImportSessionPure';
 import {
   executeOdooImport,
@@ -73,6 +74,8 @@ export const OdooHistoricalImportPanel: React.FC<Props> = ({ isOpen, onClose }) 
 
   const [files, setFiles] = useState<Partial<Record<OdooSourceType, LoadedFile>>>({});
   const [approvedCenters, setApprovedCenters] = useState<ApprovedWorkCenterMapping[]>([]);
+  /** OFF by default: turns Odoo tons into pieces for pressing / sorting / hand-made brick by each product's piece weight. */
+  const [convertTonsToPieces, setConvertTonsToPieces] = useState<boolean>(false);
   const [session, setSession] = useState<OdooSessionResult | null>(null);
   const [staged, setStaged] = useState<OdooStagedRow[]>([]);
   const [importSessionId, setImportSessionId] = useState<string>('');
@@ -132,6 +135,19 @@ export const OdooHistoricalImportPanel: React.FC<Props> = ({ isOpen, onClose }) 
         ? readStockScrap(files.STOCK_SCRAP.rows, { importSessionId: id, fileName: files.STOCK_SCRAP.file.name, sheetName: files.STOCK_SCRAP.sheetName })
         : null;
 
+      // Piece weights are read from Master Data only when the user switched the conversion on.
+      let pieceConversion: { enabled: boolean; pieceWeightKg: (code: string) => number | null } | undefined;
+      if (convertTonsToPieces) {
+        const products = await fetchMasterData<any>(MASTER_DATA_COLLECTIONS.products);
+        const weights = new Map<string, number>();
+        for (const p of products) {
+          const w = Number(p.pieceWeightKg ?? p.pieceWeight);
+          const code = String(p.code ?? p.productCode ?? '').trim().toUpperCase();
+          if (code && w > 0) weights.set(code, w);
+        }
+        pieceConversion = { enabled: true, pieceWeightKg: (code) => weights.get(String(code).trim().toUpperCase()) ?? null };
+      }
+
       const sheetIssues = [...(production?.sheetIssues ?? []), ...(workOrders?.sheetIssues ?? []), ...(scrap?.sheetIssues ?? [])];
       const built = buildOdooImportSession({
         importSessionId: id,
@@ -141,6 +157,7 @@ export const OdooHistoricalImportPanel: React.FC<Props> = ({ isOpen, onClose }) 
         workOrders: workOrders?.rows ?? [],
         scrap: scrap?.rows ?? [],
         approvedWorkCenters: approved,
+        pieceConversion,
       });
       setSession(built);
       setStaged(built.staged);
@@ -352,6 +369,15 @@ export const OdooHistoricalImportPanel: React.FC<Props> = ({ isOpen, onClose }) 
           <button type="button" disabled={busy} onClick={() => void refreshSessions()} className="inline-flex items-center gap-1.5 px-3 py-2 font-bold bg-slate-100 rounded-xl cursor-pointer">
             <RefreshCw className="w-3.5 h-3.5" />{isAr ? 'الجلسات المحفوظة' : 'Saved sessions'}
           </button>
+          <label
+            className="inline-flex items-center gap-1.5 font-bold text-slate-700 cursor-pointer"
+            title={isAr
+              ? 'يحوّل كمية أودو بالطن إلى قطع في الكبس والفرز والطوب اليدوي = الطن × 1000 ÷ وزن قطعة المنتج، مقرّبة لأقرب قطعة. المنتج بلا وزن قطعة يُرفض.'
+              : 'Turns Odoo tons into pieces for pressing, sorting and hand-made brick = tons x 1000 / the product piece weight, rounded. A product without a piece weight is refused.'}
+          >
+            <input id="odoo-convert-pieces" type="checkbox" checked={convertTonsToPieces} disabled={busy} onChange={(e) => setConvertTonsToPieces(e.target.checked)} className="accent-amber-500" />
+            {isAr ? 'تحويل الطن إلى قطع (بوزن قطعة المنتج)' : 'Convert tons to pieces (by product piece weight)'}
+          </label>
           {busy && <Loader2 className="w-4 h-4 animate-spin text-slate-500" />}
           {importSessionId && <span className="font-mono text-slate-500">{importSessionId}</span>}
         </div>
