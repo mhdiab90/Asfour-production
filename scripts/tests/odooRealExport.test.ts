@@ -98,7 +98,8 @@ test('B1. the real spellings of the approved centres resolve to them', () => {
 });
 
 test('B2. a centre nobody has approved is still unknown and still needs approval', () => {
-  for (const raw of ['الهزازات', 'كسارات', 'اليدوى والشاكوش', 'كسارة رقم 12', 'هزاز الشلاوى']) {
+  // 3.29.0: the shakers, crushers and hand-made brick - only the last still needs the user's approval.
+  for (const raw of ['اليدوى والشاكوش', 'مركز غير معروف']) {
     assert.equal(reg.resolveWorkCenter(raw, []).status, 'UNMAPPED_CENTER', raw);
   }
 });
@@ -257,6 +258,67 @@ test('D7. the lookups themselves: name or code, one match only', () => {
   assert.equal(shift(3), null);
   assert.equal(shift(4), null);
   assert.equal(reg.buildShiftLookup([{ id: 'a', name: 'x', shiftNumber: 2 }])(2)?.id, 'a', 'a shiftNumber field is read');
+});
+
+// ==================================================
+// E. ROTARY-KILN SUB-CENTRES AND CASTING & FOAM (3.29.0)
+// ==================================================
+
+test('E1. the shakers and the crushers are sub-centres of the rotary kiln and write to its record type', () => {
+  for (const [raw, center] of [['الهزازات', 'rotary_shakers'], ['هزاز الشلاوى', 'rotary_shakers'], ['كسارات', 'rotary_crushers'], ['كسارة رقم 12', 'rotary_crushers'], ['كسارة رقم 11', 'rotary_crushers']]) {
+    const r = reg.resolveWorkCenter(raw, []);
+    assert.equal(r.mainCenterId, center, raw);
+    assert.equal(r.stageType, 'rotary_furnace', raw);
+    assert.equal(r.status, 'RESOLVED', raw);
+    assert.equal(reg.workCenterById(center).parentCenterId, 'rotary_furnace');
+  }
+  assert.equal(reg.resolveWorkCenter('كسارة رقم 12', []).equipmentName, 'كسارة رقم 12', 'the machine stays readable');
+});
+
+test('E2. the kiln itself and every other centre resolve exactly as before', () => {
+  const id = (raw: string) => reg.resolveWorkCenter(raw, []).mainCenterId;
+  assert.equal(id('الفرن الدوار'), 'rotary_furnace');
+  assert.equal(id('مكبس بوخر 2'), 'pressing');
+  assert.equal(id('الخلاطات'), 'mixing');
+  assert.equal(id('خلاط الفوم'), 'mixing');
+  assert.equal(id('الطاحونه الصينيه رقم 1'), 'chinese_mills');
+  assert.equal(id('السرد'), 'sard', 'the sard centre is untouched');
+});
+
+test('E3. casting & foam: the raw name resolves to the EXISTING centre, which still has no record type', () => {
+  const r = reg.resolveWorkCenter('صب الفوم', []);
+  assert.equal(r.mainCenterId, 'casting_foam_center');
+  assert.equal(r.status, 'NO_STAGE_MAPPING');
+  assert.equal(r.stageType, null);
+  assert.equal(reg.workCenterById('casting_foam_center').stageType, null, 'no stage was invented for it');
+});
+
+test('E4. a shaker work order is written to the rotary-kiln stage, in tons, with its sub-centre identity on the record', () => {
+  const shaker = { ...WO_ROW, 'Work Center': 'الهزازات', Quantity: 3 };
+  const built = build([shaker], [{ ...MO_ROW, 'Work Orders/Work Center': 'الهزازات' }]);
+  assert.equal(built.counts.productionRowsToWrite, 1);
+  const row = woRow(built);
+  assert.equal(row.targetStage, 'rotary_furnace');
+  assert.equal(row.payload.stageType, 'rotary_furnace');
+  assert.equal(row.payload.productionQuantity, 3);
+  assert.equal(row.payload.productionUnit, 'طن');
+  assert.equal(row.payload.subCenterId, 'rotary_shakers');
+  assert.equal(row.payload.parentCenterId, 'rotary_furnace');
+  assert.equal(row.payload.subCenterMachine, 'الهزازات');
+});
+
+test('E5. the kiln itself has NO sub-centre fields on its work order', () => {
+  const kiln = { ...WO_ROW, 'Work Center': 'الفرن الدوار', Quantity: 3 };
+  const row = woRow(build([kiln], [{ ...MO_ROW, 'Work Orders/Work Center': 'الفرن الدوار' }]));
+  assert.equal(row.payload.stageType, 'rotary_furnace');
+  assert.equal('subCenterId' in row.payload, false);
+});
+
+test('E6. a casting & foam work order is still refused for writing (no record type), and says why', () => {
+  const foam = { ...WO_ROW, 'Work Center': 'صب الفوم', Quantity: 1 };
+  const built = build([foam], [{ ...MO_ROW, 'Work Orders/Work Center': 'صب الفوم' }]);
+  assert.equal(built.counts.productionRowsToWrite, 0);
+  assert.ok((woRow(built).row.errors ?? []).some((e: any) => /غير مرتبط بنوع سجل إنتاج/.test(e.messageAr)));
 });
 
 (async () => {

@@ -37,7 +37,7 @@ const DEPLOYMENT_ID_INJECTED = typeof __BUILD_DEPLOYMENT_ID__ === 'string' ? __B
 
 export const CURRENT_APP_VERSION: AppVersionInfo = {
   /** Set by the automatic release planner from the classified change set - see releasePlannerPure.ts. */
-  version: '3.28.0',
+  version: '3.29.0',
   buildId: BUILD_ID_INJECTED,
   buildTimestamp: BUILD_TIMESTAMP_INJECTED,
   gitCommit: COMMIT_SHA_INJECTED,
@@ -46,6 +46,15 @@ export const CURRENT_APP_VERSION: AppVersionInfo = {
   environment: 'production',
   releaseDate: '2026-08-22',
   changelog: [
+    {
+      version: '3.29.0',
+      date: '2026-10-17',
+      highlights: [
+        'مراكز فرعية تابعة للفرن الدوار: "الهزازات" (وهزاز الشلاوى) و"الكسارات" (وكسارة 11 و12)، وإنتاجها يُكتب في سجل الفرن الدوار مع هوية المركز الفرعي والماكينة على السجل',
+        'مركز "صب الفوم" يُعرَّف بالمركز الموجود "الصب والفرم" (لا يزال بلا نوع سجل إنتاج فلا يُكتب إنتاجه)',
+        'استيراد أودو: أسطر الإنتاج الجاهزة للكتابة على ملفات التجربة ارتفعت من 615 إلى 894'
+      ]
+    },
     {
       version: '3.28.0',
       date: '2026-10-17',

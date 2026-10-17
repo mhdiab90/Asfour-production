@@ -40,7 +40,7 @@ import type {
 import { applyValidation, createImportRow, type ImportIssue, type ImportRow } from './entityImportPure';
 import { ODOO_QUANTITY_FIELD } from './odooManufacturingImportPure';
 import { stageUomRow } from './uomReadinessPure';
-import { summariseWorkCenters, type ApprovedWorkCenterMapping } from './workCenterRegistryPure';
+import { summariseWorkCenters, workCenterById, type ApprovedWorkCenterMapping } from './workCenterRegistryPure';
 import type { OdooProductionRow } from './odooProductionReaderPure';
 import type { OdooWorkOrderRow } from './odooWorkOrderReaderPure';
 import type { OdooScrapRow } from './odooScrapReaderPure';
@@ -264,6 +264,15 @@ export function productionPayloadFromWorkOrder(
     payload.sourceQuantityTons = convertedFrom.tons;
     if (stage === 'pressing') payload.pieceWeight = convertedFrom.pieceWeightKg;
     else if (stage === 'handmade_brick') payload.pieceWeightKg = convertedFrom.pieceWeightKg;
+  }
+  // A sub-centre of another centre (the rotary kiln's shakers and crushers) keeps its own identity on the
+  // record: the stage is the parent's, the sub-centre is what tells the two apart.
+  const subCenter = workCenterById(n.workCenter.mainCenterId);
+  if (subCenter?.parentCenterId) {
+    payload.subCenterId = subCenter.id;
+    payload.subCenterName = subCenter.nameAr;
+    payload.parentCenterId = subCenter.parentCenterId;
+    if (n.workCenter.equipmentName) payload.subCenterMachine = n.workCenter.equipmentName;
   }
   if (n.shiftNumber != null) payload.shiftNumber = n.shiftNumber;
   if (stage === 'pressing' && options.identity) {

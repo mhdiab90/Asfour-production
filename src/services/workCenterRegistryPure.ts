@@ -53,6 +53,12 @@ export const WORK_CENTERS: readonly WorkCenterDefinition[] = [
   { id: 'rotary_furnace', nameAr: 'الفرن الدوار', nameEn: 'Rotary Kiln', stageType: 'rotary_furnace' },
   { id: 'sorting', nameAr: 'الفرز', nameEn: 'Sorting', stageType: 'sorting' },
   { id: 'mortar_concrete_center', nameAr: 'مركز المونة والخرسانة', nameEn: 'Mortar & Concrete Center', stageType: 'mortar_concrete' },
+  // 3.29.0: sub-centres of the ROTARY KILN, as the business defined them - the shakers and the crushers
+  // (كسارة 11 / 12, هزاز الشلاوى) belong to the rotary kiln area. Their production is written to the
+  // rotary-kiln record type; the sub-centre's own identity (subCenterId / subCenterName / parentCenterId)
+  // and the machine are kept on the record so the two can be told apart from the kiln itself.
+  { id: 'rotary_shakers', nameAr: 'الهزازات - تابع للفرن الدوار', nameEn: 'Shakers (rotary kiln sub-centre)', stageType: 'rotary_furnace', parentCenterId: 'rotary_furnace' },
+  { id: 'rotary_crushers', nameAr: 'الكسارات - تابع للفرن الدوار', nameEn: 'Crushers (rotary kiln sub-centre)', stageType: 'rotary_furnace', parentCenterId: 'rotary_furnace' },
   // 3.27.0: the stage already exists end to end (form, matrix, duplicate identity). The centre is offered
   // in the approval list only - NO alias maps a name to it; the user approves each raw name himself.
   { id: 'handmade_brick', nameAr: 'الطوب اليدوي', nameEn: 'Hand-made Brick', stageType: 'handmade_brick' },
@@ -128,6 +134,8 @@ export const WORK_CENTER_ALIASES: readonly WorkCenterAlias[] = [
   { alias: 'الفرز', centerId: 'sorting', match: 'EXACT' },
   { alias: 'الصب والفوم', centerId: 'casting_foam_center', match: 'EXACT' },
   { alias: 'الصب والفرم', centerId: 'casting_foam_center', match: 'EXACT' },
+  // 3.29.0: the work-centre name as the real Odoo export spells it - the same, existing centre.
+  { alias: 'صب الفوم', centerId: 'casting_foam_center', match: 'EXACT' },
   { alias: 'الفرن الدوار', centerId: 'rotary_furnace', match: 'EXACT' },
   { alias: 'المونة والخرسانة', centerId: 'mortar_concrete_center', match: 'EXACT' },
   // 3.26.1: the same centres as they are spelled in the real Odoo work-order export (a spaced "و",
@@ -158,6 +166,10 @@ export const WORK_CENTER_ALIASES: readonly WorkCenterAlias[] = [
   { alias: 'الفرن النفقي', centerId: 'tunnel_kiln', match: 'CONTAINS' },
   { alias: 'الفرن الدوار', centerId: 'rotary_furnace', match: 'CONTAINS' },
   { alias: 'خلاط', centerId: 'mixing', match: 'CONTAINS' },
+  // 3.29.0: rotary-kiln sub-centres (the whole raw text stays as the machine: "كسارة رقم 12", "هزاز الشلاوى").
+  { alias: 'هزاز', centerId: 'rotary_shakers', match: 'CONTAINS' },
+  { alias: 'كسارة', centerId: 'rotary_crushers', match: 'CONTAINS' },
+  { alias: 'كسارات', centerId: 'rotary_crushers', match: 'CONTAINS' },
 ];
 
 /** TUBE or BALL only when the raw text says so. */
