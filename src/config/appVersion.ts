@@ -37,7 +37,7 @@ const DEPLOYMENT_ID_INJECTED = typeof __BUILD_DEPLOYMENT_ID__ === 'string' ? __B
 
 export const CURRENT_APP_VERSION: AppVersionInfo = {
   /** Set by the automatic release planner from the classified change set - see releasePlannerPure.ts. */
-  version: '3.26.0',
+  version: '3.26.1',
   buildId: BUILD_ID_INJECTED,
   buildTimestamp: BUILD_TIMESTAMP_INJECTED,
   gitCommit: COMMIT_SHA_INJECTED,
@@ -46,6 +46,16 @@ export const CURRENT_APP_VERSION: AppVersionInfo = {
   environment: 'production',
   releaseDate: '2026-08-22',
   changelog: [
+    {
+      version: '3.26.1',
+      date: '2026-10-17',
+      highlights: [
+        'استيراد أودو: تاريخ أمر العمل يُقرأ من عمود "Scheduled Start Date" (كان غير معروف فيُرفض كل أمر عمل بلا تاريخ)',
+        'استيراد أودو: ملف أوامر العمل لا يحتوي عمود وحدة، فتؤخذ الوحدة من أمر التصنيع المرتبط (Ton = طن) بدون أي تحويل وبتنبيه ظاهر على السطر',
+        'استيراد أودو: أسماء مراكز مكتوبة بإملاء مختلف تُعرف كمراكزها المعتمدة (المونة و الخرسانة، الافران النفقية، الفرز و التغليف)',
+        'لم يتغير: المرحلة التي تعد بالقطعة ما زالت ترفض كمية بالطن، والمركز غير المعتمد ما زال يحتاج اعتمادًا'
+      ]
+    },
     {
       version: '3.26.0',
       date: '2026-09-29',

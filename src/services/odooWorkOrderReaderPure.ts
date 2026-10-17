@@ -92,7 +92,9 @@ export const MRP_WORKORDER_ALIASES: Readonly<Record<string, readonly string[]>> 
   employeeName: ['Employee', 'Employees', 'Worker', 'Employee/Name', 'العامل', 'الموظف', 'العمالة'],
   employeeCode: ['Employee Code', 'Employee/Barcode', 'كود الموظف', 'كود العامل'],
   state: ['State', 'Status', 'الحالة'],
-  date: ['Date', 'Scheduled Date', 'التاريخ'],
+  // 3.26.1: Odoo's work-order export names its only date column "Scheduled Start Date" - without it
+  // every work order of a real export had no date and none could be written.
+  date: ['Date', 'Scheduled Date', 'Scheduled Start Date', 'Planned Start Date', 'التاريخ', 'تاريخ البدء المجدول'],
   startDate: ['Start Date', 'Date Start', 'Actual Start', 'تاريخ البدء'],
   endDate: ['End Date', 'Date Finished', 'Actual End', 'تاريخ الانتهاء'],
   scrapQuantity: ['Scraps/Quantity', 'Scrap Quantity', 'كمية الهالك'],

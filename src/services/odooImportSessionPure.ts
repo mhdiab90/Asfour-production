@@ -146,6 +146,20 @@ export function productionPayloadFromWorkOrder(
 
   const quantityField = ODOO_QUANTITY_FIELD[stage] ?? null;
   const stageUnit = stageUomRow(stage)?.production?.unit ?? null;
+  /*
+   * 3.26.1: the work-order export has NO unit column. In Odoo a work order's quantity is always in the
+   * product unit of its manufacturing order (workorder.product_uom_id is that unit), so when the sheet
+   * gives no unit at all the unit of the linked manufacturing order is used - the same name table, no
+   * conversion, and said so on the row. A unit that IS written but unknown is still refused, and a work
+   * order without a manufacturing order in the files still has no unit.
+   */
+  let unit = n.unit;
+  if (!unit && !n.unitOriginal && mo?.normalized.unit) {
+    unit = mo.normalized.unit;
+    warnings.push(issue('unit',
+      `الوحدة غير موجودة في ملف أوامر العمل - أُخذت من أمر التصنيع "${mo.normalized.unitOriginal || mo.normalized.unit}" كـ "${unit}" (بدون تحويل).`,
+      `The work-order file has no unit - taken from the manufacturing order ("${mo.normalized.unitOriginal || mo.normalized.unit}" read as "${unit}", no conversion).`));
+  }
   const date = n.date ?? n.startDate ?? mo?.normalized.scheduledDate ?? mo?.normalized.startDate ?? null;
   const productCode = n.productCode || mo?.normalized.productCode || '';
 
@@ -154,12 +168,12 @@ export function productionPayloadFromWorkOrder(
   if (n.quantity === null) {
     errors.push(issue('quantity', 'لا توجد كمية فعلية على أمر العمل - الكمية المخططة لا تُستخدم.', 'The work order has no actual quantity - the planned quantity is never used.'));
   }
-  if (!n.unit) {
+  if (!unit) {
     errors.push(issue('unit', `وحدة "${n.unitOriginal || '-'}" غير معتمدة.`, `Unit "${n.unitOriginal || '-'}" is not an approved unit.`));
-  } else if (!quantityField || (stageUnit && n.unit !== stageUnit)) {
+  } else if (!quantityField || (stageUnit && unit !== stageUnit)) {
     errors.push(issue('quantity',
-      `عدم تطابق الوحدة: المرحلة تسجل الإنتاج بوحدة "${stageUnit ?? '-'}" والمصدر يعطي "${n.unit}" - لا يتم أي تحويل.`,
-      `Unit mismatch: this stage records production in "${stageUnit ?? '-'}" and the source gives "${n.unit}" - nothing is converted.`));
+      `عدم تطابق الوحدة: المرحلة تسجل الإنتاج بوحدة "${stageUnit ?? '-'}" والمصدر يعطي "${unit}" - لا يتم أي تحويل.`,
+      `Unit mismatch: this stage records production in "${stageUnit ?? '-'}" and the source gives "${unit}" - nothing is converted.`));
   }
 
   if (errors.length > 0) return { payload: null, errors, warnings };
@@ -170,7 +184,7 @@ export function productionPayloadFromWorkOrder(
     productCode,
     productName: n.productName || mo?.normalized.productName || '',
     [quantityField as string]: n.quantity,
-    productionUnit: n.unit,
+    productionUnit: unit,
     manufacturingOrderNumber: n.moReference,
     sourceDocumentReference: mo?.normalized.sourceDocument ?? null,
     externalRefs: [

@@ -1,9 +1,9 @@
 {
   "_doc": "Release Manifest precursor. Describes WHAT is being released so the gate checks a committed declaration rather than whatever flags an operator typed. commitSha/buildId/deploymentId are left null until a release is cut - the gate fills the comparison from the build itself, and only enforces a field that is set here. This is NOT the Change Registry: no change IDs, no Firestore, no UI.",
-  "version": "3.26.0",
-  "releaseId": "REL-2026-0035",
+  "version": "3.26.1",
+  "releaseId": "REL-2026-0036",
   "changeIds": [
-    "MOD-0052"
+    "FIX-0053"
   ],
   "commitSha": null,
   "buildId": null,
@@ -181,11 +181,13 @@
     "bomPrint",
     "masterDataDetails",
     "bomCosting",
-    "materialPriceImport"
+    "materialPriceImport",
+    "odooRealExport"
   ],
   "deployCommand": "firebase deploy --only hosting --project asfourproduction-70e6e",
   "treeClean": true,
   "_changeNotes": {
+    "FIX-0053": "Odoo three-file import vs the first REAL export (3,163 MOs / 3,471 work-order lines / 313 scrap): 1,461 errors and 0 production rows to write. Causes: (1) the work-order sheet's only date column, 'Scheduled Start Date', was not an accepted alias, so every producing work order had no date; (2) that sheet has no unit column at all, so 686 producing rows failed 'unit not approved' - an Odoo work order's quantity is in its manufacturing order's product unit, so when the sheet gives NO unit the linked MO's unit is used through the same name table (Ton -> طن), no conversion, with a warning on the row; a unit that is written but unknown is still refused and a work order whose MO is not in the files still has no unit; (3) three centres were the approved ones spelled differently ('المونة و الخرسانة', 'الافران النفقية', 'الفرز ز التغليف' / 'الفرز و التغليف') - added as aliases of the same centres. Replay on the real files: production rows ready 0 -> 615, errors 1,461 -> 846. NOT changed: a piece-counting stage (pressing, sorting) still refuses a tonne quantity (336 rows), centres nobody has approved (الهزازات, كسارات, اليدوى والشاكوش, كسارة 11/12, هزاز الشلاوى, صب الفوم - 422 rows) still need an approved mapping, Draft scrap without a date stays refused. No data was imported or written",
     "MOD-0052": "Alumina % and LOCAL / IMPORTED from Excel, in the same material import as the prices (one sheet, same code matching, same pre-save review). Two optional columns, detected from Arabic or English headers ('%' ignored): alumina 0-100 ('36', '36%', Arabic-Indic digits read; outside the range or text is an error, never clipped); origin 'محلي' / 'مستورد', 'local' / 'imported' and short forms (anything else is an error). An empty cell leaves the value as it is; only a change is written (aluminaPercentage, origin); pricesUpdatedAt / pricesSource are stamped only when a PRICE changed. A sheet may carry any of the four data columns - at least one must be mapped. The template now includes both columns with the current values (origin written as a word the import reads back). Preview shows current -> new for both. Same audited, bounded, gated write path as 3.25.0. No rule or other data changed",
     "MOD-0051": "Material price import from Excel (Master Data -> BOM / Materials, and from the component attributes screen). Read with the shared XLSX reader (listImportSheetNames / parseImportFile, sheet picker); columns detected from Arabic or English headers (materialPriceImportPure.detectPriceColumns) and changeable. Each row is matched to exactly ONE material by code (trimmed, case-insensitive): not found, found twice in Master Data, or repeated in the file is an error, never a guess. An empty price cell leaves that price as it is; a filled one must be a number >= 0 (thousands separators, currency words, Arabic-Indic digits read); the unit, when given, must be approved (known spellings accepted) and is written only when it changes the unit the prices are read in, so re-importing an untouched template writes nothing. The preview shows current -> new per row with READY / UNCHANGED / ERROR and the reason. Only READY rows are written, after a confirmation, through updateMasterDataItem (sanitised, cache-invalidating, audited) with ONLY the changed price fields plus pricesUpdatedAt and pricesSource = EXCEL_IMPORT - one bounded (30 s) write at a time, a failed write keeps its row marked with the reason; one BULK_IMPORT summary line in the audit log. A template download gives every material with its current prices under the recognised headers. Behind the existing Master Data edit gate. The attributes screen now also records pricesSource = MANUAL when a typed price changes. No Firestore rule or other data changed",
     "UI-0050": "Master Data -> Products: the sub-sections read Products, BOM, Routing again (the 3.23.0 order is reverted), and clicking the Products button now opens on ROUTING. New optional registry field defaultSubCategoryTab ('routings' on products): the button sets it in the same render as the category, so only the routings page is read; resolveOpenTab and the category sync fall back to it when the current tab is outside the group. A section chosen inside the group stays chosen; a deep link to a tab still opens that tab; groups without a default (Equipment, Jobs & Batches) behave as before. No data, rule, permission or read path changed",
@@ -231,8 +233,8 @@
     "UI-0010": "Financial Accounts import opens a dedicated Master Data importer instead of the Historical Excel Import screen: the action no longer navigates to the bulk-entry route (which App.tsx renders as DataImportView); a new in-place modal reuses the existing financialAccounts schema, XLSX reader, row validation, duplicate detection and chunked commit, adds sheet selection and parent/cycle relationship checks, and keeps partial import so invalid rows never block valid ones",
     "DB-0009": "Category-first Master Data over an extensible registry; Financial Accounts master data with Excel import and hierarchical editing (new financialAccounts collection and its Firestore rule); one shared generic hierarchy resolver reused by Master Data, Production Review and production aggregation; hierarchical cost-centre editing with cycle, self-parent and unknown-parent protection"
   },
-  "previousVersion": "3.25.0",
-  "versionBump": "MINOR",
+  "previousVersion": "3.26.0",
+  "versionBump": "PATCH",
   "classificationConfidence": "HIGH",
-  "previousReleaseId": "REL-2026-0034"
+  "previousReleaseId": "REL-2026-0035"
 }

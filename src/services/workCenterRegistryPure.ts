@@ -127,6 +127,13 @@ export const WORK_CENTER_ALIASES: readonly WorkCenterAlias[] = [
   { alias: 'الصب والفرم', centerId: 'casting_foam_center', match: 'EXACT' },
   { alias: 'الفرن الدوار', centerId: 'rotary_furnace', match: 'EXACT' },
   { alias: 'المونة والخرسانة', centerId: 'mortar_concrete_center', match: 'EXACT' },
+  // 3.26.1: the same centres as they are spelled in the real Odoo work-order export (a spaced "و",
+  // a plural, a typo'd "و"). Same centre as the name above it - not a new mapping.
+  { alias: 'المونة و الخرسانة', centerId: 'mortar_concrete_center', match: 'EXACT' },
+  { alias: 'الافران النفقية', centerId: 'tunnel_kiln', match: 'EXACT' },
+  { alias: 'الفرز والتغليف', centerId: 'sorting', match: 'EXACT' },
+  { alias: 'الفرز و التغليف', centerId: 'sorting', match: 'EXACT' },
+  { alias: 'الفرز ز التغليف', centerId: 'sorting', match: 'EXACT' },
   { alias: 'الفرن النفقى', centerId: 'tunnel_kiln', match: 'EXACT' },
   { alias: 'الفرن النفقي', centerId: 'tunnel_kiln', match: 'EXACT' },
   { alias: 'كبس', centerId: 'pressing', match: 'EXACT' },
