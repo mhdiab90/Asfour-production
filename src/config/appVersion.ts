@@ -37,7 +37,7 @@ const DEPLOYMENT_ID_INJECTED = typeof __BUILD_DEPLOYMENT_ID__ === 'string' ? __B
 
 export const CURRENT_APP_VERSION: AppVersionInfo = {
   /** Set by the automatic release planner from the classified change set - see releasePlannerPure.ts. */
-  version: '3.29.0',
+  version: '3.30.0',
   buildId: BUILD_ID_INJECTED,
   buildTimestamp: BUILD_TIMESTAMP_INJECTED,
   gitCommit: COMMIT_SHA_INJECTED,
@@ -46,6 +46,15 @@ export const CURRENT_APP_VERSION: AppVersionInfo = {
   environment: 'production',
   releaseDate: '2026-08-22',
   changelog: [
+    {
+      version: '3.30.0',
+      date: '2026-10-17',
+      highlights: [
+        'مركز "الصب والفرم" (صب الفوم) يُكتب إنتاجه الآن في سجل الشاموت الخفيف (lightweight_foam) بالطن كما يعطيه أودو',
+        '"اليدوى والشاكوش" معرَّف الآن كمركز الطوب اليدوي (يعد بالقطعة: يُكتب عند تفعيل تحويل الطن إلى قطع بوزن قطعة المنتج)',
+        'استيراد أودو: لم يعد هناك أي مركز عمل غير معروف في ملفات التجربة، والأسطر الجاهزة للكتابة 911'
+      ]
+    },
     {
       version: '3.29.0',
       date: '2026-10-17',

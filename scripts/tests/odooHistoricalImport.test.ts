@@ -184,7 +184,8 @@ test('5. the two missing centres exist and have no stage of their own', () => {
   assert.deepEqual([sard.mainCenterId, sard.stageType, sard.status], ['sard', null, 'NO_STAGE_MAPPING']);
   assert.equal(wc.workCenterById('sard').parentCenterId, 'rotary_furnace');
   const casting = wc.resolveWorkCenter('الصب والفوم');
-  assert.deepEqual([casting.mainCenterNameAr, casting.stageType, casting.status], ['مركز الصب والفرم', null, 'NO_STAGE_MAPPING']);
+  // 3.30.0: the business confirmed the casting & foam centre writes to the light-weight / foam record type.
+  assert.deepEqual([casting.mainCenterNameAr, casting.stageType, casting.status], ['مركز الصب والفرم', 'lightweight_foam', 'RESOLVED']);
   assert.equal(wc.workCenterIsWritable(sard), false, 'no production is written into a centre nobody mapped');
   // Existing stage ids are reused as centre ids - no production centre was renamed.
   for (const id of ['pressing', 'mixing', 'chinese_mills', 'tube_ball_mills', 'tunnel_kiln', 'rotary_furnace', 'sorting']) {
@@ -651,20 +652,18 @@ test('A. السرد is NOT the rotary furnace and is never written as one', () =
   assert.equal(sessionPure.isOdooRowWritable(staged), false);
 });
 
-test('B. مركز الصب والفرم is NOT mapped to lightweight_foam', () => {
-  for (const raw of ['الصب والفوم', 'الصب والفرم']) {
+test('B. مركز الصب والفرم writes to lightweight_foam (confirmed by the business, 3.30.0)', () => {
+  for (const raw of ['الصب والفوم', 'الصب والفرم', 'صب الفوم']) {
     const r = wc.resolveWorkCenter(raw);
     assert.equal(r.mainCenterId, 'casting_foam_center', raw);
     assert.equal(r.mainCenterNameAr, 'مركز الصب والفرم');
-    assert.equal(r.stageType, null, 'no stage is assumed');
-    assert.notEqual(r.stageType, 'lightweight_foam');
+    assert.equal(r.stageType, 'lightweight_foam', raw);
+    assert.equal(r.status, 'RESOLVED', raw);
   }
-  // No centre in the registry claims the foam stage - the only mention of it is
-  // the note saying it is deliberately NOT mapped.
-  assert.equal(wc.WORK_CENTERS.some((c: any) => c.stageType === 'lightweight_foam'), false);
-  const casting = wc.WORK_CENTERS.find((c: any) => c.id === 'casting_foam_center');
-  assert.equal(casting.stageType, null);
-  assert.ok(/not mapped to lightweight_foam/.test(casting.note), 'the decision is recorded, not implemented');
+  // Exactly one centre claims the foam stage, and it is this one.
+  assert.deepEqual(wc.WORK_CENTERS.filter((c: any) => c.stageType === 'lightweight_foam').map((c: any) => c.id), ['casting_foam_center']);
+  // The mixer of the foam line is still a MIXING machine, not the casting centre.
+  assert.equal(wc.resolveWorkCenter('خلاط الفوم').mainCenterId, 'mixing');
   const aliasTargets = new Set(wc.WORK_CENTER_ALIASES.map((a: any) => a.centerId));
   assert.equal([...aliasTargets].every((id: any) => wc.workCenterById(id)), true, 'every alias points at a declared centre');
 });

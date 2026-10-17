@@ -15,12 +15,13 @@
  * looking centre. There is no fuzzy matching here at all.
  *
  * A CENTRE IS NOT ALWAYS A STAGE. Every main centre says which production record
- * type it writes to (`stageType`), and two centres deliberately have none:
+ * type it writes to (`stageType`), and one centre deliberately has none:
  *   السرد              a separate downstream stage of the rotary-kiln area - NOT
  *                      the rotary furnace operation, so never written as one
- *   مركز الصب والفرم   not confirmed to be any existing stage
- * They resolve with NO_STAGE_MAPPING, so their rows stay visible and reviewable
+ * It resolves with NO_STAGE_MAPPING, so its rows stay visible and reviewable
  * instead of being written into a stage somebody guessed.
+ * (3.30.0: مركز الصب والفرم was the second one; the business confirmed it writes to
+ * the light-weight / foam record type, lightweight_foam.)
  *
  * TUBE vs BALL is read only when the raw text says it ("بول ميل" / "تيوب ميل");
  * otherwise the mill type stays unidentified, exactly as the mill master does.
@@ -59,8 +60,8 @@ export const WORK_CENTERS: readonly WorkCenterDefinition[] = [
   // and the machine are kept on the record so the two can be told apart from the kiln itself.
   { id: 'rotary_shakers', nameAr: 'الهزازات - تابع للفرن الدوار', nameEn: 'Shakers (rotary kiln sub-centre)', stageType: 'rotary_furnace', parentCenterId: 'rotary_furnace' },
   { id: 'rotary_crushers', nameAr: 'الكسارات - تابع للفرن الدوار', nameEn: 'Crushers (rotary kiln sub-centre)', stageType: 'rotary_furnace', parentCenterId: 'rotary_furnace' },
-  // 3.27.0: the stage already exists end to end (form, matrix, duplicate identity). The centre is offered
-  // in the approval list only - NO alias maps a name to it; the user approves each raw name himself.
+  // 3.27.0: the stage already exists end to end (form, matrix, duplicate identity). 3.30.0: the business
+  // confirmed "اليدوى والشاكوش" is this centre (see the alias table); any other name still needs approval.
   { id: 'handmade_brick', nameAr: 'الطوب اليدوي', nameEn: 'Hand-made Brick', stageType: 'handmade_brick' },
   {
     // السرد is a SEPARATE downstream sizing / sorting stage in the rotary-kiln
@@ -76,13 +77,12 @@ export const WORK_CENTERS: readonly WorkCenterDefinition[] = [
     note: 'NO PRODUCTION RECORD TYPE - a separate downstream stage of the rotary-kiln area, never the rotary furnace operation itself. Its stage is a business decision, never assumed.',
   },
   {
-    // Deliberately NOT mapped to `lightweight_foam`: there is no business
-    // confirmation for that, so nothing is written for this centre yet.
+    // 3.30.0: confirmed by the business - the casting & foam centre writes to the light-weight / foam
+    // record type (its unit is the ton, as Odoo gives it).
     id: 'casting_foam_center',
     nameAr: 'مركز الصب والفرم',
     nameEn: 'Casting & Foam Center',
-    stageType: null,
-    note: 'NO PRODUCTION RECORD TYPE - not mapped to lightweight_foam or any other stage without business confirmation.',
+    stageType: 'lightweight_foam',
   },
 ];
 
@@ -134,6 +134,8 @@ export const WORK_CENTER_ALIASES: readonly WorkCenterAlias[] = [
   { alias: 'الفرز', centerId: 'sorting', match: 'EXACT' },
   { alias: 'الصب والفوم', centerId: 'casting_foam_center', match: 'EXACT' },
   { alias: 'الصب والفرم', centerId: 'casting_foam_center', match: 'EXACT' },
+  // 3.30.0: the business confirmed this raw name is the hand-made brick centre.
+  { alias: 'اليدوى والشاكوش', centerId: 'handmade_brick', match: 'EXACT' },
   // 3.29.0: the work-centre name as the real Odoo export spells it - the same, existing centre.
   { alias: 'صب الفوم', centerId: 'casting_foam_center', match: 'EXACT' },
   { alias: 'الفرن الدوار', centerId: 'rotary_furnace', match: 'EXACT' },

@@ -98,8 +98,8 @@ test('B1. the real spellings of the approved centres resolve to them', () => {
 });
 
 test('B2. a centre nobody has approved is still unknown and still needs approval', () => {
-  // 3.29.0: the shakers, crushers and hand-made brick - only the last still needs the user's approval.
-  for (const raw of ['اليدوى والشاكوش', 'مركز غير معروف']) {
+  // 3.30.0: every centre of the real export is now known - an unlisted name still needs approval.
+  for (const raw of ['مركز غير معروف', 'اليدوى', 'ورشة الصيانة']) {
     assert.equal(reg.resolveWorkCenter(raw, []).status, 'UNMAPPED_CENTER', raw);
   }
 });
@@ -168,13 +168,13 @@ test('C7. a stage that already counts tons is never touched by the conversion', 
   assert.equal('sourceQuantityTons' in row.payload, false);
 });
 
-test('C8. the Hand-made Brick centre is offered for approval but no name maps to it by itself', () => {
+test('C8. "اليدوى والشاكوش" is the Hand-made Brick centre (confirmed, 3.30.0) and that is the ONLY name that maps to it', () => {
   assert.equal(reg.workCenterById('handmade_brick')?.stageType, 'handmade_brick');
-  assert.equal(reg.resolveWorkCenter('اليدوى والشاكوش', []).status, 'UNMAPPED_CENTER', 'still needs the user to approve it');
-  const approved = [{ rawNormalized: reg.normaliseWorkCenterText('اليدوى والشاكوش'), mainCenterId: 'handmade_brick', active: true }];
-  const r = reg.resolveWorkCenter('اليدوى والشاكوش', approved);
+  const r = reg.resolveWorkCenter('اليدوى والشاكوش', []);
+  assert.equal(r.mainCenterId, 'handmade_brick');
   assert.equal(r.stageType, 'handmade_brick');
-  assert.equal(reg.WORK_CENTER_ALIASES.some((a: any) => a.centerId === 'handmade_brick'), false);
+  assert.equal(r.status, 'RESOLVED');
+  assert.deepEqual(reg.WORK_CENTER_ALIASES.filter((a: any) => a.centerId === 'handmade_brick').map((a: any) => a.alias), ['اليدوى والشاكوش']);
 });
 
 // ==================================================
@@ -285,12 +285,11 @@ test('E2. the kiln itself and every other centre resolve exactly as before', () 
   assert.equal(id('السرد'), 'sard', 'the sard centre is untouched');
 });
 
-test('E3. casting & foam: the raw name resolves to the EXISTING centre, which still has no record type', () => {
+test('E3. casting & foam resolves to the existing centre, which writes to lightweight_foam', () => {
   const r = reg.resolveWorkCenter('صب الفوم', []);
   assert.equal(r.mainCenterId, 'casting_foam_center');
-  assert.equal(r.status, 'NO_STAGE_MAPPING');
-  assert.equal(r.stageType, null);
-  assert.equal(reg.workCenterById('casting_foam_center').stageType, null, 'no stage was invented for it');
+  assert.equal(r.status, 'RESOLVED');
+  assert.equal(r.stageType, 'lightweight_foam');
 });
 
 test('E4. a shaker work order is written to the rotary-kiln stage, in tons, with its sub-centre identity on the record', () => {
@@ -314,11 +313,27 @@ test('E5. the kiln itself has NO sub-centre fields on its work order', () => {
   assert.equal('subCenterId' in row.payload, false);
 });
 
-test('E6. a casting & foam work order is still refused for writing (no record type), and says why', () => {
-  const foam = { ...WO_ROW, 'Work Center': 'صب الفوم', Quantity: 1 };
+test('E6. a casting & foam work order is written to lightweight_foam, in tons, as Odoo gives it', () => {
+  const foam = { ...WO_ROW, 'Work Center': 'صب الفوم', Quantity: 1.5 };
   const built = build([foam], [{ ...MO_ROW, 'Work Orders/Work Center': 'صب الفوم' }]);
-  assert.equal(built.counts.productionRowsToWrite, 0);
-  assert.ok((woRow(built).row.errors ?? []).some((e: any) => /غير مرتبط بنوع سجل إنتاج/.test(e.messageAr)));
+  assert.equal(built.counts.productionRowsToWrite, 1);
+  const row = woRow(built);
+  assert.equal(row.payload.stageType, 'lightweight_foam');
+  assert.equal(row.payload.productionQuantity, 1.5);
+  assert.equal(row.payload.productionUnit, 'طن');
+  assert.equal('subCenterId' in row.payload, false);
+});
+
+test('E7. a hand-made brick work order counts PIECES: refused as tons, converted only when the switch is on', () => {
+  const hand = { ...WO_ROW, 'Work Center': 'اليدوى والشاكوش', Quantity: 0.5 };
+  const mo = { ...MO_ROW, 'Work Orders/Work Center': 'اليدوى والشاكوش' };
+  assert.equal(build([hand], [mo]).counts.productionRowsToWrite, 0, 'tons are never silently turned into pieces');
+  const built = withConversion({ LCC8001: 2.5 }, [hand], [mo]);
+  assert.equal(built.counts.productionRowsToWrite, 1);
+  const row = woRow(built);
+  assert.equal(row.payload.stageType, 'handmade_brick');
+  assert.equal(row.payload.productionQuantity, 200);
+  assert.equal(row.payload.pieceWeightKg, 2.5);
 });
 
 (async () => {
