@@ -10,7 +10,7 @@
  * warnings are accepted, rows are skipped or excluded, a field can be corrected,
  * and every row shows the raw Excel row behind it.
  */
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { AlertTriangle, CheckCircle2, Loader2, RefreshCw, Upload, X } from 'lucide-react';
 import { Modal } from '../common/Modal';
 import { useLanguage } from '../../i18n/LanguageContext';
@@ -21,6 +21,7 @@ import { readMrpProduction } from '../../services/odooProductionReaderPure';
 import { readMrpWorkOrder } from '../../services/odooWorkOrderReaderPure';
 import { readStockScrap } from '../../services/odooScrapReaderPure';
 import { fetchMasterData, MASTER_DATA_COLLECTIONS } from '../../services/masterDataService';
+import type { OdooRunFinal, OdooRunProgress } from '../../services/odooExecutionPure';
 import { approveRowsInBulk, bulkApprovalCandidates, bulkApprovalSummary, clearBulkSelection, buildOdooImportSession, isOdooRowWritable, type OdooSessionResult, type OdooStagedRow } from '../../services/odooImportSessionPure';
 import {
   executeOdooImport,
@@ -74,6 +75,13 @@ export const OdooHistoricalImportPanel: React.FC<Props> = ({ isOpen, onClose }) 
 
   const [files, setFiles] = useState<Partial<Record<OdooSourceType, LoadedFile>>>({});
   const [approvedCenters, setApprovedCenters] = useState<ApprovedWorkCenterMapping[]>([]);
+  /* ---- the write run (3.32.0): live progress, stop, and the complete result ---- */
+  const [runProgress, setRunProgress] = useState<OdooRunProgress | null>(null);
+  const [runFinal, setRunFinal] = useState<OdooRunFinal | null>(null);
+  const [clock, setClock] = useState<number>(() => Date.now());
+  const stopRef = useRef<AbortController | null>(null);
+  /** The latest progress, flushed to the screen twice a second so a thousand rows do not re-render a thousand times. */
+  const latestProgress = useRef<OdooRunProgress | null>(null);
   /** OFF by default: turns Odoo tons into pieces for pressing / sorting / hand-made brick by each product's piece weight. */
   const [convertTonsToPieces, setConvertTonsToPieces] = useState<boolean>(false);
   const [session, setSession] = useState<OdooSessionResult | null>(null);
@@ -332,6 +340,29 @@ export const OdooHistoricalImportPanel: React.FC<Props> = ({ isOpen, onClose }) 
   };
 
   /** Approval: only reviewed rows are written, each on its own. */
+  // Flush progress to the screen and keep the elapsed-time clock ticking while a write is running.
+  useEffect(() => {
+    if (!busy || !stopRef.current) return;
+    const timer = setInterval(() => {
+      setClock(Date.now());
+      if (latestProgress.current) setRunProgress(latestProgress.current);
+    }, 500);
+    return () => clearInterval(timer);
+  }, [busy]);
+
+  // A write in progress must not be abandoned by closing the tab without a warning.
+  useEffect(() => {
+    if (!busy || !stopRef.current) return;
+    const guard = (e: BeforeUnloadEvent) => { e.preventDefault(); e.returnValue = ''; };
+    window.addEventListener('beforeunload', guard);
+    return () => window.removeEventListener('beforeunload', guard);
+  }, [busy]);
+
+  const stopRun = () => {
+    stopRef.current?.abort();
+    setNotice(isAr ? 'تم طلب الإيقاف - لن يبدأ أي سجل جديد، وتُنتظر الكتابات الجارية لحظات.' : 'Stop requested - no new row starts; writes in flight are given a moment.');
+  };
+
   const execute = async () => {
     if (!session || writable.length === 0) return;
     const summary = isAr
@@ -340,6 +371,11 @@ export const OdooHistoricalImportPanel: React.FC<Props> = ({ isOpen, onClose }) 
     if (!window.confirm(summary)) return;
     setBusy(true);
     setError(null);
+    setRunFinal(null);
+    setRunProgress(null);
+    latestProgress.current = null;
+    const controller = new AbortController();
+    stopRef.current = controller;
     try {
       const stages = [...new Set(staged.map((s) => s.targetStage).filter(Boolean))] as ProductionStageType[];
       const context = await loadImportValidationContext(stages);
@@ -349,13 +385,21 @@ export const OdooHistoricalImportPanel: React.FC<Props> = ({ isOpen, onClose }) 
         indexes,
         mappingCache: new Map(),
         language: isAr ? 'ar' : 'en',
+        signal: controller.signal,
+        onProgress: (p) => { latestProgress.current = p; },
       });
       setStaged(outcome.staged);
+      setRunFinal(outcome.final);
+      setRunProgress(null);
       setResult({ production: outcome.writtenProduction, workOrders: outcome.writtenWorkOrders, scrap: outcome.writtenScrap, failed: outcome.failed, skipped: outcome.skipped });
       if (outcome.messages.length) setNotice(outcome.messages.slice(0, 5).join(' | '));
     } catch (err: any) {
-      setError(String(err?.message ?? err));
+      // Nothing was written if the run could not even start (for example the existing records could not be read).
+      setError(isAr
+        ? `لم يبدأ الاستيراد أو توقف قبل الكتابة: ${String(err?.message ?? err)}`
+        : `The import did not start or stopped before writing: ${String(err?.message ?? err)}`);
     } finally {
+      stopRef.current = null;
       setBusy(false);
     }
   };
@@ -522,7 +566,132 @@ export const OdooHistoricalImportPanel: React.FC<Props> = ({ isOpen, onClose }) 
               </span>
             </div>
 
-            {result && (
+            {/* ---- live progress of the write ---- */}
+            {busy && runProgress && (
+              <div id="odoo-import-progress" className="p-3 rounded-xl border border-sky-200 bg-sky-50 space-y-2">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="font-black text-sky-900">
+                    {isAr ? 'جاري الكتابة' : 'Writing'} - {runProgress.phase === 'SCRAP' ? (isAr ? 'الهالك' : 'scrap') : (isAr ? 'سجلات الإنتاج' : 'production records')}
+                  </span>
+                  <span id="odoo-import-percent" className="font-black text-sky-900 text-base font-mono">{runProgress.percent}%</span>
+                </div>
+                <div className="h-3 rounded-full bg-sky-100 overflow-hidden" role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={runProgress.percent}>
+                  <div className="h-full bg-sky-500 transition-all" style={{ width: `${runProgress.percent}%` }} />
+                </div>
+                <div className="flex flex-wrap gap-x-4 gap-y-1 font-bold text-slate-700">
+                  <span>{isAr ? 'تمت معالجة' : 'Processed'}: <b className="font-mono">{runProgress.processed.toLocaleString('en-US')} / {runProgress.total.toLocaleString('en-US')}</b></span>
+                  <span className="text-emerald-700">{isAr ? 'نجح' : 'Written'}: <b className="font-mono">{runProgress.succeeded.toLocaleString('en-US')}</b></span>
+                  <span className="text-rose-700">{isAr ? 'فشل' : 'Failed'}: <b className="font-mono">{runProgress.failed}</b></span>
+                  <span className="text-amber-700">{isAr ? 'لم تتأكد النتيجة' : 'Outcome unknown'}: <b className="font-mono">{runProgress.uncertain}</b></span>
+                  <span className="text-slate-600">{isAr ? 'موجود من قبل' : 'Already there'}: <b className="font-mono">{runProgress.alreadyImported}</b></span>
+                  <span className="text-slate-500">{isAr ? 'الزمن' : 'Elapsed'}: <b className="font-mono">{Math.max(0, Math.round((clock - runProgress.startedAt) / 1000))}s</b></span>
+                </div>
+                <div className="flex flex-wrap gap-1.5">
+                  {Object.entries(runProgress.byGroup).map(([group, g]) => (
+                    <span key={group} className="px-2 py-0.5 rounded-lg bg-white border border-slate-200 font-mono">
+                      {group}: {g.done}/{g.total}{g.failed ? ` ✗${g.failed}` : ''}{g.unknown ? ` ?${g.unknown}` : ''}
+                    </span>
+                  ))}
+                </div>
+                {runProgress.current && <p className="text-slate-600">{isAr ? 'الآن' : 'Now'}: <span className="font-mono">{runProgress.current}</span></p>}
+                {clock - runProgress.lastProgressAt > 60_000 && (
+                  <p className="font-bold text-amber-800">
+                    {isAr
+                      ? `لا يوجد تقدم منذ ${Math.round((clock - runProgress.lastProgressAt) / 1000)} ثانية - قد يكون الخادم بطيئًا أو الاتصال مقطوعًا. كل سجل ينتظر 90 ثانية كحد أقصى ثم يُعلَّم "لم تتأكد النتيجة".`
+                      : `No progress for ${Math.round((clock - runProgress.lastProgressAt) / 1000)} s - the server may be slow or the connection lost. Each row waits 90 s at most, then is marked "outcome unknown".`}
+                  </p>
+                )}
+                {runProgress.lastError && <p className="font-semibold text-rose-700">{isAr ? 'آخر خطأ' : 'Last problem'}: {runProgress.lastError}</p>}
+                <button
+                  id="odoo-import-stop"
+                  type="button"
+                  onClick={stopRun}
+                  disabled={runProgress.stopRequested}
+                  className="px-3 py-1.5 font-bold text-rose-800 bg-rose-50 border border-rose-200 hover:bg-rose-100 disabled:opacity-50 rounded-lg cursor-pointer"
+                >
+                  {runProgress.stopRequested ? (isAr ? 'جاري الإيقاف...' : 'Stopping...') : (isAr ? 'إيقاف' : 'Stop')}
+                </button>
+                <p className="text-[10px] text-slate-500">{isAr ? 'لا تغلق الصفحة حتى ينتهي. السجلات المكتوبة محفوظة، وإعادة التشغيل لا تكرر أي سجل.' : 'Do not close the page until it finishes. Written records are kept, and a re-run never repeats a record.'}</p>
+              </div>
+            )}
+            {busy && !runProgress && stopRef.current && (
+              <p id="odoo-import-preparing" className="p-3 rounded-xl border border-sky-200 bg-sky-50 font-bold text-sky-900 flex items-center gap-2">
+                <Loader2 className="w-4 h-4 animate-spin" />{isAr ? 'جاري التجهيز: قراءة السجلات الموجودة والتحقق قبل الكتابة...' : 'Preparing: reading existing records and validating before writing...'}
+              </p>
+            )}
+
+            {/* ---- the final result of the write ---- */}
+            {runFinal && !busy && (
+              <div id="odoo-import-final" className={`p-3 rounded-xl border space-y-2 ${runFinal.outcome === 'COMPLETED' ? 'border-emerald-200 bg-emerald-50' : runFinal.outcome === 'INTERRUPTED' ? 'border-amber-300 bg-amber-50' : 'border-rose-200 bg-rose-50'}`}>
+                <p className="font-black text-base">
+                  {runFinal.outcome === 'COMPLETED' && `✅ ${isAr ? 'اكتمل الاستيراد بنجاح (100%)' : 'The import completed successfully (100%)'}`}
+                  {runFinal.outcome === 'COMPLETED_WITH_ERRORS' && `⚠️ ${isAr ? 'اكتمل الاستيراد مع أخطاء (100%) - راجع القوائم أدناه' : 'The import completed with errors (100%) - see the lists below'}`}
+                  {runFinal.outcome === 'INTERRUPTED' && `⏸️ ${isAr ? `توقف الاستيراد عند ${runFinal.percent}%` : `The import stopped at ${runFinal.percent}%`}`}
+                </p>
+                {runFinal.error && <p className="font-bold text-amber-900">{runFinal.error}</p>}
+                <div className="flex flex-wrap gap-x-4 gap-y-1 font-bold text-slate-800">
+                  <span>{isAr ? 'المخطط' : 'Planned'}: <b className="font-mono">{runFinal.total}</b></span>
+                  <span className="text-emerald-700">{isAr ? 'كُتب' : 'Written'}: <b className="font-mono">{runFinal.succeeded}</b></span>
+                  <span className="text-rose-700">{isAr ? 'فشل' : 'Failed'}: <b className="font-mono">{runFinal.failed}</b></span>
+                  <span className="text-amber-700">{isAr ? 'لم تتأكد النتيجة' : 'Outcome unknown'}: <b className="font-mono">{runFinal.uncertain}</b></span>
+                  <span>{isAr ? 'موجود من قبل' : 'Already there'}: <b className="font-mono">{runFinal.alreadyImported}</b></span>
+                  <span>{isAr ? 'لم يبدأ' : 'Not started'}: <b className="font-mono">{runFinal.notStarted}</b></span>
+                  <span className="text-slate-500">{isAr ? 'خارج الخطة' : 'Not planned'}: <b className="font-mono">{runFinal.notPlanned}</b></span>
+                </div>
+                <div className="flex flex-wrap gap-1.5">
+                  {Object.entries(runFinal.byGroup).map(([group, g]) => (
+                    <span key={group} className="px-2 py-0.5 rounded-lg bg-white border border-slate-200 font-mono">{group}: {g.done}/{g.total}{g.failed ? ` ✗${g.failed}` : ''}{g.unknown ? ` ?${g.unknown}` : ''}</span>
+                  ))}
+                </div>
+                {runFinal.failures.length > 0 && (
+                  <div>
+                    <p className="font-black text-rose-800">{isAr ? `أسباب الفشل (${runFinal.failures.length})` : `Failure reasons (${runFinal.failures.length})`}</p>
+                    <div className="max-h-48 overflow-auto border border-rose-200 rounded-lg bg-white">
+                      <table id="odoo-import-failures" className="w-full text-[11px]">
+                        <tbody>
+                          {runFinal.failures.slice(0, 200).map((f) => (
+                            <tr key={f.rowId} className="border-t border-rose-100 align-top">
+                              <td className="px-2 py-1 font-mono whitespace-nowrap">{f.group}</td>
+                              <td className="px-2 py-1 font-mono whitespace-nowrap">{f.moReference ?? '-'}</td>
+                              <td className="px-2 py-1 font-mono whitespace-nowrap">{f.sourceFile} #{f.sourceRow}</td>
+                              <td className="px-2 py-1 text-rose-800">{f.reason}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                )}
+                {runFinal.uncertainRows.length > 0 && (
+                  <div>
+                    <p className="font-black text-amber-900">{isAr ? `لم تتأكد النتيجة (${runFinal.uncertainRows.length}) - لم يرد الخادم، فقد يكون السجل كُتب` : `Outcome unknown (${runFinal.uncertainRows.length}) - the server did not answer; the record may have been written`}</p>
+                    <div className="max-h-40 overflow-auto border border-amber-200 rounded-lg bg-white">
+                      <table id="odoo-import-uncertain" className="w-full text-[11px]">
+                        <tbody>
+                          {runFinal.uncertainRows.slice(0, 200).map((f) => (
+                            <tr key={f.rowId} className="border-t border-amber-100 align-top">
+                              <td className="px-2 py-1 font-mono whitespace-nowrap">{f.group}</td>
+                              <td className="px-2 py-1 font-mono whitespace-nowrap">{f.moReference ?? '-'}</td>
+                              <td className="px-2 py-1 font-mono whitespace-nowrap">{f.sourceFile} #{f.sourceRow}</td>
+                              <td className="px-2 py-1 text-amber-900">{f.reason}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                )}
+                {runFinal.outcome !== 'COMPLETED' && (
+                  <p className="text-[11px] font-semibold text-slate-700">
+                    {isAr
+                      ? 'لإكمال ما تبقى: أعد رفع الملفات واعتمد وانتظر - السجلات المكتوبة يتعرف عليها البرنامج ولا يكتبها مرة ثانية.'
+                      : 'To finish the rest: upload the files again, approve and write - the records already written are recognised and never written twice.'}
+                  </p>
+                )}
+              </div>
+            )}
+
+            {result && !runFinal && (
               <div className="p-3 rounded-xl border border-emerald-200 bg-emerald-50 text-emerald-900">
                 <p className="font-bold flex items-center gap-1.5">
                   <CheckCircle2 className="w-4 h-4" />

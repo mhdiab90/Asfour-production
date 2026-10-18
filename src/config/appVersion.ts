@@ -37,7 +37,7 @@ const DEPLOYMENT_ID_INJECTED = typeof __BUILD_DEPLOYMENT_ID__ === 'string' ? __B
 
 export const CURRENT_APP_VERSION: AppVersionInfo = {
   /** Set by the automatic release planner from the classified change set - see releasePlannerPure.ts. */
-  version: '3.31.0',
+  version: '3.32.0',
   buildId: BUILD_ID_INJECTED,
   buildTimestamp: BUILD_TIMESTAMP_INJECTED,
   gitCommit: COMMIT_SHA_INJECTED,
@@ -46,6 +46,17 @@ export const CURRENT_APP_VERSION: AppVersionInfo = {
   environment: 'production',
   releaseDate: '2026-08-22',
   changelog: [
+    {
+      version: '3.32.0',
+      date: '2026-10-17',
+      highlights: [
+        'استيراد أودو: نسبة تقدم حية أثناء الكتابة (من 0 إلى 100%) مع عدد المعالَج والمكتوب والفاشل والذي لم تتأكد نتيجته، وعدد كل مرحلة، والسجل الجاري كتابته، والزمن المنقضي',
+        'نتيجة نهائية واضحة: اكتمل بنجاح، أو اكتمل مع أخطاء، أو توقف عند نسبة معينة - مع قائمة بكل سجل فشل وسببه ومرجع أمر التصنيع وصف الملف',
+        'كل سجل له مهلة 90 ثانية؛ الكتابة التي لا يرد عليها الخادم تُعلَّم "لم تتأكد النتيجة" ولا تُحتسب نجاحًا ولا فشلًا، وتحذير ظاهر لو لم يحدث تقدم دقيقة',
+        'زر إيقاف، وتوقف تلقائي بعد 5 سجلات متتالية بلا رد من الخادم أو 25 فشلًا متتاليًا، وتحذير قبل إغلاق الصفحة أثناء الكتابة',
+        'إعادة التشغيل آمنة: السجلات المكتوبة سابقًا يتعرف عليها البرنامج ولا يكتبها مرة ثانية، والكتابة تتم 4 سجلات في وقت واحد'
+      ]
+    },
     {
       version: '3.31.0',
       date: '2026-10-17',

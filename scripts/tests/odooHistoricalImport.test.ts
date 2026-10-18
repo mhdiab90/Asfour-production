@@ -540,7 +540,10 @@ test('31. the session is staged before anything is written, and each row is writ
   assert.ok(/export async function saveOdooImportSession/.test(service) && /export async function loadOdooImportSession/.test(service));
   assert.ok(/createStageRecord\(|createProductionRecord\(/.test(service), 'the existing production write is reused');
   assert.ok(/resolveAndValidateImportRow/.test(service), 'the existing resolution and validation are reused');
-  assert.ok(/catch \(err: any\)[\s\S]{0,400}FAILED/.test(service), 'one row failing never stops the others');
+  // 3.32.0: the per-row isolation moved into the pure write loop (runOdooWrites) the service delegates to;
+  // odooExecution.test.ts B1 proves a failing row never stops the others.
+  assert.ok(/runOdooWrites\(staged,/.test(service), 'the service delegates the loop');
+  assert.ok(/kind === 'error'[\s\S]{0,900}status: 'FAILED'/.test(readCode('src/services/odooExecutionPure.ts')), 'one row failing never stops the others');
   const panel = readCode('src/components/admin/OdooHistoricalImportPanel.tsx');
   assert.ok(/saveOdooImportSession\(/.test(panel), 'staging is saved at parse time');
   assert.ok(/executeOdooImport\(/.test(panel) && /window\.confirm/.test(panel), 'writing needs an explicit approval');

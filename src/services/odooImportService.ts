@@ -36,6 +36,7 @@ import type { ImportValidationContext } from './importEntityValidationPure';
 import type { ReferenceIndexes, ReferenceMappingCache } from './referenceResolutionPure';
 import { describeResolution } from './referenceResolutionPure';
 import { isOdooRowWritable, type OdooStagedRow } from './odooImportSessionPure';
+import { odooRowIdentity, runOdooWrites, storedScrapIdentity, storedWorkOrderIdentity, type OdooRunFinal, type OdooRunProgress } from './odooExecutionPure';
 import { normaliseWorkCenterText, type ApprovedWorkCenterMapping } from './workCenterRegistryPure';
 
 export const IMPORT_SESSION_COLLECTION = 'importSessions';
@@ -178,6 +179,10 @@ export interface OdooExecutionOptions {
   mappingCache: ReferenceMappingCache;
   language: 'ar' | 'en';
   productionStatus?: 'DRAFT' | 'SUBMITTED';
+  /** Stops the run: no new row starts, writes in flight get a short grace (3.32.0). */
+  signal?: AbortSignal;
+  /** Told after every row - the progress bar. */
+  onProgress?: (progress: OdooRunProgress) => void;
 }
 
 export interface OdooExecutionResult {
@@ -188,6 +193,23 @@ export interface OdooExecutionResult {
   failed: number;
   skipped: number;
   messages: string[];
+  /** The complete result: percentage, per-stage counts, every failure and every unknown outcome with its reason. */
+  final: OdooRunFinal;
+}
+
+/**
+ * Every work-order and scrap identity already in the database, read once before a run. If it cannot be read
+ * the run does not start: writing without knowing what is already there is how records get duplicated.
+ */
+export async function loadExistingOdooIdentities(): Promise<Set<string>> {
+  const keys = new Set<string>();
+  const [workOrders, scrap] = await Promise.all([
+    getDocs(collection(db, WORK_ORDER_COLLECTION)),
+    getDocs(collection(db, STOCK_SCRAP_COLLECTION)),
+  ]);
+  workOrders.docs.forEach((d) => { const k = storedWorkOrderIdentity(d.data()); if (k) keys.add(k); });
+  scrap.docs.forEach((d) => { const k = storedScrapIdentity(d.data()); if (k) keys.add(k); });
+  return keys;
 }
 
 /** Resolves the payload's business codes with the SAME pipeline the entity import uses. */
@@ -196,139 +218,147 @@ function resolvePayload(payload: Record<string, unknown>, options: OdooExecution
 }
 
 /**
- * Writes the approved rows. Each row is written on its own and records its own
- * outcome; nothing is written for a manufacturing-order context row.
+ * Writes the approved rows. Each row is written on its own and records its own outcome; nothing is written
+ * for a manufacturing-order context row. 3.32.0: bounded per row, with progress, stop, a complete result and
+ * a re-run check (see odooExecutionPure.ts).
  */
 export async function executeOdooImport(
   importSessionId: string,
   staged: readonly OdooStagedRow[],
   options: OdooExecutionOptions,
 ): Promise<OdooExecutionResult> {
-  const out: OdooStagedRow[] = [];
-  const messages: string[] = [];
   let writtenProduction = 0;
   let writtenWorkOrders = 0;
   let writtenScrap = 0;
-  let failed = 0;
-  let skipped = 0;
   const productionIdByRow = new Map<string, { id: string; collection: string; stage: ProductionStageType }>();
 
-  for (const item of staged) {
-    if (!isOdooRowWritable(item)) {
-      if (item.kind !== 'odooProduction') skipped += 1;
-      out.push(item);
-      continue;
-    }
-    try {
-      if (item.kind === 'odooWorkOrder') {
-        const stage = item.targetStage as ProductionStageType;
-        const payload = { ...(item.payload ?? {}) };
-        // The same resolution and validation the entity import runs, immediately before the write.
-        const checked = resolvePayload(payload, options);
-        if (checked.errors.length > 0) {
-          throw new Error(checked.errors.map((e) => (options.language === 'ar' ? e.messageAr : e.messageEn)).join(' | '));
-        }
-        const data = (checked.normalized ?? payload) as Record<string, any>;
-        const { stageType: _stage, ...record } = data;
-        const productionId = stage === 'pressing'
-          ? await createProductionRecord(record as never)
-          : await createStageRecord(stage, record, options.productionStatus ?? 'SUBMITTED');
-        const collectionName = STAGE_COLLECTION_NAMES[stage];
-        productionIdByRow.set(item.row.rowId, { id: productionId, collection: collectionName, stage });
-        writtenProduction += 1;
+  // What is already in the database, so a retry never writes a record twice. Unreadable = do not start.
+  const existingKeys = await loadExistingOdooIdentities();
 
-        const workOrderRef = await safeAddDoc(collection(db, WORK_ORDER_COLLECTION), {
-          ...sanitizeForFirestore({
-            manufacturingOrderNumber: data.manufacturingOrderNumber ?? item.linkedManufacturingOrder ?? '',
-            productionRecordId: productionId,
-            productionCollection: collectionName,
-            rawWorkOrder: (item.row.normalizedData as any)?.rawWorkOrder ?? '',
-            shiftNumber: (item.row.normalizedData as any)?.shiftNumber ?? null,
-            workCenter: (item.row.normalizedData as any)?.workCenter ?? null,
-            stageType: stage,
-            productCode: data.productCode ?? null,
-            productName: data.productName ?? null,
-            productId: data.productId ?? null,
-            bomCode: (item.row.normalizedData as any)?.bomCode ?? null,
-            quantity: (item.row.normalizedData as any)?.quantity ?? null,
-            secondaryQuantity: (item.row.normalizedData as any)?.secondaryQuantity ?? null,
-            unit: (item.row.normalizedData as any)?.unit ?? null,
-            realDurationMinutes: (item.row.normalizedData as any)?.realDuration ?? null,
-            expectedDurationMinutes: (item.row.normalizedData as any)?.expectedDuration ?? null,
-            durationPerUnit: (item.row.normalizedData as any)?.durationPerUnit ?? null,
-            durationDeviation: (item.row.normalizedData as any)?.durationDeviation ?? null,
-            state: (item.row.normalizedData as any)?.state ?? null,
-            date: data.date ?? null,
-            startDate: (item.row.normalizedData as any)?.startDate ?? null,
-            endDate: (item.row.normalizedData as any)?.endDate ?? null,
-            employees: (item.row.normalizedData as any)?.employees ?? [],
-            externalRefs: data.externalRefs ?? [],
-            provenance: item.provenance,
-            status: 'SUBMITTED',
-          }),
-          createdBy: auth.currentUser?.uid ?? 'anonymous',
-          createdByName: auth.currentUser?.email ?? '',
-          createdAt: now(),
-          updatedAt: now(),
-          serverCreatedAt: serverTimestamp(),
-        });
-        writtenWorkOrders += 1;
-
-        const trail = (checked.resolutions ?? []).filter((r) => r.status !== 'EMPTY').map(describeResolution);
-        await logAuditAction('CREATE', collectionName, productionId,
-          `[ODOO_IMPORT ${importSessionId}] production from work order ${item.row.rowId} (${item.provenance.sourceFile} row ${item.provenance.sourceRow}); workOrder=${workOrderRef.id}${trail.length ? ` | references: ${trail.join('; ')}` : ''}`).catch(() => {});
-
-        out.push({ ...item, row: { ...item.row, status: 'IMPORTED', importedId: productionId, failureMessage: null } });
-        await updateStagingOutcome(importSessionId, item, { importedId: productionId, importedCollection: collectionName, status: 'IMPORTED', failureMessage: null });
-        continue;
+  const writer = async (item: OdooStagedRow, track: (step: string) => void) => {
+    if (item.kind === 'odooWorkOrder') {
+      const stage = item.targetStage as ProductionStageType;
+      const payload = { ...(item.payload ?? {}) };
+      track('VALIDATING');
+      // The same resolution and validation the entity import runs, immediately before the write.
+      const checked = resolvePayload(payload, options);
+      if (checked.errors.length > 0) {
+        throw new Error(checked.errors.map((e) => (options.language === 'ar' ? e.messageAr : e.messageEn)).join(' | '));
       }
+      const data = (checked.normalized ?? payload) as Record<string, any>;
+      const { stageType: _stage, ...record } = data;
+      track('PRODUCTION_WRITE');
+      const productionId = stage === 'pressing'
+        ? await createProductionRecord(record as never)
+        : await createStageRecord(stage, record, options.productionStatus ?? 'SUBMITTED');
+      const collectionName = STAGE_COLLECTION_NAMES[stage];
+      productionIdByRow.set(item.row.rowId, { id: productionId, collection: collectionName, stage });
+      writtenProduction += 1;
 
-      if (item.kind === 'odooScrap') {
-        const payload = item.payload ?? {};
-        const related = (item.row.normalizedData as any)?.workOrderRowId as string | undefined;
-        const production = related ? productionIdByRow.get(related) : undefined;
-        const scrapRef = await safeAddDoc(collection(db, STOCK_SCRAP_COLLECTION), {
-          ...sanitizeForFirestore({
-            ...payload,
-            productionRecordId: production?.id ?? null,
-            productionCollection: production?.collection ?? null,
-            stageType: (payload as any).stageType ?? production?.stage ?? null,
-            provenance: item.provenance,
-            status: 'SUBMITTED',
-          }),
-          createdBy: auth.currentUser?.uid ?? 'anonymous',
-          createdByName: auth.currentUser?.email ?? '',
-          createdAt: now(),
-          updatedAt: now(),
-          serverCreatedAt: serverTimestamp(),
-        });
-        writtenScrap += 1;
-        await logAuditAction('CREATE', STOCK_SCRAP_COLLECTION, scrapRef.id,
-          `[ODOO_IMPORT ${importSessionId}] scrap from ${item.provenance.sourceFile} row ${item.provenance.sourceRow}`).catch(() => {});
-        out.push({ ...item, row: { ...item.row, status: 'IMPORTED', importedId: scrapRef.id, failureMessage: null } });
-        await updateStagingOutcome(importSessionId, item, { importedId: scrapRef.id, importedCollection: STOCK_SCRAP_COLLECTION, status: 'IMPORTED', failureMessage: null });
-        continue;
-      }
+      track('WORK_ORDER_WRITE');
+      const workOrderRef = await safeAddDoc(collection(db, WORK_ORDER_COLLECTION), {
+        ...sanitizeForFirestore({
+          identityKey: item.identityKey ?? null,
+          manufacturingOrderNumber: data.manufacturingOrderNumber ?? item.linkedManufacturingOrder ?? '',
+          productionRecordId: productionId,
+          productionCollection: collectionName,
+          rawWorkOrder: (item.row.normalizedData as any)?.rawWorkOrder ?? '',
+          shiftNumber: (item.row.normalizedData as any)?.shiftNumber ?? null,
+          workCenter: (item.row.normalizedData as any)?.workCenter ?? null,
+          stageType: stage,
+          productCode: data.productCode ?? null,
+          productName: data.productName ?? null,
+          productId: data.productId ?? null,
+          bomCode: (item.row.normalizedData as any)?.bomCode ?? null,
+          quantity: (item.row.normalizedData as any)?.quantity ?? null,
+          secondaryQuantity: (item.row.normalizedData as any)?.secondaryQuantity ?? null,
+          unit: (item.row.normalizedData as any)?.unit ?? null,
+          realDurationMinutes: (item.row.normalizedData as any)?.realDuration ?? null,
+          expectedDurationMinutes: (item.row.normalizedData as any)?.expectedDuration ?? null,
+          durationPerUnit: (item.row.normalizedData as any)?.durationPerUnit ?? null,
+          durationDeviation: (item.row.normalizedData as any)?.durationDeviation ?? null,
+          state: (item.row.normalizedData as any)?.state ?? null,
+          date: data.date ?? null,
+          startDate: (item.row.normalizedData as any)?.startDate ?? null,
+          endDate: (item.row.normalizedData as any)?.endDate ?? null,
+          employees: (item.row.normalizedData as any)?.employees ?? [],
+          externalRefs: data.externalRefs ?? [],
+          provenance: item.provenance,
+          status: 'SUBMITTED',
+        }),
+        createdBy: auth.currentUser?.uid ?? 'anonymous',
+        createdByName: auth.currentUser?.email ?? '',
+        createdAt: now(),
+        updatedAt: now(),
+        serverCreatedAt: serverTimestamp(),
+      });
+      writtenWorkOrders += 1;
 
-      out.push(item);
-    } catch (err: any) {
-      failed += 1;
-      const message = String(err?.message ?? err);
-      messages.push(`${item.row.rowId}: ${message}`);
-      out.push({ ...item, row: { ...item.row, status: 'FAILED', failureMessage: message } });
-      await updateStagingOutcome(importSessionId, item, { importedId: null, importedCollection: null, status: 'FAILED', failureMessage: message }).catch(() => {});
+      track('AUDIT_WRITE');
+      const trail = (checked.resolutions ?? []).filter((r) => r.status !== 'EMPTY').map(describeResolution);
+      await logAuditAction('CREATE', collectionName, productionId,
+        `[ODOO_IMPORT ${importSessionId}] production from work order ${item.row.rowId} (${item.provenance.sourceFile} row ${item.provenance.sourceRow}); workOrder=${workOrderRef.id}${trail.length ? ` | references: ${trail.join('; ')}` : ''}`).catch(() => {});
+      track('STAGING');
+      await updateStagingOutcome(importSessionId, item, { importedId: productionId, importedCollection: collectionName, status: 'IMPORTED', failureMessage: null });
+      return { importedId: productionId, collection: collectionName };
     }
-  }
 
+    // odooScrap
+    const payload = item.payload ?? {};
+    const related = (item.row.normalizedData as any)?.workOrderRowId as string | undefined;
+    const production = related ? productionIdByRow.get(related) : undefined;
+    track('SCRAP_WRITE');
+    const scrapRef = await safeAddDoc(collection(db, STOCK_SCRAP_COLLECTION), {
+      ...sanitizeForFirestore({
+        ...payload,
+        identityKey: odooRowIdentity(item),
+        productionRecordId: production?.id ?? null,
+        productionCollection: production?.collection ?? null,
+        stageType: (payload as any).stageType ?? production?.stage ?? null,
+        provenance: item.provenance,
+        status: 'SUBMITTED',
+      }),
+      createdBy: auth.currentUser?.uid ?? 'anonymous',
+      createdByName: auth.currentUser?.email ?? '',
+      createdAt: now(),
+      updatedAt: now(),
+      serverCreatedAt: serverTimestamp(),
+    });
+    writtenScrap += 1;
+    track('AUDIT_WRITE');
+    await logAuditAction('CREATE', STOCK_SCRAP_COLLECTION, scrapRef.id,
+      `[ODOO_IMPORT ${importSessionId}] scrap from ${item.provenance.sourceFile} row ${item.provenance.sourceRow}`).catch(() => {});
+    track('STAGING');
+    await updateStagingOutcome(importSessionId, item, { importedId: scrapRef.id, importedCollection: STOCK_SCRAP_COLLECTION, status: 'IMPORTED', failureMessage: null });
+    return { importedId: scrapRef.id, collection: STOCK_SCRAP_COLLECTION };
+  };
+
+  const run = await runOdooWrites(staged, {
+    writer,
+    existingKeys,
+    identityOf: odooRowIdentity,
+    signal: options.signal,
+    onProgress: options.onProgress,
+    // A failed or unknown row keeps its reason in the staging record too (best effort).
+    onRowIssue: (item, issue) => updateStagingOutcome(importSessionId, item, {
+      importedId: null, importedCollection: null, status: issue.kind === 'FAILED' ? 'FAILED' : 'REVIEW', failureMessage: issue.reason,
+    }),
+  });
+
+  const messages = [...run.final.failures, ...run.final.uncertainRows].map((i) => `${i.rowId}: ${i.reason}`);
+  const skipped = run.final.notPlanned;
+  const clean = run.final.outcome === 'COMPLETED';
   await safeUpdateDoc(doc(db, IMPORT_SESSION_COLLECTION, importSessionId), {
-    status: failed > 0 ? 'PARTIALLY_IMPORTED' : 'COMPLETED',
+    status: clean ? 'COMPLETED' : 'PARTIALLY_IMPORTED',
     updatedAt: now(),
     serverUpdatedAt: serverTimestamp(),
   }).catch(() => {});
   await logAuditAction('BULK_IMPORT', IMPORT_SESSION_COLLECTION, importSessionId,
-    `[ODOO_IMPORT] executed ${importSessionId}: production=${writtenProduction}, workOrders=${writtenWorkOrders}, scrap=${writtenScrap}, failed=${failed}, skipped=${skipped}`).catch(() => {});
+    `[ODOO_IMPORT] executed ${importSessionId}: ${run.final.outcome}, production=${writtenProduction}, workOrders=${writtenWorkOrders}, scrap=${writtenScrap}, failed=${run.final.failed}, unknown=${run.final.uncertain}, alreadyImported=${run.final.alreadyImported}, notStarted=${run.final.notStarted}, skipped=${skipped}`).catch(() => {});
 
-  return { staged: out, writtenProduction, writtenWorkOrders, writtenScrap, failed, skipped, messages };
+  return {
+    staged: run.staged, writtenProduction, writtenWorkOrders, writtenScrap, failed: run.final.failed + run.final.uncertain, skipped, messages, final: run.final,
+  };
 }
 
 async function updateStagingOutcome(
