@@ -163,6 +163,10 @@ export function prepareComponentLines(
     const code = String(line.itemCode ?? line.materialCode ?? line.productCode ?? '').trim();
     const drop = (reason: string) => unattached.push({ itemCode: code, quantity: line.quantity ?? null, unit: line.unit ?? null, reason });
     if (!code) { drop('الكود فارغ'); continue; }
+    // 3.34.1: a component with no positive quantity consumed nothing - Odoo exports such lines (0). It is kept
+    // on the record with the reason rather than failing the whole production record.
+    const qty = Number(line.quantity);
+    if (!Number.isFinite(qty) || qty <= 0) { drop('كمية المكوّن صفر أو غير صالحة - لم يُستهلك شيء'); continue; }
     const material = lookupOne(indexes.material, code);
     const product = material.record ? { record: null, ambiguous: false } : lookupOne(indexes.product, code);
     const record = material.record ?? product.record;

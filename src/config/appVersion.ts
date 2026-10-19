@@ -37,7 +37,7 @@ const DEPLOYMENT_ID_INJECTED = typeof __BUILD_DEPLOYMENT_ID__ === 'string' ? __B
 
 export const CURRENT_APP_VERSION: AppVersionInfo = {
   /** Set by the automatic release planner from the classified change set - see releasePlannerPure.ts. */
-  version: '3.34.0',
+  version: '3.34.1',
   buildId: BUILD_ID_INJECTED,
   buildTimestamp: BUILD_TIMESTAMP_INJECTED,
   gitCommit: COMMIT_SHA_INJECTED,
@@ -46,6 +46,14 @@ export const CURRENT_APP_VERSION: AppVersionInfo = {
   environment: 'production',
   releaseDate: '2026-08-22',
   changelog: [
+    {
+      version: '3.34.1',
+      date: '2026-10-19',
+      highlights: [
+        'إصلاح خطأ في استيراد أودو: كود المنتج كان يُحسب "مكررًا (2)" عندما يحمل السجل نفسه الكود ذاته في حقلي code و productCode - فالسجل الواحد كان يُسجَّل مرتين في الفهرس. الآن يُحسب مرة واحدة، والتكرار الحقيقي (سجلان مختلفان) ما زال يُكتشف',
+        'مكوّن أمر التصنيع بكمية صفر أو غير صالحة لم يعد يُفشل سجل الإنتاج: يُحفظ في unattachedComponents بسببه وكميته كما جاءت من المصدر'
+      ]
+    },
     {
       version: '3.34.0',
       date: '2026-10-19',

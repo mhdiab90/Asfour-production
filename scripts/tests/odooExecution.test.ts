@@ -332,6 +332,14 @@ test('G5. with no lines nothing is touched; with every line dropped there is no 
   assert.equal('materials' in all.payload, false);
 });
 
+test('G5b. a component whose quantity is zero or invalid consumed nothing: kept with the reason, the record is not failed (3.34.1)', () => {
+  const r = prep([line('5501010025'), line('5501010050', { quantity: 0 }), line('5501010025', { quantity: '' }), line('5501010025', { quantity: -1 })]);
+  assert.equal(r.attached, 1);
+  assert.equal(r.unattached.length, 3);
+  assert.match(r.unattached[0].reason, /صفر أو غير صالحة/);
+  assert.equal(r.payload.unattachedComponents[0].quantity, 0, 'the quantity the source gave stays on the record');
+});
+
 test('G6. failures are read as a few causes: the code is taken out of the pattern and counted', () => {
   const issues = [
     { rowId: '1', reason: 'productCode: الكود "A1" مكرر في البيانات الأساسية (2) - يلزم اختيار السجل الصحيح.' },

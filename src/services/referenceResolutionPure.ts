@@ -145,7 +145,11 @@ export function buildReferenceIndex(entity: ReferenceEntity, records: readonly S
     for (const field of codeFields) {
       const code = normalizeCode(record[field]);
       if (!code) continue;
-      byCode.set(code, [...(byCode.get(code) ?? []), record]);
+      const already = byCode.get(code) ?? [];
+      // 3.34.1: a record that carries the SAME code in two of its code fields (code and productCode) is ONE
+      // record, not a duplicate - it is listed once under that code.
+      if (already.includes(record)) continue;
+      byCode.set(code, [...already, record]);
     }
     for (const ref of readExternalReferences(record)) {
       const key = externalIdentityKey(ref);

@@ -263,6 +263,20 @@ test('27. every mapping decision is auditable: field, value, entity, method, sta
   assert.equal(/mappingAudit|new audit|mappingHistoryCollection/i.test(service + readCode(PURE)), false, 'no parallel audit system');
 });
 
+test('Q. a record whose code and productCode are the SAME code is one record, not a duplicate (3.34.1)', () => {
+  const same = { id: 'p1', code: 'FBLWF680100001', productCode: 'FBLWF680100001', nameAr: 'منتج' };
+  const idx = rr.buildReferenceIndex('product', [same], { codeFields: ['code', 'productCode'] });
+  assert.equal(idx.byCode.get('FBLWF680100001')?.length, 1, 'listed once under its code');
+  const hit = rr.resolveReference(idx, 'productCode', 'productId', 'FBLWF680100001');
+  assert.equal(hit.status, 'RESOLVED', 'and it resolves instead of reporting a duplicate');
+  // A REAL duplicate - two different records - is still reported.
+  const twin = rr.buildReferenceIndex('product', [same, { id: 'p2', code: 'FBLWF680100001', nameAr: 'آخر' }], { codeFields: ['code', 'productCode'] });
+  assert.equal(rr.resolveReference(twin, 'productCode', 'productId', 'FBLWF680100001').status, 'DUPLICATE_BUSINESS_CODE');
+  // Two different codes on one record still index under each.
+  const two = rr.buildReferenceIndex('product', [{ id: 'p3', code: 'A1', productCode: 'B1' }], { codeFields: ['code', 'productCode'] });
+  assert.equal(rr.resolveReference(two, 'x', 'y', 'B1').status, 'RESOLVED');
+});
+
 test('P. the dictionaries are built once per session, and the panel resolves through the one pipeline', () => {
   const service = readCode(SERVICE);
   assert.ok(/export async function buildImportReferenceIndexes\(/.test(service));
