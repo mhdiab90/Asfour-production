@@ -37,7 +37,7 @@ const DEPLOYMENT_ID_INJECTED = typeof __BUILD_DEPLOYMENT_ID__ === 'string' ? __B
 
 export const CURRENT_APP_VERSION: AppVersionInfo = {
   /** Set by the automatic release planner from the classified change set - see releasePlannerPure.ts. */
-  version: '3.33.0',
+  version: '3.34.0',
   buildId: BUILD_ID_INJECTED,
   buildTimestamp: BUILD_TIMESTAMP_INJECTED,
   gitCommit: COMMIT_SHA_INJECTED,
@@ -46,6 +46,15 @@ export const CURRENT_APP_VERSION: AppVersionInfo = {
   environment: 'production',
   releaseDate: '2026-08-22',
   changelog: [
+    {
+      version: '3.34.0',
+      date: '2026-10-19',
+      highlights: [
+        'استيراد أودو: أمر العمل الذي ليس له أمر تصنيع في الملفات ولا وحدة في ملف أوامر العمل يُقرأ بوحدة "طن" (كل أوامر التصنيع في ملف أودو بالطن) مع تحذير ظاهر على السطر وبدون أي تحويل - والوحدة المكتوبة فعلًا لا تُستبدل أبدًا',
+        'مراحل عدّ القطع (الكبس والفرز والطوب اليدوي) تظل ترفض الطن ما لم يُفعَّل خيار تحويل الطن إلى قطع',
+        'التقارير: عند اختيار الفرن الدوار يظهر فلتر المراكز التابعة (الفرن نفسه / الهزازات / الكسارات) بالاعتماد على subCenterId المسجل في السجل'
+      ]
+    },
     {
       version: '3.33.0',
       date: '2026-10-19',

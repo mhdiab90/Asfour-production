@@ -197,6 +197,18 @@ export function productionPayloadFromWorkOrder(
       `الوحدة غير موجودة في ملف أوامر العمل - أُخذت من أمر التصنيع "${mo.normalized.unitOriginal || mo.normalized.unit}" كـ "${unit}" (بدون تحويل).`,
       `The work-order file has no unit - taken from the manufacturing order ("${mo.normalized.unitOriginal || mo.normalized.unit}" read as "${unit}", no conversion).`));
   }
+  /*
+   * 3.34.0 (owner decision): a work order whose manufacturing order is not in the files has no unit to
+   * inherit. Every manufacturing order in the export is in tons, so such a row is read as tons - the same
+   * unit name, no conversion - and says so on the row. Piece-counting stages still refuse tons unless the
+   * ton -> pieces option is on.
+   */
+  if (!unit && !n.unitOriginal && !mo) {
+    unit = 'طن';
+    warnings.push(issue('unit',
+      'لا يوجد أمر تصنيع لهذا السطر في الملفات ولا وحدة في ملف أوامر العمل - افتُرضت وحدة "طن" (كل أوامر التصنيع في ملف أودو بالطن، بدون تحويل).',
+      'No manufacturing order in the files and no unit in the work-order file - assumed "ton" (every manufacturing order in the Odoo export is in tons, no conversion).'));
+  }
   const date = n.date ?? n.startDate ?? mo?.normalized.scheduledDate ?? mo?.normalized.startDate ?? null;
   const productCode = n.productCode || mo?.normalized.productCode || '';
 

@@ -57,6 +57,7 @@ import {
   filterUniversalRecords,
   getStageDisplayName,
   ALL_STAGES,
+  SUB_CENTER_MAIN,
   AggregatedReportRow,
 } from '../../services/reportingEngine';
 import { Badge } from '../common/Badge';
@@ -190,11 +191,16 @@ export const ReportsView: React.FC<ReportsViewProps> = () => {
     return () => window.removeEventListener(REPORT_RESET_EVENT, handleReset);
   }, []);
 
+  // The rotary kiln's sub-centres (shakers, crushers) - only offered when that stage is selected.
+  const [subCenterFilter, setSubCenterFilter] = useState('');
+  useEffect(() => { if (stageFilter !== 'rotary_furnace') setSubCenterFilter(''); }, [stageFilter]);
+
   const filters: MultiDimensionFilter = useMemo(() => ({
     startDate: startDate || undefined,
     endDate: endDate || undefined,
     stageType: stageFilter,
-  }), [startDate, endDate, stageFilter]);
+    subCenterId: stageFilter === 'rotary_furnace' && subCenterFilter ? subCenterFilter : undefined,
+  }), [startDate, endDate, stageFilter, subCenterFilter]);
 
   /**
    * Phase 4A - the fetch itself is now bounded by the SAME startDate/
@@ -417,6 +423,20 @@ export const ReportsView: React.FC<ReportsViewProps> = () => {
             <option value="all">{t.allStages}</option>
             {ALL_STAGES.map((s) => <option key={s} value={s}>{getStageDisplayName(s, language)}</option>)}
           </select>
+          {stageFilter === 'rotary_furnace' && (
+            <select
+              id="reports-sub-center"
+              data-testid="reports-sub-center"
+              value={subCenterFilter}
+              onChange={(e) => setSubCenterFilter(e.target.value)}
+              className="bg-slate-50 border border-slate-200 rounded-xl px-2.5 py-1.5 text-xs font-bold"
+            >
+              <option value="">{language === 'ar' ? 'كل المراكز التابعة' : 'All sub-centres'}</option>
+              <option value={SUB_CENTER_MAIN}>{language === 'ar' ? 'الفرن الدوار نفسه' : 'The rotary kiln itself'}</option>
+              <option value="rotary_shakers">{language === 'ar' ? 'الهزازات' : 'Shakers'}</option>
+              <option value="rotary_crushers">{language === 'ar' ? 'الكسارات' : 'Crushers'}</option>
+            </select>
+          )}
         </div>
         {/*
           Hierarchy scope - an ADDITIONAL dimension beside stage and period.

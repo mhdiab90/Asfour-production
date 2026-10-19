@@ -1841,6 +1841,8 @@ export interface MultiDimensionFilter {
   pressId?: string;
   furnaceId?: string;
   machineId?: string;
+  /** A sub-centre of a stage (the rotary kiln's shakers / crushers); SUB_CENTER_MAIN = the stage's own records, no sub-centre. */
+  subCenterId?: string;
   status?: RecordStatus | 'all';
   searchQuery?: string;
 }

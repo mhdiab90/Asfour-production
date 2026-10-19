@@ -219,6 +219,9 @@ export function rankRows(rows: AggregatedReportRow[], metric: RankingMetric, dir
  * customer, employee, shift and press - it never replaces or relaxes any of
  * them, and it never changes a quantity.
  */
+/** The filter value for "the stage's own records" - those with no sub-centre. */
+export const SUB_CENTER_MAIN = '__main__';
+
 export function filterUniversalRecords(
   records: UniversalStageRecord[],
   filters: MultiDimensionFilter,
@@ -240,6 +243,14 @@ export function filterUniversalRecords(
      * Reports screen never sets this, so its results are unchanged.
      */
     if (filters.furnaceId && (r.rawData?.furnaceId || '') !== filters.furnaceId) return false;
+    /*
+     * 3.34.0 - sub-centres of the rotary kiln (shakers, crushers) share its stage; the record's own
+     * subCenterId is what tells them apart. SUB_CENTER_MAIN is the kiln's records with no sub-centre.
+     */
+    if (filters.subCenterId) {
+      const own = String(r.rawData?.subCenterId || '');
+      if (filters.subCenterId === SUB_CENTER_MAIN ? own !== '' : own !== filters.subCenterId) return false;
+    }
     return true;
   });
 }

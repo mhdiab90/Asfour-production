@@ -147,6 +147,18 @@ test('C1. absent/empty bounds apply NO date filter (All Time)', () => {
   assert.equal(engine.filterUniversalRecords(RECORDS, { startDate: undefined, endDate: undefined }).length, RECORDS.length);
 });
 
+test('C1b. the rotary kiln sub-centres are told apart by subCenterId (3.34.0)', () => {
+  const rec = (id: string, sub?: string) => ({ ...RECORDS[0], id, stageType: 'rotary_furnace', rawData: sub ? { subCenterId: sub } : {} });
+  const rows: any[] = [rec('k', undefined), rec('s', 'rotary_shakers'), rec('c', 'rotary_crushers')];
+  const ids = (f: any) => engine.filterUniversalRecords(rows, f).map((r: any) => r.id);
+  assert.deepEqual(ids({ subCenterId: 'rotary_shakers' }), ['s']);
+  assert.deepEqual(ids({ subCenterId: 'rotary_crushers' }), ['c']);
+  assert.deepEqual(ids({ subCenterId: engine.SUB_CENTER_MAIN }), ['k'], 'the kiln itself = records with no sub-centre');
+  assert.deepEqual(ids({}), ['k', 's', 'c'], 'no sub-centre filter changes nothing');
+  const view = viewSource;
+  assert.ok(/reports-sub-center/.test(view) && /stageFilter === 'rotary_furnace'/.test(view), 'the selector shows only for the rotary kiln');
+});
+
 test('C2. ReportsView\'s own defaults produce the All Time path', () => {
   assert.match(viewCode, /useState<string>\(prefill\?\.startDate \|\| ''\)/);
   assert.match(viewCode, /useState<string>\(prefill\?\.endDate \|\| ''\)/);

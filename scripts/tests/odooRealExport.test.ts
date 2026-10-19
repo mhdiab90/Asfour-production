@@ -70,8 +70,23 @@ test('A3. the inherited unit is the name table\'s, never a conversion: Ton -> ط
   assert.equal(row.payload?.productionQuantity, 2);
 });
 
-test('A4. a work order whose manufacturing order is NOT in the files still has no unit and is refused', () => {
+test('A4. a work order whose manufacturing order is NOT in the files is read as tons (3.34.0), with a visible warning', () => {
   const built = build([{ ...WO_ROW, 'Manufacturing Order': 'المونة والخرسانة/MO/09999' }]);
+  assert.equal(built.counts.productionRowsToWrite, 1, 'it is now ready to write');
+  const row = woRow(built);
+  assert.equal((row.row.errors ?? []).length, 0);
+  assert.ok((row.row.warnings ?? []).some((w: any) => /افتُرضت وحدة "طن"/.test(w.messageAr)), 'and says the unit was assumed');
+  assert.equal(row.payload?.productionQuantity, 2, 'the quantity is untouched');
+});
+
+test('A4b. the assumed ton is still refused by a piece-counting stage - nothing is converted', () => {
+  const built = build([{ ...WO_ROW, 'Work Center': 'مكبس بوخر 2', 'Manufacturing Order': 'مكبس/MO/09999' }]);
+  assert.equal(built.counts.productionRowsToWrite, 0);
+  assert.ok((woRow(built).row.errors ?? []).some((e: any) => /عدم تطابق الوحدة/.test(e.messageAr)));
+});
+
+test('A4c. a unit that IS written is never replaced by the assumption', () => {
+  const built = build([{ ...WO_ROW, 'Manufacturing Order': 'المونة والخرسانة/MO/09999', 'Unit of Measure': 'barrel' }]);
   assert.equal(built.counts.productionRowsToWrite, 0);
   assert.ok((woRow(built).row.errors ?? []).some((e: any) => e.field === 'unit'));
 });

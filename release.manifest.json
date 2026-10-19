@@ -1,9 +1,9 @@
 {
   "_doc": "Release Manifest precursor. Describes WHAT is being released so the gate checks a committed declaration rather than whatever flags an operator typed. commitSha/buildId/deploymentId are left null until a release is cut - the gate fills the comparison from the build itself, and only enforces a field that is set here. This is NOT the Change Registry: no change IDs, no Firestore, no UI.",
-  "version": "3.33.0",
-  "releaseId": "REL-2026-0043",
+  "version": "3.34.0",
+  "releaseId": "REL-2026-0044",
   "changeIds": [
-    "MOD-0060"
+    "MOD-0061"
   ],
   "commitSha": null,
   "buildId": null,
@@ -72,7 +72,8 @@
     "odoo-import-final",
     "odoo-import-stop",
     "odoo-import-precheck",
-    "odoo-bulk-precheck"
+    "odoo-bulk-precheck",
+    "reports-sub-center"
   ],
   "_markerNotes": {
     "ai-provider-management": "AI Provider Management route - absent means the AI Assistant closure was dropped",
@@ -138,7 +139,8 @@
     "odoo-import-final": "The final result of the Odoo write (outcome, counts, every failure with its reason) - absent means failures are invisible again",
     "odoo-import-stop": "The stop button of the Odoo write",
     "odoo-import-precheck": "The pre-write check panel of the Odoo import - absent means Master Data problems are again found 25 rows into a write",
-    "odoo-bulk-precheck": "The pre-write check button"
+    "odoo-bulk-precheck": "The pre-write check button",
+    "reports-sub-center": "The rotary-kiln sub-centre filter of the reports screen"
   },
   "tests": [
     "buildIdentity",
@@ -202,6 +204,7 @@
   "deployCommand": "firebase deploy --only hosting --project asfourproduction-70e6e",
   "treeClean": true,
   "_changeNotes": {
+    "MOD-0061": "Owner decisions after 3.33.0. (1) Odoo import: a work order whose manufacturing order is not in the files has no unit to inherit; every manufacturing order in the export is in tons, so such a row is read as tons (name table, no conversion) with a visible warning. A unit that IS written is never replaced; piece-counting stages still refuse tons unless the opt-in ton->pieces conversion is on. (2) Reports: records of the rotary kiln's sub-centres (shakers, crushers) share the kiln's stage and carry subCenterId; the Reports screen offers a sub-centre filter (all / the kiln itself = no sub-centre / shakers / crushers) when the rotary kiln is selected; with no selection nothing changes. No data was imported or written",
     "MOD-0060": "Odoo import, first real write: stopped at 2% after 25 consecutive failures (the 3.32.0 guard worked). Causes: (1) a product code duplicated in Master Data (2 records) - the write refuses to pick one; (2) a production record's component lines were looked up only among MATERIALS, but a component can be a PRODUCT (green bricks into the tunnel kiln: 'no record with code GBLWF...'); (3) the MO sheet gives no component unit, so every component line failed 'a known unit is required'. Fixes: prepareComponentLines resolves each component as the MATERIAL with that code, else the PRODUCT (never when the code fits several records, or none), and a missing unit is the item's own approved Master Data unit (an Odoo component quantity is in the item's unit; a unit the sheet DID give is kept if approved and refused if not); a line that still cannot be resolved does NOT fail the production record - it is kept on it as unattachedComponents with its quantity and the reason. A PRE-WRITE CHECK: prepareOdooWorkOrderRow (component lines + the entity import's own resolution and validation) is one step used by BOTH the write and the screen, so a row that passes the check is a row the write accepts; the bulk approval runs it first and approves only the rows that survive; its findings are ordinary row errors (replaced, never stacked, on a re-check), shown grouped by cause with counts, with the list of codes duplicated in Master Data (to fix in the Master Data quality report), and exportable to Excel - as are the final write's failures. NOT fixed here (a Master Data decision): the duplicated product codes themselves. No data was imported or written by this release",
     "MOD-0059": "Odoo import: the WRITE loop with progress, bounded waits, stop and a complete result. The first real write of an export showed a spinner and nothing else - no percentage, no way to tell a slow server from a dead one, no failure list - and the old loop was sequential and unbounded (a Firestore write that never settles hung it forever, the 3.21.3 lesson). New pure loop odooExecutionPure.runOdooWrites (the Odoo counterpart of the Master Data import's loop, reusing its waitBounded): live progress (processed / total, floor percentage that is 99 at most until verified complete and 100 only then, per-stage counts, the row being written, last-progress time) flushed to the screen twice a second; every row bounded at 90 s - a write that does not answer is OUTCOME UNKNOWN, neither failed nor written, never retried in the run, with the step it was in; a Stop button (no new row starts, in-flight writes get a 5 s grace); guards - 5 unknown outcomes in a row or 25 failures in a row stop the run as INTERRUPTED; a failure is isolated to its row; 4 rows are written at a time, production before scrap so scrap can point at its production record; a visible warning after 60 s without progress and a beforeunload warning. RE-RUN SAFETY: before writing, the existing workOrders / stockScrap identities are read once (a run does not start if they cannot be read); a row whose identity is already stored (its own identityKey, or derived from an older record's fields) is recognised and not written again; new work-order and scrap documents now store identityKey; identity is never used to drop rows within the one run. The final panel shows COMPLETED / COMPLETED_WITH_ERRORS / INTERRUPTED, the counts, and every failure and unknown outcome with its stage, MO, source file and row, and reason. Known limit: a production record and its work-order document are two writes, so a timeout between them can leave a production record without its work-order document, which a re-run would write again - the unknown-outcome list names those rows for checking first. No data was imported or written by this release",
     "MOD-0058": "Odoo import: BULK APPROVAL. On the first real export the screen showed 911 production rows ready but 'ready to write: 0', because a row is written only when INCLUDED with its warnings accepted and the screen offered that one row at a time. Now a bar above the tabs includes rows and accepts their warnings in one action (odooImportSessionPure: bulkApprovalCandidates / bulkApprovalSummary / approveRowsInBulk / clearBulkSelection). It touches only work-order and scrap rows with NO error and a ready payload, never a manufacturing order (context), never an IMPORTED or FAILED row, and never a row already writable; it can be narrowed to one stage (or scrap) and to the first N rows for a pilot batch. A confirmation lists the rows per stage and the kinds of warning being accepted; each row records who approved it and when (INCLUDED / APPROVED_WARNINGS, reason BULK_APPROVAL). 'Un-select all' reverses it. Nothing is written by the approval - writing stays the 'Approve & write records' button, behind the existing import permission. Replay on the real files: writable 0 -> 1,221 (911 production + 310 scrap). No data was imported or written",
@@ -255,8 +258,8 @@
     "UI-0010": "Financial Accounts import opens a dedicated Master Data importer instead of the Historical Excel Import screen: the action no longer navigates to the bulk-entry route (which App.tsx renders as DataImportView); a new in-place modal reuses the existing financialAccounts schema, XLSX reader, row validation, duplicate detection and chunked commit, adds sheet selection and parent/cycle relationship checks, and keeps partial import so invalid rows never block valid ones",
     "DB-0009": "Category-first Master Data over an extensible registry; Financial Accounts master data with Excel import and hierarchical editing (new financialAccounts collection and its Firestore rule); one shared generic hierarchy resolver reused by Master Data, Production Review and production aggregation; hierarchical cost-centre editing with cycle, self-parent and unknown-parent protection"
   },
-  "previousVersion": "3.32.0",
+  "previousVersion": "3.33.0",
   "versionBump": "MINOR",
   "classificationConfidence": "HIGH",
-  "previousReleaseId": "REL-2026-0042"
+  "previousReleaseId": "REL-2026-0043"
 }
