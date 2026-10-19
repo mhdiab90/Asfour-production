@@ -23,11 +23,12 @@ import { readMrpWorkOrder } from '../../services/odooWorkOrderReaderPure';
 import { readStockScrap } from '../../services/odooScrapReaderPure';
 import { fetchMasterData, MASTER_DATA_COLLECTIONS } from '../../services/masterDataService';
 import { duplicateCodesIn, groupReasons, summariseUnmatched, unmatchedSuggestions, type OdooRunFinal, type OdooRunProgress, type ReasonGroup, type UnmatchedSuggestion } from '../../services/odooExecutionPure';
-import { approveRowsInBulk, bulkApprovalCandidates, bulkApprovalSummary, clearBulkSelection, buildOdooImportSession, isOdooRowWritable, type OdooSessionResult, type OdooStagedRow } from '../../services/odooImportSessionPure';
+import { approveRowsInBulk, bulkApprovalCandidates, bulkApprovalSummary, clearBulkSelection, buildOdooImportSession, consolidateByManufacturingOrder, isOdooRowWritable, type ManufacturingOrderSummary, type OdooSessionResult, type OdooStagedRow } from '../../services/odooImportSessionPure';
 import {
   executeOdooImport,
   listOdooImportSessions,
   loadApprovedWorkCenterMappings,
+  loadCarriedOdooContext,
   loadOdooImportSession,
   prepareOdooWorkOrderRow,
   saveOdooImportSession,
@@ -43,7 +44,7 @@ interface Props {
   onClose: () => void;
 }
 
-type Tab = 'files' | 'matching' | 'workCenters' | 'validation' | 'conflicts' | 'orphans' | 'preview' | 'audit';
+type Tab = 'files' | 'matching' | 'workCenters' | 'validation' | 'byOrder' | 'conflicts' | 'orphans' | 'preview' | 'audit';
 
 const SOURCES: Array<{ type: OdooSourceType; ar: string; en: string; hint: string }> = [
   { type: 'MRP_PRODUCTION', ar: 'أوامر التصنيع', en: 'Manufacturing orders', hint: 'mrp.production' },
@@ -87,6 +88,11 @@ export const OdooHistoricalImportPanel: React.FC<Props> = ({ isOpen, onClose }) 
   /** OFF by default: turns Odoo tons into pieces for pressing / sorting / hand-made brick by each product's piece weight. */
   const [convertTonsToPieces, setConvertTonsToPieces] = useState<boolean>(false);
   const [session, setSession] = useState<OdooSessionResult | null>(null);
+  /** Link this upload to what earlier uploads staged (the files not uploaded now), by manufacturing-order number. */
+  const [useEarlier, setUseEarlier] = useState<boolean>(true);
+  const [orderView, setOrderView] = useState<ManufacturingOrderSummary[] | null>(null);
+  const [orderMissing, setOrderMissing] = useState<'ALL' | 'production' | 'workOrders' | 'scrap'>('ALL');
+  const [carriedNote, setCarriedNote] = useState<string | null>(null);
   const [staged, setStaged] = useState<OdooStagedRow[]>([]);
   const [importSessionId, setImportSessionId] = useState<string>('');
   const [tab, setTab] = useState<Tab>('files');
@@ -147,6 +153,20 @@ export const OdooHistoricalImportPanel: React.FC<Props> = ({ isOpen, onClose }) 
         ? readStockScrap(files.STOCK_SCRAP.rows, { importSessionId: id, fileName: files.STOCK_SCRAP.file.name, sheetName: files.STOCK_SCRAP.sheetName })
         : null;
 
+      // Whatever file kind is NOT in this upload is looked up in what earlier uploads staged, so rows that
+      // share a manufacturing-order number are linked even though the files came separately. Read-only context.
+      const carried = useEarlier
+        ? await loadCarriedOdooContext(id, { production: !files.MRP_PRODUCTION, workOrders: !files.MRP_WORKORDER, scrap: !files.STOCK_SCRAP })
+        : { production: [], workOrders: [], scrap: [] };
+      const carriedParts = [
+        carried.production.length ? `${carried.production.length} ${isAr ? 'أمر تصنيع' : 'manufacturing order(s)'}` : '',
+        carried.workOrders.length ? `${carried.workOrders.length} ${isAr ? 'أمر عمل' : 'work order(s)'}` : '',
+        carried.scrap.length ? `${carried.scrap.length} ${isAr ? 'سطر هالك' : 'scrap row(s)'}` : '',
+      ].filter(Boolean);
+      setCarriedNote(carriedParts.length
+        ? (isAr ? `رُبط هذا الرفع بما رُفع سابقًا بنفس رقم أمر التصنيع: ${carriedParts.join('، ')} (للسياق فقط - لا يُعاد عرضها ولا تُكتب).` : `This upload was linked to earlier uploads by manufacturing-order number: ${carriedParts.join(', ')} (context only - not shown again, never written).`)
+        : null);
+
       // Piece weights are read from Master Data only when the user switched the conversion on.
       let pieceConversion: { enabled: boolean; pieceWeightKg: (code: string) => number | null } | undefined;
       if (convertTonsToPieces) {
@@ -186,7 +206,9 @@ export const OdooHistoricalImportPanel: React.FC<Props> = ({ isOpen, onClose }) 
         approvedWorkCenters: approved,
         pieceConversion,
         identity,
+        carried: { production: carried.production, workOrders: carried.workOrders },
       });
+      setOrderView(consolidateByManufacturingOrder({ production: production?.rows ?? [], workOrders: workOrders?.rows ?? [], scrap: scrap?.rows ?? [], carried }));
       setSession(built);
       setStaged(built.staged);
       setTab('validation');
@@ -268,6 +290,8 @@ export const OdooHistoricalImportPanel: React.FC<Props> = ({ isOpen, onClose }) 
         linkedRowIds: r.linkedRowIds ?? [],
         orphanKinds: r.orphanKinds ?? [],
       })));
+      setOrderView(null);
+      setCarriedNote(null);
       setTab('validation');
       setNotice(isAr ? 'تمت استعادة الجلسة من المرحلة المؤقتة (للمراجعة فقط - أعد رفع الملفات لإعادة التنفيذ).' : 'The session was restored from staging (review only - re-upload the files to execute again).');
     } catch (err: any) {
@@ -522,10 +546,16 @@ export const OdooHistoricalImportPanel: React.FC<Props> = ({ isOpen, onClose }) 
             {isAr ? 'لا تملك صلاحية الاستيراد - يمكنك المراجعة فقط.' : 'You do not have the import right - you may review only.'}
           </p>
         )}
+        {carriedNote && <p id="odoo-import-carried" className="bg-violet-50 border border-violet-200 rounded-xl px-3 py-2 font-bold text-violet-900">{carriedNote}</p>}
         {error && <p className="bg-rose-50 border border-rose-200 rounded-xl px-3 py-2 font-bold text-rose-800">{error}</p>}
         {notice && <p className="bg-sky-50 border border-sky-200 rounded-xl px-3 py-2 font-bold text-sky-900">{notice}</p>}
 
         {/* ---- files ---- */}
+        <p id="odoo-import-separate-hint" className="text-[11px] text-slate-500">
+          {isAr
+            ? 'يمكن رفع أي ملف لوحده (أوامر التصنيع فقط، أو أوامر العمل بالعمال فقط، أو الهالك فقط). الملف الذي لم يُرفع الآن يُبحث عنه فيما رُفع سابقًا ويُربط بنفس رقم أمر التصنيع، وتجد كل ما يخص أمر واحد مجمّعًا في تبويب byOrder.'
+            : 'Any one file can be uploaded alone (manufacturing orders only, work orders with their workers only, or scrap only). A file not uploaded now is looked up among earlier uploads and linked by manufacturing-order number; everything about one order is collected in the byOrder tab.'}
+        </p>
         <div id="odoo-import-files" className="grid grid-cols-1 sm:grid-cols-3 gap-2">
           {SOURCES.map((source) => {
             const loaded = files[source.type];
@@ -571,6 +601,13 @@ export const OdooHistoricalImportPanel: React.FC<Props> = ({ isOpen, onClose }) 
             <input id="odoo-convert-pieces" type="checkbox" checked={convertTonsToPieces} disabled={busy} onChange={(e) => setConvertTonsToPieces(e.target.checked)} className="accent-amber-500" />
             {isAr ? 'تحويل الطن إلى قطع (بوزن قطعة المنتج)' : 'Convert tons to pieces (by product piece weight)'}
           </label>
+          <label
+            className="inline-flex items-center gap-1.5 font-bold text-slate-700 cursor-pointer"
+            title={isAr ? 'يقرأ ما رُفع سابقًا في المرحلة المؤقتة (قراءة فقط) ويربط به هذا الرفع بنفس رقم أمر التصنيع' : 'Reads what earlier uploads staged (read-only) and links this upload to it by manufacturing-order number'}
+          >
+            <input id="odoo-link-earlier" type="checkbox" checked={useEarlier} disabled={busy} onChange={(e) => setUseEarlier(e.target.checked)} className="accent-amber-500" />
+            {isAr ? 'الربط بما رُفع سابقًا' : 'Link to earlier uploads'}
+          </label>
           {busy && <Loader2 className="w-4 h-4 animate-spin text-slate-500" />}
           {importSessionId && <span className="font-mono text-slate-500">{importSessionId}</span>}
         </div>
@@ -608,7 +645,7 @@ export const OdooHistoricalImportPanel: React.FC<Props> = ({ isOpen, onClose }) 
             </div>
 
             <div className="flex flex-wrap items-center gap-1.5">
-              {(['files', 'matching', 'workCenters', 'validation', 'conflicts', 'orphans', 'preview', 'audit'] as Tab[]).map((t) => (
+              {(['files', 'matching', 'workCenters', 'validation', 'byOrder', 'conflicts', 'orphans', 'preview', 'audit'] as Tab[]).map((t) => (
                 <button key={t} type="button" onClick={() => setTab(t)} className={`px-3 py-1.5 rounded-lg font-bold cursor-pointer ${tab === t ? 'bg-amber-400 text-slate-950' : 'bg-slate-100 text-slate-700'}`}>
                   {t}
                 </button>
@@ -933,6 +970,86 @@ export const OdooHistoricalImportPanel: React.FC<Props> = ({ isOpen, onClose }) 
                     ))}
                   </tbody>
                 </table>
+              </div>
+            )}
+
+            {/* ---- everything that shares one manufacturing-order number (3.36.0) ---- */}
+            {tab === 'byOrder' && (
+              <div id="odoo-import-by-order" className="space-y-2">
+                {!orderView ? (
+                  <p className="px-3 py-3 text-slate-500 font-bold">{isAr ? 'التجميع حسب أمر التصنيع يظهر بعد "قراءة وربط وتحقق" (لا يُعاد بناؤه عند استعادة جلسة محفوظة).' : 'The per-order collection appears after "Parse, link & validate" (it is not rebuilt when a saved session is restored).'}</p>
+                ) : (() => {
+                  const shown = orderView.filter((o) => orderMissing === 'ALL' || o.missing.includes(orderMissing));
+                  const srcLabel = (v: string) => (v === 'THIS' ? (isAr ? 'هذا الرفع' : 'this upload') : v === 'EARLIER' ? (isAr ? 'رفع سابق' : 'earlier') : v === 'BOTH' ? (isAr ? 'الاثنان' : 'both') : '-');
+                  const missingLabel = (m: string) => (m === 'production' ? (isAr ? 'أمر التصنيع' : 'order') : m === 'workOrders' ? (isAr ? 'أوامر العمل' : 'work orders') : (isAr ? 'الهالك' : 'scrap'));
+                  const exportOrders = () => {
+                    const wb = XLSX.utils.book_new();
+                    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(shown.map((o) => ({
+                      'أمر التصنيع': o.moReference,
+                      'كود المنتج': o.productCode,
+                      'المنتج': o.productName,
+                      'الوحدة': o.unit ?? '',
+                      'المخطط': o.plannedQuantity ?? '',
+                      'إنتاج أمر التصنيع': o.orderProduced ?? '',
+                      'أوامر العمل': o.workOrders,
+                      'كمية أوامر العمل': o.workOrdersQuantity ?? '',
+                      'المراحل': o.stages.join(' , '),
+                      'عدد العمال': o.workers,
+                      'سطور الهالك': o.scrapRows,
+                      'كمية الهالك': o.scrapQuantity ?? '',
+                      'وحدة الهالك': o.scrapUnit ?? '',
+                      'مصدر أمر التصنيع': srcLabel(o.sources.production),
+                      'مصدر أوامر العمل': srcLabel(o.sources.workOrders),
+                      'مصدر الهالك': srcLabel(o.sources.scrap),
+                      'الناقص': o.missing.map(missingLabel).join(' , '),
+                    }))), 'by manufacturing order');
+                    XLSX.writeFile(wb, `Odoo_by_order_${new Date().toISOString().slice(0, 10)}.xlsx`);
+                  };
+                  return (
+                    <>
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span className="font-bold text-slate-700">{isAr ? `${shown.length} من ${orderView.length} أمر تصنيع` : `${shown.length} of ${orderView.length} order(s)`}</span>
+                        <select id="odoo-order-missing" value={orderMissing} onChange={(e) => setOrderMissing(e.target.value as typeof orderMissing)} className="bg-white border border-slate-200 rounded-lg px-2 py-1 font-bold">
+                          <option value="ALL">{isAr ? 'الكل' : 'All'}</option>
+                          <option value="production">{isAr ? 'ينقصها أمر التصنيع' : 'Missing the manufacturing order'}</option>
+                          <option value="workOrders">{isAr ? 'ينقصها أوامر عمل' : 'Missing work orders'}</option>
+                          <option value="scrap">{isAr ? 'ينقصها هالك' : 'Missing scrap'}</option>
+                        </select>
+                        <button type="button" onClick={exportOrders} className="px-3 py-1.5 font-bold text-slate-700 bg-white border border-slate-200 hover:bg-slate-50 rounded-lg cursor-pointer">{isAr ? 'تصدير (Excel)' : 'Export (Excel)'}</button>
+                        <span className="text-[10px] text-slate-500">{isAr ? 'الكميات تُجمع داخل وحدة واحدة فقط، والهالك لا يُخصم من الإنتاج.' : 'Quantities add within one unit only; scrap is never subtracted from production.'}</span>
+                      </div>
+                      <div className="overflow-x-auto max-h-80 overflow-y-auto border border-slate-200 rounded-xl">
+                        <table className="w-full text-[11px]">
+                          <thead className="bg-slate-50 text-slate-600 sticky top-0">
+                            <tr>
+                              <th className={cell}>{isAr ? 'أمر التصنيع' : 'Order'}</th>
+                              <th className={cell}>{isAr ? 'المنتج' : 'Product'}</th>
+                              <th className={cell}>{isAr ? 'أوامر العمل' : 'Work orders'}</th>
+                              <th className={cell}>{isAr ? 'الكمية' : 'Quantity'}</th>
+                              <th className={cell}>{isAr ? 'العمال' : 'Workers'}</th>
+                              <th className={cell}>{isAr ? 'الهالك' : 'Scrap'}</th>
+                              <th className={cell}>{isAr ? 'الناقص' : 'Missing'}</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {shown.slice(0, 300).map((o) => (
+                              <tr key={o.moReference} className="border-t border-slate-100">
+                                <td className={`${cell} font-mono`}>{o.moReference}</td>
+                                <td className={cell}>{o.productCode}<div className="text-slate-400">{o.productName}</div></td>
+                                <td className={cell}>{o.workOrders}<div className="text-slate-400">{srcLabel(o.sources.workOrders)}</div></td>
+                                <td className={`${cell} font-mono`}>{o.workOrdersQuantity ?? '-'} {o.unit ?? ''}</td>
+                                <td className={cell}>{o.workers}</td>
+                                <td className={`${cell} font-mono`}>{o.scrapQuantity ?? '-'} {o.scrapUnit ?? ''}<div className="text-slate-400">{srcLabel(o.sources.scrap)}</div></td>
+                                <td className={cell}>{o.missing.length ? o.missing.map(missingLabel).join(' , ') : <span className="text-emerald-700 font-bold">{isAr ? 'مكتمل' : 'complete'}</span>}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                      {shown.length > 300 && <p className="text-[10px] text-slate-500">{isAr ? 'أول 300 فقط معروضة - التصدير يشمل الكل.' : 'The first 300 are shown - the export has them all.'}</p>}
+                    </>
+                  );
+                })()}
               </div>
             )}
 

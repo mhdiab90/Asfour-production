@@ -140,6 +140,13 @@ export interface OdooSessionInput {
   approvedWorkCenters?: readonly ApprovedWorkCenterMapping[];
   pieceConversion?: PieceConversionOptions;
   identity?: OdooIdentityLookups;
+  /**
+   * CONTEXT FROM AN EARLIER UPLOAD (3.36.0). Any one of the three files can be uploaded on its own; the rows
+   * of the others that an earlier upload already staged are carried here so this upload links by the same
+   * manufacturing-order number. They are lookup context only: never staged again, never written, and a row of
+   * this upload always wins over a carried one.
+   */
+  carried?: { production?: readonly OdooProductionRow[]; workOrders?: readonly OdooWorkOrderRow[] };
 }
 
 export interface OdooSessionResult {
@@ -387,12 +394,34 @@ export function scrapPayloadFromRow(
  * with its links, orphan reasons, conflicts and the payload it would write.
  */
 export function buildOdooImportSession(input: OdooSessionInput): OdooSessionResult {
-  const link = linkOdooSources({ production: input.production, workOrders: input.workOrders, scrap: input.scrap });
+  // Carried context (an earlier upload): a manufacturing order / work order of THIS upload is never replaced.
+  const currentMoKeys = new Set(input.production.map((r) => moKey(r.normalized.moReference)));
+  const carriedMos = (input.carried?.production ?? []).filter((r) => !currentMoKeys.has(moKey(r.normalized.moReference)));
+  const currentIdentities = new Set(input.workOrders.map((w) => workOrderIdentityKey(w)));
+  const carriedWos = (input.carried?.workOrders ?? []).filter((w) => !currentIdentities.has(workOrderIdentityKey(w)));
+  const carriedMoRowIds = new Set(carriedMos.map((r) => r.rowId));
+  const touchedKeys = new Set<string>([
+    ...currentMoKeys,
+    ...input.workOrders.map((w) => moKey(w.normalized.moReference)),
+    ...input.scrap.map((s) => moKey(s.normalized.moReference ?? '')),
+  ]);
+
+  const rawLink = linkOdooSources({ production: [...input.production, ...carriedMos], workOrders: input.workOrders, scrap: input.scrap });
+  const link = {
+    ...rawLink,
+    // A carried manufacturing order is not a row of this review: its "no work order" note and conflicts that
+    // concern only orders this upload did not touch are not this upload's findings.
+    orphans: rawLink.orphans.filter((o) => !(o.kind === 'MO_WITHOUT_WORK_ORDER' && carriedMoRowIds.has(o.rowId))),
+    conflicts: rawLink.conflicts.filter((c) => touchedKeys.has(moKey(c.logicalKey))),
+  };
   const staged: OdooStagedRow[] = [];
 
-  const moByKey = new Map(input.production.map((row) => [moKey(row.normalized.moReference), row]));
+  const moByKey = new Map<string, OdooProductionRow>([
+    ...carriedMos.map((row) => [moKey(row.normalized.moReference), row] as const),
+    ...input.production.map((row) => [moKey(row.normalized.moReference), row] as const),
+  ]);
   const workOrderCountByMo = new Map<string, number>();
-  for (const wo of input.workOrders) {
+  for (const wo of [...input.workOrders, ...carriedWos]) {
     const key = moKey(wo.normalized.moReference);
     workOrderCountByMo.set(key, (workOrderCountByMo.get(key) ?? 0) + 1);
   }
@@ -476,7 +505,7 @@ export function buildOdooImportSession(input: OdooSessionInput): OdooSessionResu
 
   // --- scrap: one record per row ------------------------------------------------------------
   for (const row of input.scrap) {
-    const related = input.workOrders.find((w) =>
+    const related = [...input.workOrders, ...carriedWos].find((w) =>
       moKey(w.normalized.moReference) === moKey(row.normalized.moReference ?? '')
       && (!row.normalized.rawWorkOrder || w.normalized.rawWorkOrder === row.normalized.rawWorkOrder));
     const stage = related?.normalized.workCenter.stageType ?? null;
@@ -623,4 +652,186 @@ export function isOdooRowWritable(staged: OdooStagedRow): boolean {
   if (staged.row.warnings.length > 0 && !staged.row.warningsAccepted) return false;
   if (staged.row.status === 'IMPORTED') return false;
   return Boolean(staged.payload);
+}
+
+
+/* ==========================================================================================
+ * UPLOADING THE FILES SEPARATELY (3.36.0)
+ *
+ * Any one of the three files can be uploaded alone - manufacturing orders only, work orders (which carry
+ * the workers) only, or scrap only. Each upload is staged as it always was; what an earlier upload staged is
+ * read back as CONTEXT so this upload links by the same manufacturing-order number, and the manufacturing-
+ * order view below collects everything that shares one number - from this upload and the earlier ones.
+ * Nothing here writes; carried rows are never staged twice and never written.
+ * ========================================================================================== */
+
+/** A staged row as stored (the fields this needs). */
+export interface StoredStagingRowLike {
+  importSessionId: string;
+  rowId: string;
+  sourceType: string;
+  rawRow?: Record<string, unknown>;
+  normalizedRow?: any;
+  provenance: OdooProductionRow['provenance'];
+  linkedManufacturingOrder?: string | null;
+}
+
+export interface CarriedScrap { moReference: string; productCode: string; quantity: number | null; unit: string | null; date: string | null; sessionId: string }
+
+export interface CarriedContext {
+  production: OdooProductionRow[];
+  workOrders: OdooWorkOrderRow[];
+  scrap: CarriedScrap[];
+}
+
+/**
+ * The context an earlier upload left in staging. The newest session wins per manufacturing order / work
+ * order / scrap row, and the session being built is excluded (its own rows are the current upload).
+ * Rows that could not be normalised (no payload) are not context.
+ */
+export function carriedContextFromStaging(rows: readonly StoredStagingRowLike[], currentSessionId: string): CarriedContext {
+  const newestFirst = [...rows]
+    .filter((r) => r.importSessionId !== currentSessionId)
+    .sort((a, b) => (a.importSessionId < b.importSessionId ? 1 : a.importSessionId > b.importSessionId ? -1 : 0));
+  const production = new Map<string, OdooProductionRow>();
+  const workOrders = new Map<string, OdooWorkOrderRow>();
+  const scrap = new Map<string, CarriedScrap>();
+  for (const r of newestFirst) {
+    const n = r.normalizedRow;
+    if (!n || typeof n !== 'object') continue;
+    if (r.sourceType === 'MRP_PRODUCTION' && n.moReference) {
+      const key = moKey(n.moReference);
+      if (!production.has(key)) {
+        production.set(key, { rowId: r.rowId, sourceType: 'MRP_PRODUCTION', sourceRow: r.provenance?.sourceRow ?? 0, raw: r.rawRow ?? {}, normalized: n, issues: [], warnings: [], provenance: r.provenance } as OdooProductionRow);
+      }
+    } else if (r.sourceType === 'MRP_WORKORDER' && n.moReference) {
+      const row = { rowId: r.rowId, sourceType: 'MRP_WORKORDER', sourceRow: r.provenance?.sourceRow ?? 0, raw: r.rawRow ?? {}, normalized: n, issues: [], warnings: [], provenance: r.provenance } as OdooWorkOrderRow;
+      const key = workOrderIdentityKey(row);
+      if (!workOrders.has(key)) workOrders.set(key, row);
+    } else if (r.sourceType === 'STOCK_SCRAP') {
+      const mo = String(n.manufacturingOrderNumber ?? '').trim();
+      if (!mo) continue;
+      const key = String(n.externalRefs?.[0]?.externalId ?? `${mo}|${n.reference ?? ''}|${n.date ?? ''}|${n.quantity ?? ''}|${n.productCode ?? ''}`);
+      if (!scrap.has(key)) {
+        scrap.set(key, { moReference: mo, productCode: String(n.productCode ?? ''), quantity: typeof n.quantity === 'number' ? n.quantity : null, unit: n.unit ?? null, date: n.date ?? null, sessionId: r.importSessionId });
+      }
+    }
+  }
+  return { production: [...production.values()], workOrders: [...workOrders.values()], scrap: [...scrap.values()] };
+}
+
+export type PartSource = 'THIS' | 'EARLIER' | 'BOTH' | 'NONE';
+
+export interface ManufacturingOrderSummary {
+  moReference: string;
+  productCode: string;
+  productName: string;
+  unit: string | null;
+  plannedQuantity: number | null;
+  /** The manufacturing order's own actual quantity, where its file gave one. */
+  orderProduced: number | null;
+  workOrders: number;
+  /** Null when the work orders use more than one unit - never a mixed sum. */
+  workOrdersQuantity: number | null;
+  stages: string[];
+  workers: number;
+  scrapRows: number;
+  scrapQuantity: number | null;
+  scrapUnit: string | null;
+  /** Where each part came from: this upload, an earlier one, or not uploaded at all. */
+  sources: { production: PartSource; workOrders: PartSource; scrap: PartSource };
+  /** What is still missing for this order to be complete. */
+  missing: Array<'production' | 'workOrders' | 'scrap'>;
+}
+
+const sumInOneUnit = (parts: ReadonlyArray<{ quantity: number | null; unit: string | null }>): { total: number | null; unit: string | null } => {
+  const used = parts.filter((p) => p.quantity !== null);
+  if (used.length === 0) return { total: null, unit: null };
+  const units = new Set(used.map((p) => p.unit ?? ''));
+  if (units.size > 1) return { total: null, unit: null };
+  return { total: Math.round(used.reduce((s, p) => s + (p.quantity as number), 0) * 1e6) / 1e6, unit: used[0].unit ?? null };
+};
+
+type FromWhere = 'THIS' | 'EARLIER';
+
+/**
+ * Everything that shares one manufacturing-order number, collected: the order, its work orders (with the
+ * workers they name) and its scrap - this upload plus what earlier uploads staged. Quantities are added only
+ * within one unit; scrap is reported beside production, never subtracted from it.
+ */
+export function consolidateByManufacturingOrder(input: {
+  production: readonly OdooProductionRow[];
+  workOrders: readonly OdooWorkOrderRow[];
+  scrap: readonly OdooScrapRow[];
+  carried?: Partial<CarriedContext>;
+}): ManufacturingOrderSummary[] {
+  type Slot = {
+    ref: string;
+    production: { value: any; from: FromWhere } | null;
+    wos: Array<{ value: any; from: FromWhere }>;
+    scrap: Array<{ value: { quantity: number | null; unit: string | null }; from: FromWhere }>;
+  };
+  const orders = new Map<string, Slot>();
+  const slot = (ref: string): Slot => {
+    const key = moKey(ref);
+    let e = orders.get(key);
+    if (!e) {
+      e = { ref, production: null, wos: [], scrap: [] };
+      orders.set(key, e);
+    }
+    return e;
+  };
+  const currentIdentities = new Set(input.workOrders.map((w) => workOrderIdentityKey(w)));
+  for (const r of input.carried?.production ?? []) slot(r.normalized.moReference).production = { value: r.normalized, from: 'EARLIER' };
+  for (const r of input.production) slot(r.normalized.moReference).production = { value: r.normalized, from: 'THIS' };
+  for (const r of input.carried?.workOrders ?? []) {
+    if (!currentIdentities.has(workOrderIdentityKey(r))) slot(r.normalized.moReference).wos.push({ value: r.normalized, from: 'EARLIER' });
+  }
+  for (const r of input.workOrders) slot(r.normalized.moReference).wos.push({ value: r.normalized, from: 'THIS' });
+  for (const r of input.carried?.scrap ?? []) slot(r.moReference).scrap.push({ value: { quantity: r.quantity, unit: r.unit }, from: 'EARLIER' });
+  for (const r of input.scrap) {
+    if (r.normalized.moReference) slot(r.normalized.moReference).scrap.push({ value: { quantity: r.normalized.quantity, unit: r.normalized.unit }, from: 'THIS' });
+  }
+
+  const sourceOf = (parts: ReadonlyArray<{ from: FromWhere }>): PartSource => {
+    const t = parts.some((p) => p.from === 'THIS');
+    const e = parts.some((p) => p.from === 'EARLIER');
+    if (t && e) return 'BOTH';
+    if (t) return 'THIS';
+    return e ? 'EARLIER' : 'NONE';
+  };
+  return [...orders.values()].map((e): ManufacturingOrderSummary => {
+    const p = e.production?.value ?? null;
+    const first = e.wos[0]?.value;
+    const wo = sumInOneUnit(e.wos.filter((w) => w.value.isProductionEvent !== false).map((w) => ({ quantity: w.value.quantity, unit: w.value.unit })));
+    const scrap = sumInOneUnit(e.scrap.map((s) => s.value));
+    const workers = new Set<string>();
+    for (const w of e.wos) {
+      for (const emp of (w.value.employees ?? []) as Array<{ employeeCode?: string; employeeName?: string }>) {
+        const k = (emp.employeeCode || emp.employeeName || '').trim().toLowerCase();
+        if (k) workers.add(k);
+      }
+    }
+    const missing: ManufacturingOrderSummary['missing'] = [];
+    if (!e.production) missing.push('production');
+    if (e.wos.length === 0) missing.push('workOrders');
+    if (e.scrap.length === 0) missing.push('scrap');
+    return {
+      moReference: e.ref,
+      productCode: p?.productCode || first?.productCode || '',
+      productName: p?.productName || first?.productName || '',
+      unit: p?.unit ?? wo.unit ?? first?.unit ?? null,
+      plannedQuantity: p?.quantityToProduce ?? null,
+      orderProduced: p?.producedQuantity ?? null,
+      workOrders: e.wos.length,
+      workOrdersQuantity: wo.total,
+      stages: [...new Set(e.wos.map((w) => w.value.stageType as string | null).filter((s): s is string => !!s))],
+      workers: workers.size,
+      scrapRows: e.scrap.length,
+      scrapQuantity: scrap.total,
+      scrapUnit: scrap.unit,
+      sources: { production: e.production ? e.production.from : 'NONE', workOrders: sourceOf(e.wos), scrap: sourceOf(e.scrap) },
+      missing,
+    };
+  }).sort((a, b) => a.moReference.localeCompare(b.moReference));
 }

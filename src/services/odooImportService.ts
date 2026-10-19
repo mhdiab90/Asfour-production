@@ -35,7 +35,7 @@ import { resolveAndValidateImportRow } from './importEntityValidationPure';
 import type { ImportValidationContext } from './importEntityValidationPure';
 import type { ReferenceIndexes, ReferenceMappingCache } from './referenceResolutionPure';
 import { describeResolution } from './referenceResolutionPure';
-import { isOdooRowWritable, type OdooStagedRow } from './odooImportSessionPure';
+import { carriedContextFromStaging, isOdooRowWritable, type CarriedContext, type OdooStagedRow, type StoredStagingRowLike } from './odooImportSessionPure';
 import { odooRowIdentity, prepareComponentLines, runOdooWrites, storedScrapIdentity, storedWorkOrderIdentity, type OdooRunFinal, type OdooRunProgress, type UnattachedComponent } from './odooExecutionPure';
 import { normaliseWorkCenterText, type ApprovedWorkCenterMapping } from './workCenterRegistryPure';
 
@@ -138,6 +138,29 @@ export async function loadOdooImportSession(importSessionId: string): Promise<{ 
     };
   } catch {
     return { session: null, rows: [] };
+  }
+}
+
+/**
+ * What earlier uploads left in staging, read back as context for this one (3.36.0): the manufacturing orders,
+ * work orders and scrap rows of the file kinds the current upload does NOT contain. Read-only; the newest
+ * session wins per order; the session being built is excluded. A failed read yields no context, never an error.
+ */
+export async function loadCarriedOdooContext(
+  currentSessionId: string,
+  want: { production: boolean; workOrders: boolean; scrap: boolean },
+): Promise<CarriedContext> {
+  const types = [want.production && 'MRP_PRODUCTION', want.workOrders && 'MRP_WORKORDER', want.scrap && 'STOCK_SCRAP'].filter(Boolean) as string[];
+  if (types.length === 0) return { production: [], workOrders: [], scrap: [] };
+  try {
+    const rows: StoredStagingRowLike[] = [];
+    for (const type of types) {
+      const snap = await getDocs(query(collection(db, IMPORT_STAGING_COLLECTION), where('sourceType', '==', type)));
+      snap.docs.forEach((d) => rows.push(d.data() as StoredStagingRowLike));
+    }
+    return carriedContextFromStaging(rows, currentSessionId);
+  } catch {
+    return { production: [], workOrders: [], scrap: [] };
   }
 }
 

@@ -1,9 +1,9 @@
 {
   "_doc": "Release Manifest precursor. Describes WHAT is being released so the gate checks a committed declaration rather than whatever flags an operator typed. commitSha/buildId/deploymentId are left null until a release is cut - the gate fills the comparison from the build itself, and only enforces a field that is set here. This is NOT the Change Registry: no change IDs, no Firestore, no UI.",
-  "version": "3.35.0",
-  "releaseId": "REL-2026-0046",
+  "version": "3.36.0",
+  "releaseId": "REL-2026-0047",
   "changeIds": [
-    "MOD-0062"
+    "MOD-0063"
   ],
   "commitSha": null,
   "buildId": null,
@@ -74,7 +74,8 @@
     "odoo-import-precheck",
     "odoo-bulk-precheck",
     "reports-sub-center",
-    "odoo-bulk-ready"
+    "odoo-bulk-ready",
+    "odoo-import-by-order"
   ],
   "_markerNotes": {
     "ai-provider-management": "AI Provider Management route - absent means the AI Assistant closure was dropped",
@@ -142,7 +143,8 @@
     "odoo-import-precheck": "The pre-write check panel of the Odoo import - absent means Master Data problems are again found 25 rows into a write",
     "odoo-bulk-precheck": "The pre-write check button",
     "reports-sub-center": "The rotary-kiln sub-centre filter of the reports screen",
-    "odoo-bulk-ready": "The approve-all-ready button of the Odoo import"
+    "odoo-bulk-ready": "The approve-all-ready button of the Odoo import",
+    "odoo-import-by-order": "The per-manufacturing-order collection tab of the Odoo import"
   },
   "tests": [
     "buildIdentity",
@@ -201,11 +203,13 @@
     "bomCosting",
     "materialPriceImport",
     "odooRealExport",
-    "odooExecution"
+    "odooExecution",
+    "odooSeparateUploads"
   ],
   "deployCommand": "firebase deploy --only hosting --project asfourproduction-70e6e",
   "treeClean": true,
   "_changeNotes": {
+    "MOD-0063": "Owner request: the three Odoo files may be uploaded separately (manufacturing orders only, work orders/workers only, scrap only) and the data sharing one job (manufacturing-order) number gathered. Any single file was already accepted by the session builder; what was missing was the link ACROSS uploads. buildOdooImportSession takes `carried` context (manufacturing orders and work orders an earlier upload staged): used for the order lookup (unit, product, planned quantity, components), the work-order count per order, the scrap's stage and the conflict check, but never staged again and never written; this upload's own rows always win; a carried order with no work order here raises no orphan and conflicts about orders this upload did not touch are dropped. loadCarriedOdooContext reads staging only (importStagingRows by sourceType, newest session per order/work order/scrap row, the session being built excluded) and only for the file kinds not uploaded now; a failed read gives no context. consolidateByManufacturingOrder collects per order the order, work orders, distinct workers, scrap, where each part came from (this upload / earlier) and what is missing; quantities add within one unit only, scrap is never subtracted. Screen: hint, 'link to earlier uploads' checkbox, note of what was linked, byOrder tab with filter and Excel. Limits stated: only staged rows are context (a file never uploaded has none); work orders ALREADY written are not rewritten when their manufacturing order arrives later; the context read costs one Firestore read per staged row of the kinds looked up. No data written beyond the existing staging",
     "MOD-0062": "Owner request after the 3.34.1 pre-write check left 24 rows on 4 codes with no exact Master Data match. (1) The pre-write check Excel now carries, beside each reason, the nearest Master Data records (code - name - score, from the same resolver's suggestions) and a new 'unmatched codes' sheet: one line per code with the rows and orders it blocks and its suggestions, biggest first. Suggestions are offered only - never applied, none invented. (2) 'Approve all ready, skip stopped': runs the pre-write check if it has not run, then approves every row that passed regardless of the group / first-N filters, leaves the rows the check stopped untouched and says how many. Same approval path as the existing bulk approval (no error is ever approved). No data written",
     "FIX-0061": "The owner ran the 3.34.0 pre-write check: 178 codes reported as 'duplicated in Master Data (2)', yet searching Master Data found none. Cause: buildReferenceIndex indexes a record under EVERY code field (product: code AND productCode); a product carrying the same code in both fields was pushed twice under that code, so a single record looked like a duplicate of itself (always '(2)'), and its 131 dependent rows then failed 'productId is required'. Fix: a record is listed once per code; a REAL duplicate (two different records) is still reported, and a record with two DIFFERENT codes is still found by either. Also: a component with zero/invalid quantity (59 rows; Odoo exports them) consumed nothing - it is kept on the record as unattachedComponents with its source quantity instead of failing the record. NOT changed: codes genuinely absent from Master Data (24 rows) stay refused. No data written",
     "MOD-0061": "Owner decisions after 3.33.0. (1) Odoo import: a work order whose manufacturing order is not in the files has no unit to inherit; every manufacturing order in the export is in tons, so such a row is read as tons (name table, no conversion) with a visible warning. A unit that IS written is never replaced; piece-counting stages still refuse tons unless the opt-in ton->pieces conversion is on. (2) Reports: records of the rotary kiln's sub-centres (shakers, crushers) share the kiln's stage and carry subCenterId; the Reports screen offers a sub-centre filter (all / the kiln itself = no sub-centre / shakers / crushers) when the rotary kiln is selected; with no selection nothing changes. No data was imported or written",
@@ -262,8 +266,8 @@
     "UI-0010": "Financial Accounts import opens a dedicated Master Data importer instead of the Historical Excel Import screen: the action no longer navigates to the bulk-entry route (which App.tsx renders as DataImportView); a new in-place modal reuses the existing financialAccounts schema, XLSX reader, row validation, duplicate detection and chunked commit, adds sheet selection and parent/cycle relationship checks, and keeps partial import so invalid rows never block valid ones",
     "DB-0009": "Category-first Master Data over an extensible registry; Financial Accounts master data with Excel import and hierarchical editing (new financialAccounts collection and its Firestore rule); one shared generic hierarchy resolver reused by Master Data, Production Review and production aggregation; hierarchical cost-centre editing with cycle, self-parent and unknown-parent protection"
   },
-  "previousVersion": "3.34.1",
+  "previousVersion": "3.35.0",
   "versionBump": "MINOR",
   "classificationConfidence": "HIGH",
-  "previousReleaseId": "REL-2026-0045"
+  "previousReleaseId": "REL-2026-0046"
 }

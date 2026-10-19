@@ -37,7 +37,7 @@ const DEPLOYMENT_ID_INJECTED = typeof __BUILD_DEPLOYMENT_ID__ === 'string' ? __B
 
 export const CURRENT_APP_VERSION: AppVersionInfo = {
   /** Set by the automatic release planner from the classified change set - see releasePlannerPure.ts. */
-  version: '3.35.0',
+  version: '3.36.0',
   buildId: BUILD_ID_INJECTED,
   buildTimestamp: BUILD_TIMESTAMP_INJECTED,
   gitCommit: COMMIT_SHA_INJECTED,
@@ -46,6 +46,15 @@ export const CURRENT_APP_VERSION: AppVersionInfo = {
   environment: 'production',
   releaseDate: '2026-08-22',
   changelog: [
+    {
+      version: '3.36.0',
+      date: '2026-10-19',
+      highlights: [
+        'استيراد أودو: يمكن رفع أي ملف لوحده - أوامر التصنيع فقط، أو أوامر العمل (بالعمال) فقط، أو الهالك فقط. الملف الذي لم يُرفع الآن يُقرأ مما رُفع سابقًا في المرحلة المؤقتة (قراءة فقط) ويُربط بنفس رقم أمر التصنيع: الوحدة والمنتج من أمر التصنيع، ومرحلة الهالك من أمر العمل، فلا يظهر أمر العمل "بلا أمر تصنيع" لأن ملفه رُفع قبل ذلك',
+        'تبويب جديد byOrder: كل ما يخص أمر تصنيع واحد مجمّعًا (الأمر وأوامر العمل والعمال والهالك) من هذا الرفع والرفع السابق، مع مصدر كل جزء وما ينقصه، وتصدير Excel. الكميات تُجمع داخل وحدة واحدة فقط والهالك لا يُخصم من الإنتاج',
+        'الصفوف المحمولة من رفع سابق سياق فقط: لا تُعرض ثانية ولا تُكتب، وصف هذا الرفع يغلب دائمًا على المحمول. خانة "الربط بما رُفع سابقًا" لإيقاف ذلك'
+      ]
+    },
     {
       version: '3.35.0',
       date: '2026-10-19',
