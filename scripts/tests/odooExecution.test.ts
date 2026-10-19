@@ -281,6 +281,82 @@ test('F2. the screen shows percentage, counts, a stop button, a warning on no pr
   assert.ok(/setInterval\(\(\) => \{[\s\S]*?\}, 500\)/.test(src), 'progress is flushed twice a second, not per row');
 });
 
+// ==================================================
+// G. COMPONENT LINES AND THE PRE-WRITE CHECK (3.33.0)
+// ==================================================
+
+const idx = (records: any[]) => ({ byCode: new Map(Object.entries(records.reduce((m: any, r: any) => { (m[String(r.code).trim().toUpperCase()] ??= []).push(r); return m; }, {}))) as Map<string, any[]> });
+const INDEXES = {
+  material: idx([{ id: 'm1', code: '5501010025', unit: 'طن' }, { id: 'm2', code: '5501010050', unit: 'كجم' }, { id: 'm3', code: 'NOUNIT' }, { id: 'm4', code: 'ODDUNIT', unit: 'برميل' }, { id: 'd1', code: 'TWIN' }, { id: 'd2', code: 'TWIN' }]),
+  product: idx([{ id: 'p1', code: 'GBLWF680100001', unit: 'طن' }]),
+};
+const line = (code: string, over: any = {}) => ({ lineId: 'L1', sequence: 1, itemCode: code, quantity: 0.1, unit: '', ...over });
+const prep = (lines: any[]) => run.prepareComponentLines({ productCode: 'P', materials: lines }, INDEXES);
+
+test('G1. a component that is a MATERIAL takes the material, and its own unit when the sheet gave none', () => {
+  const r = prep([line('5501010025')]);
+  assert.equal(r.attached, 1);
+  assert.deepEqual([r.payload.materials[0].itemSource, r.payload.materials[0].unit], ['materials', 'طن']);
+  assert.equal('unattachedComponents' in r.payload, false);
+});
+
+test('G2. a component that is a PRODUCT (green bricks into the kiln) is found among products, not refused as a missing material', () => {
+  const r = prep([line('GBLWF680100001')]);
+  assert.equal(r.attached, 1);
+  assert.equal(r.payload.materials[0].itemSource, 'products');
+});
+
+test('G3. a unit the sheet DID give is kept when it is approved, and refused when it is not - never replaced', () => {
+  assert.equal(prep([line('5501010025', { unit: 'كجم' })]).payload.materials[0].unit, 'كجم', 'the sheet wins over the item default');
+  const r = prep([line('5501010025', { unit: 'barrel' })]);
+  assert.equal(r.attached, 0);
+  assert.match(r.unattached[0].reason, /وحدة "barrel" غير معتمدة/);
+});
+
+test('G4. an unresolvable line does NOT fail the record: it is kept on it with the reason, nothing is invented', () => {
+  const r = prep([line('5501010025'), line('GHOST'), line('TWIN'), line('NOUNIT'), line('ODDUNIT'), line('')]);
+  assert.equal(r.attached, 1);
+  assert.deepEqual(r.unattached.map((u: any) => u.itemCode), ['GHOST', 'TWIN', 'NOUNIT', 'ODDUNIT', '']);
+  assert.match(r.unattached[0].reason, /غير موجود في الخامات ولا في المنتجات/);
+  assert.match(r.unattached[1].reason, /أكثر من سجل/);
+  assert.match(r.unattached[2].reason, /لا توجد وحدة/);
+  assert.equal(r.payload.unattachedComponents.length, 5, 'every dropped line, with its quantity, stays on the record');
+  assert.equal(r.payload.unattachedComponents[1].quantity, 0.1);
+});
+
+test('G5. with no lines nothing is touched; with every line dropped there is no empty materials array', () => {
+  const none = run.prepareComponentLines({ productCode: 'P' }, INDEXES);
+  assert.equal(none.attached, 0);
+  assert.equal('unattachedComponents' in none.payload, false);
+  const all = prep([line('GHOST')]);
+  assert.equal('materials' in all.payload, false);
+});
+
+test('G6. failures are read as a few causes: the code is taken out of the pattern and counted', () => {
+  const issues = [
+    { rowId: '1', reason: 'productCode: الكود "A1" مكرر في البيانات الأساسية (2) - يلزم اختيار السجل الصحيح.' },
+    { rowId: '2', reason: 'productCode: الكود "B2" مكرر في البيانات الأساسية (2) - يلزم اختيار السجل الصحيح. | materials.1.unit: يجب اختيار وحدة معروفة' },
+    { rowId: '3', reason: 'materials.1.unit: يجب اختيار وحدة معروفة' },
+  ];
+  const groups = run.groupReasons(issues);
+  assert.equal(groups[0].count, 2);
+  assert.equal(groups.reduce((n: number, g: any) => n + g.count, 0), 4, 'a row with two reasons counts under both');
+  assert.deepEqual(run.duplicateCodesIn(issues), ['A1', 'B2']);
+});
+
+test('G7. the write and the pre-write check are ONE step - a row that passes the check is a row the write accepts', () => {
+  const svc = code('src/services/odooImportService.ts');
+  assert.equal((svc.match(/prepareOdooWorkOrderRow\(/g) || []).length >= 2, true, 'defined once, used by the writer');
+  assert.ok(/const prepared = prepareOdooWorkOrderRow\(item, options\);/.test(svc));
+  const panel = code('src/components/admin/OdooHistoricalImportPanel.tsx');
+  assert.ok(/prepareOdooWorkOrderRow\(item, \{ context, indexes, mappingCache, language \}\)/.test(panel), 'the screen runs the same step');
+  assert.ok(/let list = staged;\s*if \(!precheck\) \{\s*try \{ list = await runPrecheck\(\); \}/.test(panel), 'the bulk approval checks first');
+  assert.ok(/bulkApprovalCandidates\(list, bulkFilter\)/.test(panel), 'and approves only what survived');
+  assert.ok(/baseErrors\.length > 0\) return item;/.test(panel) && /field\.startsWith\(PRECHECK\)/.test(panel), 'a re-check replaces the last findings, never stacks them');
+  for (const id of ['odoo-import-precheck', 'odoo-precheck-reasons', 'odoo-bulk-precheck', 'odoo-import-failure-groups']) assert.ok(panel.includes(`id="${id}"`), id);
+  assert.ok(/XLSX\.writeFile\(wb, `Odoo_precheck_/.test(panel) && /XLSX\.writeFile\(wb, `Odoo_import_issues_/.test(panel), 'both can be exported');
+});
+
 (async () => {
   await bootstrap();
   for (const { name, fn } of registered) {

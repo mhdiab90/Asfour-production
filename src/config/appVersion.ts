@@ -37,7 +37,7 @@ const DEPLOYMENT_ID_INJECTED = typeof __BUILD_DEPLOYMENT_ID__ === 'string' ? __B
 
 export const CURRENT_APP_VERSION: AppVersionInfo = {
   /** Set by the automatic release planner from the classified change set - see releasePlannerPure.ts. */
-  version: '3.32.0',
+  version: '3.33.0',
   buildId: BUILD_ID_INJECTED,
   buildTimestamp: BUILD_TIMESTAMP_INJECTED,
   gitCommit: COMMIT_SHA_INJECTED,
@@ -46,6 +46,16 @@ export const CURRENT_APP_VERSION: AppVersionInfo = {
   environment: 'production',
   releaseDate: '2026-08-22',
   changelog: [
+    {
+      version: '3.33.0',
+      date: '2026-10-19',
+      highlights: [
+        'استيراد أودو: فحص مسبق مع البيانات الأساسية قبل الاعتماد - نفس خطوة الكتابة تُشغَّل على كل الأسطر، والأسطر التي سترفضها البيانات الأساسية لا تُعتمد، فلا تفشل 25 سطرًا متتاليًا أثناء الكتابة',
+        'عرض الأسباب مجمّعة بعددها، وقائمة الأكواد المكررة في البيانات الأساسية، وتصدير الأسباب إلى Excel (وكذلك أخطاء الكتابة النهائية)',
+        'مكوّنات أمر التصنيع: الكود يُبحث عنه في الخامات ثم المنتجات (الطوب الأخضر يدخل الفرن)، والوحدة الناقصة تؤخذ من وحدة الصنف في البيانات الأساسية إن كانت معتمدة',
+        'المكوّن الذي لا يمكن ربطه لا يُفشل سجل الإنتاج: يُحفظ في السجل (unattachedComponents) بسببه وكميته فلا يضيع ولا يُخترع'
+      ]
+    },
     {
       version: '3.32.0',
       date: '2026-10-17',

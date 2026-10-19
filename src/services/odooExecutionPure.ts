@@ -25,6 +25,8 @@
 import { IMPORT_RECORD_TIMEOUT_MS, STOP_GRACE_MS, waitBounded, OUTCOME_UNKNOWN_PREFIX } from './entityImportExecutionPure';
 import { bulkGroupOf, isOdooRowWritable, type OdooStagedRow } from './odooImportSessionPure';
 import { productionIdentityKey } from './odooImportLinkingPure';
+import { normalizeCode } from '../utils/searchUtils';
+import { normaliseUom } from './uomPure';
 
 export const ODOO_WRITE_CONCURRENCY = 4;
 export const ODOO_CONSECUTIVE_UNKNOWN_LIMIT = 5;
@@ -123,6 +125,95 @@ export interface RunOdooWritesResult {
   final: OdooRunFinal;
   /** Rows written by this run, with where they went. */
   written: Array<{ item: OdooStagedRow; outcome: OdooWriteOutcome }>;
+}
+
+/**
+ * THE COMPONENT LINES OF A PRODUCTION RECORD (3.33.0).
+ *
+ * The MO sheet gives, for each component, only a code and a quantity - no unit - and the code can be a
+ * material OR a product (green bricks go into the kiln). The first real write failed on exactly that: the
+ * component was looked up only among materials, and its unit was "not approved" because there was none.
+ * Each line is now resolved the way Odoo means it:
+ *   - the item is the MATERIAL with that code, else the PRODUCT with that code (a code that fits two
+ *     records of the same kind, or none, is not guessed);
+ *   - a missing unit is the item's own Master Data unit - in Odoo a component quantity is in the item's
+ *     unit - and only when that unit is an approved one;
+ * A line that still cannot be resolved is NOT forced and does NOT fail the production record: it is kept on
+ * the record as `unattachedComponents` with the reason, so nothing is lost and nothing is invented.
+ */
+export interface CodeIndexLike { byCode: Map<string, any[]> }
+export interface ComponentIndexes { material?: CodeIndexLike; product?: CodeIndexLike }
+
+export interface UnattachedComponent { itemCode: string; quantity: unknown; unit: unknown; reason: string }
+
+function lookupOne(index: CodeIndexLike | undefined, code: string): { record: any | null; ambiguous: boolean } {
+  const found = index?.byCode.get(normalizeCode(code)) ?? [];
+  return found.length === 1 ? { record: found[0], ambiguous: false } : { record: null, ambiguous: found.length > 1 };
+}
+
+export function prepareComponentLines(
+  payload: Record<string, unknown>,
+  indexes: ComponentIndexes,
+): { payload: Record<string, unknown>; attached: number; unattached: UnattachedComponent[] } {
+  const lines = Array.isArray(payload.materials) ? (payload.materials as Array<Record<string, unknown>>) : null;
+  if (!lines || lines.length === 0) return { payload, attached: 0, unattached: [] };
+  const attached: Array<Record<string, unknown>> = [];
+  const unattached: UnattachedComponent[] = [];
+  for (const line of lines) {
+    const code = String(line.itemCode ?? line.materialCode ?? line.productCode ?? '').trim();
+    const drop = (reason: string) => unattached.push({ itemCode: code, quantity: line.quantity ?? null, unit: line.unit ?? null, reason });
+    if (!code) { drop('الكود فارغ'); continue; }
+    const material = lookupOne(indexes.material, code);
+    const product = material.record ? { record: null, ambiguous: false } : lookupOne(indexes.product, code);
+    const record = material.record ?? product.record;
+    if (!record) {
+      drop(material.ambiguous || product.ambiguous ? 'الكود مسجل لأكثر من سجل في البيانات الأساسية' : 'الكود غير موجود في الخامات ولا في المنتجات');
+      continue;
+    }
+    const given = String(line.unit ?? '').trim();
+    const unit = normaliseUom(given || record.unit);
+    if (!unit.normalized) { drop(given ? `وحدة "${given}" غير معتمدة` : 'لا توجد وحدة للمكوّن، ووحدة سجله في البيانات الأساسية غير معتمدة أو فارغة'); continue; }
+    attached.push({ ...line, itemSource: material.record ? 'materials' : 'products', unit: unit.normalized });
+  }
+  const next: Record<string, unknown> = { ...payload, materials: attached };
+  if (attached.length === 0) delete next.materials;
+  if (unattached.length > 0) next.unattachedComponents = unattached;
+  return { payload: next, attached: attached.length, unattached };
+}
+
+/** What a failed or refused row's reason is, with the code taken out - so a thousand rows read as a few causes. */
+export function reasonPattern(reason: string): string {
+  return reason
+    .replace(/"[^"]*"/g, '"…"')
+    .replace(/\b\d+(\.\d+)?\b/g, '#')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 160);
+}
+
+export interface ReasonGroup { pattern: string; count: number; examples: string[] }
+
+/** Failures grouped by cause: the pattern, how many rows, and a few of the actual reasons. */
+export function groupReasons(issues: ReadonlyArray<{ reason: string; rowId: string }>): ReasonGroup[] {
+  const groups = new Map<string, ReasonGroup>();
+  for (const i of issues) {
+    // A row can fail for several reasons joined by " | " - each one is a cause.
+    for (const part of i.reason.split(' | ')) {
+      const pattern = reasonPattern(part);
+      const g = groups.get(pattern) ?? { pattern, count: 0, examples: [] };
+      g.count += 1;
+      if (g.examples.length < 3 && !g.examples.includes(part)) g.examples.push(part);
+      groups.set(pattern, g);
+    }
+  }
+  return [...groups.values()].sort((a, b) => b.count - a.count);
+}
+
+/** Business codes the reasons name as DUPLICATED in Master Data - the list to fix there. */
+export function duplicateCodesIn(issues: ReadonlyArray<{ reason: string }>): string[] {
+  const codes = new Set<string>();
+  for (const i of issues) for (const m of i.reason.matchAll(/الكود "([^"]+)" مكرر/g)) codes.add(m[1]);
+  return [...codes].sort();
 }
 
 /** 99 at most until the run is verified complete; 100 only then. */

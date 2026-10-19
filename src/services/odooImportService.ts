@@ -36,7 +36,7 @@ import type { ImportValidationContext } from './importEntityValidationPure';
 import type { ReferenceIndexes, ReferenceMappingCache } from './referenceResolutionPure';
 import { describeResolution } from './referenceResolutionPure';
 import { isOdooRowWritable, type OdooStagedRow } from './odooImportSessionPure';
-import { odooRowIdentity, runOdooWrites, storedScrapIdentity, storedWorkOrderIdentity, type OdooRunFinal, type OdooRunProgress } from './odooExecutionPure';
+import { odooRowIdentity, prepareComponentLines, runOdooWrites, storedScrapIdentity, storedWorkOrderIdentity, type OdooRunFinal, type OdooRunProgress, type UnattachedComponent } from './odooExecutionPure';
 import { normaliseWorkCenterText, type ApprovedWorkCenterMapping } from './workCenterRegistryPure';
 
 export const IMPORT_SESSION_COLLECTION = 'importSessions';
@@ -217,6 +217,28 @@ function resolvePayload(payload: Record<string, unknown>, options: OdooExecution
   return resolveAndValidateImportRow('production', payload, options.context, options.indexes, options.mappingCache);
 }
 
+export interface PreparedOdooRow {
+  /** The payload that would be written, with its component lines resolved from Master Data. */
+  payload: Record<string, unknown>;
+  /** The same validation the write runs - empty when the row can be written. */
+  errors: Array<{ messageAr: string; messageEn: string }>;
+  warnings: Array<{ messageAr: string; messageEn: string }>;
+  unattached: UnattachedComponent[];
+  checked: ReturnType<typeof resolvePayload>;
+}
+
+/**
+ * Everything the write does BEFORE writing, as one step: the component lines are resolved from Master Data
+ * (3.33.0), then the payload goes through the entity import's own resolution and validation. The write and
+ * the pre-write check (the screen runs it before an approval) both call this, so they can never disagree -
+ * a row that passes the check is a row the write accepts.
+ */
+export function prepareOdooWorkOrderRow(item: OdooStagedRow, options: Pick<OdooExecutionOptions, 'context' | 'indexes' | 'mappingCache' | 'language'>): PreparedOdooRow {
+  const components = prepareComponentLines({ ...(item.payload ?? {}) }, { material: options.indexes.material as never, product: options.indexes.product as never });
+  const checked = resolvePayload(components.payload, options as OdooExecutionOptions);
+  return { payload: components.payload, errors: checked.errors, warnings: checked.warnings ?? [], unattached: components.unattached, checked };
+}
+
 /**
  * Writes the approved rows. Each row is written on its own and records its own outcome; nothing is written
  * for a manufacturing-order context row. 3.32.0: bounded per row, with progress, stop, a complete result and
@@ -238,14 +260,15 @@ export async function executeOdooImport(
   const writer = async (item: OdooStagedRow, track: (step: string) => void) => {
     if (item.kind === 'odooWorkOrder') {
       const stage = item.targetStage as ProductionStageType;
-      const payload = { ...(item.payload ?? {}) };
       track('VALIDATING');
-      // The same resolution and validation the entity import runs, immediately before the write.
-      const checked = resolvePayload(payload, options);
-      if (checked.errors.length > 0) {
-        throw new Error(checked.errors.map((e) => (options.language === 'ar' ? e.messageAr : e.messageEn)).join(' | '));
+      // Component lines resolved, then the same resolution and validation the entity import runs - one step,
+      // shared with the pre-write check, so a row that passed the check is a row this accepts.
+      const prepared = prepareOdooWorkOrderRow(item, options);
+      if (prepared.errors.length > 0) {
+        throw new Error(prepared.errors.map((e) => (options.language === 'ar' ? e.messageAr : e.messageEn)).join(' | '));
       }
-      const data = (checked.normalized ?? payload) as Record<string, any>;
+      const checked = prepared.checked;
+      const data = (checked.normalized ?? prepared.payload) as Record<string, any>;
       const { stageType: _stage, ...record } = data;
       track('PRODUCTION_WRITE');
       const productionId = stage === 'pressing'
