@@ -340,6 +340,41 @@ test('G5b. a component whose quantity is zero or invalid consumed nothing: kept 
   assert.equal(r.payload.unattachedComponents[0].quantity, 0, 'the quantity the source gave stays on the record');
 });
 
+test('H1. unmatched codes come with their nearest Master Data records, offered and never applied (3.35.0)', () => {
+  const res = [
+    { status: 'RESOLVED', sourceValue: 'OK1', candidates: [] },
+    { status: 'EMPTY', sourceValue: '', candidates: [] },
+    { status: 'NO_MATCH', sourceValue: 'Raw Kaol 0001HC', candidates: [{ code: 'RK1', name: 'Raw Kaolin', score: 0.82 }, { code: 'RK2', name: 'Kaolin B', score: 61 }] },
+    { status: 'NO_MATCH', sourceValue: 'GHOST', candidates: [] },
+  ];
+  const u = run.unmatchedSuggestions(res);
+  assert.deepEqual(u.map((x: any) => x.code), ['Raw Kaol 0001HC', 'GHOST'], 'resolved and empty ones are not listed');
+  assert.deepEqual(u[0].suggestions, ['RK1 - Raw Kaolin (82%)', 'RK2 - Kaolin B (61%)']);
+  assert.deepEqual(u[1].suggestions, [], 'no suggestion is invented');
+  assert.deepEqual(run.unmatchedSuggestions(undefined), []);
+});
+
+test('H2. one line per unmatched code: rows, orders, suggestions - biggest first', () => {
+  const k = [{ code: 'A', suggestions: ['X - x (90%)'] }];
+  const rows = [
+    { rowId: '1', mo: 'MO/1', unmatched: k }, { rowId: '2', mo: 'MO/1', unmatched: k }, { rowId: '3', mo: 'MO/2', unmatched: k },
+    { rowId: '4', mo: 'MO/3', unmatched: [{ code: 'B', suggestions: [] }] }, { rowId: '5', mo: 'MO/4' },
+  ];
+  const out = run.summariseUnmatched(rows);
+  assert.deepEqual(out.map((o: any) => [o.code, o.rows, o.orders]), [['A', 3, 2], ['B', 1, 1]]);
+  assert.equal(out[0].suggestions, 'X - x (90%)');
+  assert.equal(out[1].suggestions, '-');
+});
+
+test('H3. the panel offers "approve all ready, skip stopped" and exports the suggestion sheet', () => {
+  const panel = fs.readFileSync(path.join(ROOT, 'src/components/admin/OdooHistoricalImportPanel.tsx'), 'utf-8');
+  assert.ok(/id="odoo-bulk-ready"/.test(panel) && /approveInBulk\(true\)/.test(panel));
+  assert.ok(/'unmatched codes'/.test(panel) && /summariseUnmatched/.test(panel));
+  const fn = panel.slice(panel.indexOf('const approveInBulk'), panel.indexOf('const clearBulk'));
+  assert.ok(/readyOnly/.test(fn) && /limit: null/.test(fn), 'ready-only ignores the group and first-N filters');
+  assert.ok(/!precheck/.test(fn), 'and still pre-checks first');
+});
+
 test('G6. failures are read as a few causes: the code is taken out of the pattern and counted', () => {
   const issues = [
     { rowId: '1', reason: 'productCode: الكود "A1" مكرر في البيانات الأساسية (2) - يلزم اختيار السجل الصحيح.' },
@@ -359,7 +394,7 @@ test('G7. the write and the pre-write check are ONE step - a row that passes the
   const panel = code('src/components/admin/OdooHistoricalImportPanel.tsx');
   assert.ok(/prepareOdooWorkOrderRow\(item, \{ context, indexes, mappingCache, language \}\)/.test(panel), 'the screen runs the same step');
   assert.ok(/let list = staged;\s*if \(!precheck\) \{\s*try \{ list = await runPrecheck\(\); \}/.test(panel), 'the bulk approval checks first');
-  assert.ok(/bulkApprovalCandidates\(list, bulkFilter\)/.test(panel), 'and approves only what survived');
+  assert.ok(/bulkApprovalCandidates\(list, filter\)/.test(panel), 'and approves only what survived (3.35.0: the filter is bulkFilter, or none for the ready-only button)');
   assert.ok(/baseErrors\.length > 0\) return item;/.test(panel) && /field\.startsWith\(PRECHECK\)/.test(panel), 'a re-check replaces the last findings, never stacks them');
   for (const id of ['odoo-import-precheck', 'odoo-precheck-reasons', 'odoo-bulk-precheck', 'odoo-import-failure-groups']) assert.ok(panel.includes(`id="${id}"`), id);
   assert.ok(/XLSX\.writeFile\(wb, `Odoo_precheck_/.test(panel) && /XLSX\.writeFile\(wb, `Odoo_import_issues_/.test(panel), 'both can be exported');

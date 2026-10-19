@@ -37,7 +37,7 @@ const DEPLOYMENT_ID_INJECTED = typeof __BUILD_DEPLOYMENT_ID__ === 'string' ? __B
 
 export const CURRENT_APP_VERSION: AppVersionInfo = {
   /** Set by the automatic release planner from the classified change set - see releasePlannerPure.ts. */
-  version: '3.34.1',
+  version: '3.35.0',
   buildId: BUILD_ID_INJECTED,
   buildTimestamp: BUILD_TIMESTAMP_INJECTED,
   gitCommit: COMMIT_SHA_INJECTED,
@@ -46,6 +46,14 @@ export const CURRENT_APP_VERSION: AppVersionInfo = {
   environment: 'production',
   releaseDate: '2026-08-22',
   changelog: [
+    {
+      version: '3.35.0',
+      date: '2026-10-19',
+      highlights: [
+        'استيراد أودو: ملف الفحص المسبق صار يعرض لكل كود غير مطابق أقرب الأصناف المقترحة (كود - اسم - نسبة) في عمود بجانب السبب، وشيت جديد "unmatched codes" بسطر لكل كود مع عدد الأسطر وأوامر التصنيع التي يوقفها - للحسم من الملف مباشرة. الاقتراح يُعرض فقط ولا يُطبَّق أبدًا',
+        'زر جديد "اعتماد كل الجاهز واستثناء المتوقف": يفحص مسبقًا ثم يعتمد كل الأسطر السليمة بضغطة واحدة، ويترك المتوقفة بالفحص كما هي دون مساس، مع رسالة بعددها'
+      ]
+    },
     {
       version: '3.34.1',
       date: '2026-10-19',

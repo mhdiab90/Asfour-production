@@ -213,6 +213,43 @@ export function groupReasons(issues: ReadonlyArray<{ reason: string; rowId: stri
   return [...groups.values()].sort((a, b) => b.count - a.count);
 }
 
+export interface UnmatchedSuggestion { code: string; suggestions: string[] }
+
+/**
+ * The codes a row's resolution could not match exactly, each with the nearest Master Data records offered
+ * (3.35.0) - "CODE - name (score)". Offered only: nothing here is ever applied; the owner decides.
+ */
+export function unmatchedSuggestions(resolutions: ReadonlyArray<{ status?: string; sourceValue?: string; candidates?: ReadonlyArray<{ code?: string; name?: string; score?: number }> }> | undefined): UnmatchedSuggestion[] {
+  const out: UnmatchedSuggestion[] = [];
+  for (const r of resolutions ?? []) {
+    if (!r || r.status === 'RESOLVED' || r.status === 'EMPTY' || !r.sourceValue) continue;
+    const suggestions = (r.candidates ?? []).slice(0, 3).map((c) => {
+      const score = typeof c.score === 'number' ? ` (${Math.round(c.score <= 1 ? c.score * 100 : c.score)}%)` : '';
+      return `${c.code || '-'} - ${c.name || '-'}${score}`;
+    });
+    out.push({ code: r.sourceValue, suggestions });
+  }
+  return out;
+}
+
+export interface UnmatchedCodeRow { code: string; rows: number; orders: number; suggestions: string }
+
+/** One line per unmatched code: how many rows and orders it blocks, and its nearest suggestions - the sheet to decide from. */
+export function summariseUnmatched(found: ReadonlyArray<{ rowId: string; mo: string; unmatched?: UnmatchedSuggestion[] }>): UnmatchedCodeRow[] {
+  const map = new Map<string, { rows: Set<string>; orders: Set<string>; suggestions: string[] }>();
+  for (const f of found) {
+    for (const u of f.unmatched ?? []) {
+      const e = map.get(u.code) ?? { rows: new Set<string>(), orders: new Set<string>(), suggestions: [] };
+      e.rows.add(f.rowId); e.orders.add(f.mo);
+      if (e.suggestions.length === 0) e.suggestions = u.suggestions;
+      map.set(u.code, e);
+    }
+  }
+  return [...map.entries()]
+    .map(([code, e]) => ({ code, rows: e.rows.size, orders: e.orders.size, suggestions: e.suggestions.join('  |  ') || '-' }))
+    .sort((a, b) => b.rows - a.rows);
+}
+
 /** Business codes the reasons name as DUPLICATED in Master Data - the list to fix there. */
 export function duplicateCodesIn(issues: ReadonlyArray<{ reason: string }>): string[] {
   const codes = new Set<string>();

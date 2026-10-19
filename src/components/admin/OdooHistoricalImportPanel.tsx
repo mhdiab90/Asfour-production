@@ -22,7 +22,7 @@ import { readMrpProduction } from '../../services/odooProductionReaderPure';
 import { readMrpWorkOrder } from '../../services/odooWorkOrderReaderPure';
 import { readStockScrap } from '../../services/odooScrapReaderPure';
 import { fetchMasterData, MASTER_DATA_COLLECTIONS } from '../../services/masterDataService';
-import { duplicateCodesIn, groupReasons, type OdooRunFinal, type OdooRunProgress, type ReasonGroup } from '../../services/odooExecutionPure';
+import { duplicateCodesIn, groupReasons, summariseUnmatched, unmatchedSuggestions, type OdooRunFinal, type OdooRunProgress, type ReasonGroup, type UnmatchedSuggestion } from '../../services/odooExecutionPure';
 import { approveRowsInBulk, bulkApprovalCandidates, bulkApprovalSummary, clearBulkSelection, buildOdooImportSession, isOdooRowWritable, type OdooSessionResult, type OdooStagedRow } from '../../services/odooImportSessionPure';
 import {
   executeOdooImport,
@@ -280,7 +280,7 @@ export const OdooHistoricalImportPanel: React.FC<Props> = ({ isOpen, onClose }) 
   const updateRow = (rowId: string, next: OdooStagedRow) => setStaged((rows) => rows.map((r) => (r.row.rowId === rowId ? next : r)));
 
   /* ---- the pre-write check against Master Data (3.33.0) ---- */
-  const [precheck, setPrecheck] = useState<{ checked: number; blocked: number; groups: ReasonGroup[]; duplicates: string[]; rows: Array<{ rowId: string; stage: string; mo: string; file: string; reason: string }> } | null>(null);
+  const [precheck, setPrecheck] = useState<{ checked: number; blocked: number; groups: ReasonGroup[]; duplicates: string[]; rows: Array<{ rowId: string; stage: string; mo: string; file: string; reason: string; unmatched?: UnmatchedSuggestion[] }> } | null>(null);
   const [prechecking, setPrechecking] = useState(false);
   const PRECHECK = 'precheck:';
 
@@ -298,7 +298,7 @@ export const OdooHistoricalImportPanel: React.FC<Props> = ({ isOpen, onClose }) 
       const indexes = await buildImportReferenceIndexes(context, stages);
       const mappingCache = new Map();
       const language = isAr ? 'ar' : 'en';
-      const found: Array<{ rowId: string; stage: string; mo: string; file: string; reason: string }> = [];
+      const found: Array<{ rowId: string; stage: string; mo: string; file: string; reason: string; unmatched?: UnmatchedSuggestion[] }> = [];
       let checked = 0;
       const next = staged.map((item) => {
         if (item.kind !== 'odooWorkOrder' || !item.payload) return item;
@@ -316,7 +316,8 @@ export const OdooHistoricalImportPanel: React.FC<Props> = ({ isOpen, onClose }) 
             messageEn: `${prepared.unattached.length} component(s) will not be attached to the record (${prepared.unattached.slice(0, 3).map((u) => `${u.itemCode}: ${u.reason}`).join(' | ')}) - kept in unattachedComponents, not lost.`,
           }]
           : [];
-        for (const e of errors) found.push({ rowId: item.row.rowId, stage: String(item.targetStage ?? ''), mo: item.linkedManufacturingOrder ?? '', file: `${item.provenance.sourceFile} #${item.provenance.sourceRow}`, reason: language === 'ar' ? e.messageAr : e.messageEn });
+        const unmatched = unmatchedSuggestions(prepared.checked.resolutions as never);
+        for (const e of errors) found.push({ rowId: item.row.rowId, stage: String(item.targetStage ?? ''), mo: item.linkedManufacturingOrder ?? '', file: `${item.provenance.sourceFile} #${item.provenance.sourceRow}`, reason: language === 'ar' ? e.messageAr : e.messageEn, unmatched });
         return {
           ...item,
           row: applyValidation(item.row, { errors: [...baseErrors, ...errors], warnings: [...baseWarnings, ...warnings], normalized: item.row.normalizedData }),
@@ -334,7 +335,14 @@ export const OdooHistoricalImportPanel: React.FC<Props> = ({ isOpen, onClose }) 
   const exportPrecheck = () => {
     if (!precheck) return;
     const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(precheck.rows.map((r) => ({ 'المرحلة': r.stage, 'أمر التصنيع': r.mo, 'الملف والصف': r.file, 'السبب': r.reason }))), 'rows');
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(precheck.rows.map((r) => ({
+      'المرحلة': r.stage, 'أمر التصنيع': r.mo, 'الملف والصف': r.file, 'السبب': r.reason,
+      'أقرب أصناف مقترحة': (r.unmatched ?? []).map((u) => `${u.code} ← ${u.suggestions.join(' ; ') || 'لا اقتراح'}`).join('  |  '),
+    }))), 'rows');
+    // One line per unmatched code with the rows/orders it blocks and its nearest suggestions - decide from this sheet.
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(summariseUnmatched(precheck.rows).map((u) => ({
+      'الكود في أودو': u.code, 'عدد الأسطر': u.rows, 'عدد أوامر التصنيع': u.orders, 'أقرب أصناف مقترحة (كود - اسم - نسبة)': u.suggestions,
+    }))), 'unmatched codes');
     XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(precheck.groups.map((g) => ({ 'عدد': g.count, 'السبب': g.pattern, 'مثال': g.examples[0] ?? '' }))), 'reasons');
     XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(precheck.duplicates.map((c) => ({ 'كود مكرر في البيانات الأساسية': c }))), 'duplicate codes');
     XLSX.writeFile(wb, `Odoo_precheck_${new Date().toISOString().slice(0, 10)}.xlsx`);
@@ -359,7 +367,9 @@ export const OdooHistoricalImportPanel: React.FC<Props> = ({ isOpen, onClose }) 
   const bulkGroups = useMemo(() => bulkApprovalSummary(bulkApprovalCandidates(staged, {})).byGroup, [staged]);
   const bulkCandidates = useMemo(() => bulkApprovalCandidates(staged, bulkFilter), [staged, bulkFilter]);
 
-  const approveInBulk = async () => {
+  /** `readyOnly`: every row that passed the pre-write check, whatever the group / first-N filter says. */
+  const approveInBulk = async (readyOnly = false) => {
+    const filter = readyOnly ? { groups: [] as string[], limit: null } : bulkFilter;
     // The pre-write check runs first (once per session): rows Master Data would refuse are not approved.
     let list = staged;
     if (!precheck) {
@@ -369,7 +379,7 @@ export const OdooHistoricalImportPanel: React.FC<Props> = ({ isOpen, onClose }) 
         return;
       }
     }
-    const candidates = bulkApprovalCandidates(list, bulkFilter);
+    const candidates = bulkApprovalCandidates(list, filter);
     if (candidates.length === 0) {
       setNotice(isAr ? 'لا توجد أسطر صالحة للاعتماد بعد الفحص المسبق - راجع الأسباب المعروضة.' : 'No row is fit for approval after the pre-write check - see the reasons shown.');
       return;
@@ -383,9 +393,13 @@ export const OdooHistoricalImportPanel: React.FC<Props> = ({ isOpen, onClose }) 
       isAr ? 'لن يُكتب شيء الآن - الكتابة بزر "اعتماد وكتابة السجلات".' : 'Nothing is written yet - writing is the "Approve & write records" button.',
     ];
     if (!window.confirm(lines.join('\n'))) return;
-    const out = approveRowsInBulk(list, bulkFilter, { user, at: now() });
+    const out = approveRowsInBulk(list, filter, { user, at: now() });
     setStaged(out.staged);
-    setNotice(isAr ? `تم اختيار ${out.approved} سطرًا وقبول تحذيراتها.` : `${out.approved} row(s) included and their warnings accepted.`);
+    // Rows the pre-write check stopped are left exactly as they are - said, so nobody wonders where they went.
+    const held = new Set(list.filter((i) => i.kind === 'odooWorkOrder' && i.row.errors.some((e) => e.field.startsWith(PRECHECK))).map((i) => i.row.rowId)).size;
+    setNotice(isAr
+      ? `تم اختيار ${out.approved} سطرًا وقبول تحذيراتها.${held > 0 ? ` و${held} سطرًا متوقفًا بالفحص المسبق لم يُعتمد ولم يُمسّ - راجع أسبابه وصدّرها من Excel.` : ''}`
+      : `${out.approved} row(s) included and their warnings accepted.${held > 0 ? ` ${held} row(s) stopped by the pre-write check were not approved and not touched - see and export their reasons.` : ''}`);
   };
 
   const clearBulk = () => {
@@ -635,6 +649,16 @@ export const OdooHistoricalImportPanel: React.FC<Props> = ({ isOpen, onClose }) 
                 className="px-3 py-1.5 font-extrabold text-slate-950 bg-amber-400 hover:bg-amber-500 disabled:opacity-40 rounded-lg cursor-pointer"
               >
                 {isAr ? `اختيار وقبول التحذيرات (${bulkCandidates.length})` : `Include & accept warnings (${bulkCandidates.length})`}
+              </button>
+              <button
+                id="odoo-bulk-ready"
+                type="button"
+                disabled={!canImport || busy || prechecking}
+                onClick={() => void approveInBulk(true)}
+                className="px-3 py-1.5 font-extrabold text-emerald-900 bg-emerald-100 hover:bg-emerald-200 border border-emerald-300 disabled:opacity-40 rounded-lg cursor-pointer"
+                title={isAr ? 'يفحص مسبقًا ثم يعتمد كل الأسطر السليمة ويترك المتوقفة كما هي - بغض النظر عن المجموعة وحد الدفعة' : 'Pre-checks, then approves every row that passed and leaves the stopped ones as they are - regardless of group and batch limit'}
+              >
+                {isAr ? 'اعتماد كل الجاهز واستثناء المتوقف' : 'Approve all ready, skip stopped'}
               </button>
               <button
                 id="odoo-bulk-precheck"
