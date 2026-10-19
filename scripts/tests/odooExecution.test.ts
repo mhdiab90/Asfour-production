@@ -344,26 +344,52 @@ test('H1. unmatched codes come with their nearest Master Data records, offered a
   const res = [
     { status: 'RESOLVED', sourceValue: 'OK1', candidates: [] },
     { status: 'EMPTY', sourceValue: '', candidates: [] },
-    { status: 'NO_MATCH', sourceValue: 'Raw Kaol 0001HC', candidates: [{ code: 'RK1', name: 'Raw Kaolin', score: 0.82 }, { code: 'RK2', name: 'Kaolin B', score: 61 }] },
+    { status: 'NO_MATCH', entity: 'material', sourceValue: 'Raw Kaol 0001HC', candidates: [{ id: 'm1', code: 'RK1', name: 'Raw Kaolin', score: 0.82 }, { id: 'm2', code: 'RK2', name: 'Kaolin B', score: 61 }] },
     { status: 'NO_MATCH', sourceValue: 'GHOST', candidates: [] },
   ];
   const u = run.unmatchedSuggestions(res);
   assert.deepEqual(u.map((x: any) => x.code), ['Raw Kaol 0001HC', 'GHOST'], 'resolved and empty ones are not listed');
   assert.deepEqual(u[0].suggestions, ['RK1 - Raw Kaolin (82%)', 'RK2 - Kaolin B (61%)']);
+  assert.equal(u[0].entity, 'material');
+  assert.deepEqual(u[0].candidates, [{ id: 'm1', code: 'RK1', name: 'Raw Kaolin' }, { id: 'm2', code: 'RK2', name: 'Kaolin B' }], 'the candidates carry their ids, so a click can link them');
   assert.deepEqual(u[1].suggestions, [], 'no suggestion is invented');
   assert.deepEqual(run.unmatchedSuggestions(undefined), []);
 });
 
 test('H2. one line per unmatched code: rows, orders, suggestions - biggest first', () => {
-  const k = [{ code: 'A', suggestions: ['X - x (90%)'] }];
+  const k = [{ code: 'A', entity: 'product', suggestions: ['X - x (90%)'], candidates: [{ id: 'p1', code: 'X', name: 'x' }] }];
   const rows = [
     { rowId: '1', mo: 'MO/1', unmatched: k }, { rowId: '2', mo: 'MO/1', unmatched: k }, { rowId: '3', mo: 'MO/2', unmatched: k },
-    { rowId: '4', mo: 'MO/3', unmatched: [{ code: 'B', suggestions: [] }] }, { rowId: '5', mo: 'MO/4' },
+    { rowId: '4', mo: 'MO/3', unmatched: [{ code: 'B', entity: 'material', suggestions: [], candidates: [] }] }, { rowId: '5', mo: 'MO/4' },
   ];
   const out = run.summariseUnmatched(rows);
   assert.deepEqual(out.map((o: any) => [o.code, o.rows, o.orders]), [['A', 3, 2], ['B', 1, 1]]);
   assert.equal(out[0].suggestions, 'X - x (90%)');
   assert.equal(out[1].suggestions, '-');
+});
+
+test('H4. an approved link makes the code resolve - for the check AND the write, which share the cache (3.37.0)', async () => {
+  const rr = await load('src/services/referenceResolutionPure.ts');
+  const idx = rr.buildReferenceIndex('material', [{ id: 'm1', code: 'RK1', name: 'Raw Kaolin' }], { codeFields: ['code'] });
+  const before = rr.resolveReference(idx, 'productCode', 'productId', 'Raw Kaol 0001HC', { suggest: true });
+  assert.notEqual(before.status, 'RESOLVED');
+  const cache = rr.approveReferenceMapping(new Map(), 'material', 'Raw Kaol 0001HC', 'm1');
+  const after = rr.resolveReference(idx, 'productCode', 'productId', 'Raw Kaol 0001HC', { cache });
+  assert.deepEqual([after.status, after.method, after.targetId], ['RESOLVED', 'APPROVED_MAPPING', 'm1']);
+  assert.notEqual(rr.resolveReference(idx, 'productCode', 'productId', 'Another Code', { cache }).status, 'RESOLVED', 'a link covers only the code it was made for');
+  const panel = code('src/components/admin/OdooHistoricalImportPanel.tsx');
+  assert.ok(/mappingCache = cache;/.test(panel) && /mappingCache: mappings,/.test(panel), 'the check and the write both use the approved links');
+  assert.equal(/mappingCache: new Map\(\)/.test(panel), false, 'no throw-away cache is left');
+  const typed = panel.slice(panel.indexOf('const approveTypedCode'), panel.indexOf('const dropMapping'));
+  assert.ok(/hits\.length !== 1/.test(typed), 'a typed code must name exactly one Master Data record');
+  for (const id of ['odoo-precheck-unmatched', 'odoo-check-written', 'odoo-written-summary']) assert.ok(panel.includes(`id="${id}"`), id);
+});
+
+test('H5. "what was written" only reads the database', () => {
+  const svc = code('src/services/odooImportService.ts');
+  const fn = svc.slice(svc.indexOf('export async function summariseWrittenOdooRecords'), svc.indexOf('export async function loadCarriedOdooContext'));
+  assert.ok(/getDocs\(/.test(fn) && /getDoc\(/.test(fn));
+  assert.equal(/setDoc|addDoc|updateDoc|writeBatch|deleteDoc|safeSetDoc|safeAddDoc|safeUpdateDoc/.test(fn), false, 'read-only');
 });
 
 test('H3. the panel offers "approve all ready, skip stopped" and exports the suggestion sheet', () => {

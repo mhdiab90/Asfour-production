@@ -30,11 +30,15 @@ import {
   loadApprovedWorkCenterMappings,
   loadCarriedOdooContext,
   loadOdooImportSession,
+  summariseWrittenOdooRecords,
+  type WrittenOdooSummary,
   prepareOdooWorkOrderRow,
   saveOdooImportSession,
   saveWorkCenterMapping,
 } from '../../services/odooImportService';
 import { buildImportReferenceIndexes, loadImportValidationContext } from '../../services/entityImportService';
+import { approveReferenceMapping, type ReferenceMappingCache } from '../../services/referenceResolutionPure';
+import { normalizeCode } from '../../utils/searchUtils';
 import { WORK_CENTERS, buildPressLookup, buildShiftLookup, type ApprovedWorkCenterMapping } from '../../services/workCenterRegistryPure';
 import { conflictReport, orphanReport } from '../../services/odooImportReportsPure';
 import type { ImportSessionRecord, OdooSourceType, ProductionStageType } from '../../types';
@@ -306,6 +310,17 @@ export const OdooHistoricalImportPanel: React.FC<Props> = ({ isOpen, onClose }) 
   /* ---- the pre-write check against Master Data (3.33.0) ---- */
   const [precheck, setPrecheck] = useState<{ checked: number; blocked: number; groups: ReasonGroup[]; duplicates: string[]; rows: Array<{ rowId: string; stage: string; mo: string; file: string; reason: string; unmatched?: UnmatchedSuggestion[] }> } | null>(null);
   const [prechecking, setPrechecking] = useState(false);
+  /**
+   * Mappings the owner approved on this screen: an Odoo code -> the Master Data record it means (3.37.0).
+   * Used by the pre-write check AND the write, so an approved code passes both. Kept for this screen session
+   * only (nothing is written to Master Data); the list below can drop any of them.
+   */
+  const [mappings, setMappings] = useState<ReferenceMappingCache>(() => new Map());
+  const precheckIndexes = useRef<Record<string, any> | null>(null);
+  const [manualCodes, setManualCodes] = useState<Record<string, string>>({});
+  /** What the database itself says the Odoo import has written (read back, never assumed). */
+  const [written, setWritten] = useState<WrittenOdooSummary | null>(null);
+  const [checkingWritten, setCheckingWritten] = useState(false);
   const PRECHECK = 'precheck:';
 
   /**
@@ -314,13 +329,14 @@ export const OdooHistoricalImportPanel: React.FC<Props> = ({ isOpen, onClose }) 
    * error. A row that fails here is not approved by the bulk approval, so the write no longer discovers the
    * problem 25 rows into a run. Returns the checked list (also stored on the screen).
    */
-  const runPrecheck = async (): Promise<OdooStagedRow[]> => {
+  const runPrecheck = async (cache: ReferenceMappingCache = mappings): Promise<OdooStagedRow[]> => {
     setPrechecking(true);
     try {
       const stages = [...new Set(staged.map((s) => s.targetStage).filter(Boolean))] as ProductionStageType[];
       const context = await loadImportValidationContext(stages);
       const indexes = await buildImportReferenceIndexes(context, stages);
-      const mappingCache = new Map();
+      precheckIndexes.current = indexes as unknown as Record<string, any>;
+      const mappingCache = cache;
       const language = isAr ? 'ar' : 'en';
       const found: Array<{ rowId: string; stage: string; mo: string; file: string; reason: string; unmatched?: UnmatchedSuggestion[] }> = [];
       let checked = 0;
@@ -354,6 +370,43 @@ export const OdooHistoricalImportPanel: React.FC<Props> = ({ isOpen, onClose }) 
     } finally {
       setPrechecking(false);
     }
+  };
+
+  /** The owner decides: this Odoo code means this Master Data record. Re-checks at once so the rows it frees show up. */
+  const approveMapping = async (entity: string, code: string, targetId: string, targetLabel: string) => {
+    const next = approveReferenceMapping(mappings, entity as never, code, targetId);
+    setMappings(next);
+    setNotice(isAr ? `رُبط "${code}" بـ ${targetLabel} - جاري إعادة الفحص...` : `"${code}" linked to ${targetLabel} - checking again...`);
+    try { await runPrecheck(next); } catch (err: any) { setError(String(err?.message ?? err)); }
+  };
+
+  /** A code typed by the owner must name exactly ONE Master Data record of that kind - never a guess. */
+  const approveTypedCode = async (entity: string, code: string, typed: string) => {
+    const wanted = normalizeCode(typed);
+    const hits = wanted ? ((precheckIndexes.current?.[entity]?.byCode?.get(wanted) ?? []) as any[]) : [];
+    if (hits.length !== 1) {
+      setError(isAr
+        ? (hits.length === 0 ? `الكود "${typed}" غير موجود في البيانات الأساسية لهذا النوع.` : `الكود "${typed}" مكرر في البيانات الأساسية (${hits.length}) - لا يمكن الاختيار بينهما.`)
+        : (hits.length === 0 ? `Code "${typed}" does not exist in Master Data for this kind.` : `Code "${typed}" is duplicated in Master Data (${hits.length}) - it cannot be chosen between.`));
+      return;
+    }
+    setError(null);
+    await approveMapping(entity, code, String(hits[0].id), `${typed} - ${String(hits[0].name ?? hits[0].nameAr ?? '')}`);
+  };
+
+  const dropMapping = async (key: string) => {
+    const next = new Map(mappings);
+    next.delete(key);
+    setMappings(next);
+    try { await runPrecheck(next); } catch (err: any) { setError(String(err?.message ?? err)); }
+  };
+
+  const checkWritten = async () => {
+    setCheckingWritten(true);
+    setError(null);
+    try { setWritten(await summariseWrittenOdooRecords()); }
+    catch (err: any) { setError(String(err?.message ?? err)); }
+    finally { setCheckingWritten(false); }
   };
 
   const exportPrecheck = () => {
@@ -507,7 +560,7 @@ export const OdooHistoricalImportPanel: React.FC<Props> = ({ isOpen, onClose }) 
       const outcome = await executeOdooImport(session.importSessionId, staged, {
         context,
         indexes,
-        mappingCache: new Map(),
+        mappingCache: mappings,
         language: isAr ? 'ar' : 'en',
         signal: controller.signal,
         onProgress: (p) => { latestProgress.current = p; },
@@ -589,6 +642,9 @@ export const OdooHistoricalImportPanel: React.FC<Props> = ({ isOpen, onClose }) 
           >
             {isAr ? 'قراءة وربط وتحقق' : 'Parse, link & validate'}
           </button>
+          <button id="odoo-check-written" type="button" disabled={busy || checkingWritten} onClick={() => void checkWritten()} className="px-3 py-2 font-bold text-emerald-900 bg-emerald-50 border border-emerald-200 hover:bg-emerald-100 disabled:opacity-40 rounded-xl cursor-pointer" title={isAr ? 'يقرأ من قاعدة البيانات نفسها ما كتبه استيراد أودو فعلًا ويتأكد من وجود سجلات الإنتاج' : 'Reads from the database itself what the Odoo import has really written and checks the production records exist'}>
+            {checkingWritten ? (isAr ? 'جاري القراءة...' : 'Reading...') : (isAr ? 'تحقق مما كُتب فعلًا' : 'Check what was written')}
+          </button>
           <button type="button" disabled={busy} onClick={() => void refreshSessions()} className="inline-flex items-center gap-1.5 px-3 py-2 font-bold bg-slate-100 rounded-xl cursor-pointer">
             <RefreshCw className="w-3.5 h-3.5" />{isAr ? 'الجلسات المحفوظة' : 'Saved sessions'}
           </button>
@@ -611,6 +667,46 @@ export const OdooHistoricalImportPanel: React.FC<Props> = ({ isOpen, onClose }) 
           {busy && <Loader2 className="w-4 h-4 animate-spin text-slate-500" />}
           {importSessionId && <span className="font-mono text-slate-500">{importSessionId}</span>}
         </div>
+
+        {written && (
+          <div id="odoo-written-summary" className="p-3 rounded-xl border border-emerald-200 bg-emerald-50 space-y-2">
+            <p className="font-black text-slate-900">
+              {isAr
+                ? `الموجود فعلًا في قاعدة البيانات: ${written.workOrders} أمر عمل (سجل إنتاج لكل منها) و${written.scrap} سطر هالك`
+                : `Actually in the database: ${written.workOrders} work-order record(s) (each with its production record) and ${written.scrap} scrap row(s)`}
+            </p>
+            {written.workOrders === 0 && written.scrap === 0 && (
+              <p className="font-bold text-rose-800">{isAr ? 'لا يوجد شيء مكتوب - لم يُكتب أي سجل من استيراد أودو في قاعدة البيانات هذه.' : 'Nothing is written - no Odoo import record exists in this database.'}</p>
+            )}
+            {written.byStage.length > 0 && (
+              <table className="w-full text-[11px]">
+                <thead className="text-slate-600"><tr><th className={cell}>{isAr ? 'المرحلة' : 'Stage'}</th><th className={cell}>{isAr ? 'العدد' : 'Count'}</th><th className={cell}>{isAr ? 'من تاريخ' : 'From'}</th><th className={cell}>{isAr ? 'إلى تاريخ' : 'To'}</th><th className={cell}>{isAr ? 'عيّنة سجلات إنتاج موجودة' : 'Production records found (sample)'}</th></tr></thead>
+                <tbody>
+                  {written.byStage.map((r) => (
+                    <tr key={r.stage} className="border-t border-emerald-100">
+                      <td className={`${cell} font-mono`}>{r.stage}</td>
+                      <td className={`${cell} font-mono font-black`}>{r.count}</td>
+                      <td className={`${cell} font-mono`}>{r.firstDate ?? '-'}</td>
+                      <td className={`${cell} font-mono`}>{r.lastDate ?? '-'}</td>
+                      <td className={`${cell} font-mono ${r.found < r.sampled ? 'text-rose-700 font-black' : ''}`}>{r.found}/{r.sampled}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+            {written.byStage.length > 0 && (() => {
+              const firsts = written.byStage.map((r) => r.firstDate).filter(Boolean) as string[];
+              const lasts = written.byStage.map((r) => r.lastDate).filter(Boolean) as string[];
+              return (
+                <p className="text-[11px] text-slate-700 font-bold">
+                  {isAr
+                    ? `لرؤيتها: افتح "التقارير" أو "مراجعة البيانات" واجعل الفترة من ${firsts.sort()[0] ?? '-'} إلى ${lasts.sort().reverse()[0] ?? '-'} (التواريخ تاريخية، وأي فلتر لشهر حالي لن يعرضها).`
+                    : `To see them: open Reports or Data Review and set the period from ${firsts.sort()[0] ?? '-'} to ${lasts.sort().reverse()[0] ?? '-'} (the dates are historical; a current-month filter will not show them).`}
+                </p>
+              );
+            })()}
+          </div>
+        )}
 
         {sessions.length > 0 && (
           <div className="flex flex-wrap gap-1.5">
@@ -743,6 +839,56 @@ export const OdooHistoricalImportPanel: React.FC<Props> = ({ isOpen, onClose }) 
                     </tbody>
                   </table>
                 )}
+                {(() => {
+                  const unmatched = summariseUnmatched(precheck.rows);
+                  const approved = [...mappings.entries()];
+                  if (unmatched.length === 0 && approved.length === 0) return null;
+                  return (
+                    <div id="odoo-precheck-unmatched" className="space-y-1.5">
+                      {unmatched.length > 0 && (
+                        <>
+                          <p className="font-black text-slate-800">{isAr ? `أكواد بلا تطابق تام (${unmatched.length}) - اختر الصنف الصحيح بنفسك:` : `Codes with no exact match (${unmatched.length}) - choose the right record yourself:`}</p>
+                          {unmatched.map((u) => {
+                            const key = `${u.entity}|${u.code}`;
+                            return (
+                              <div key={key} className="p-2 rounded-lg bg-white border border-amber-200 space-y-1">
+                                <p><span className="font-mono font-black">{u.code}</span> <span className="text-slate-500">({u.entity === 'material' ? (isAr ? 'خامة' : 'material') : u.entity === 'product' ? (isAr ? 'منتج' : 'product') : u.entity}) · {u.rows} {isAr ? 'سطر' : 'row(s)'} · {u.orders} {isAr ? 'أمر تصنيع' : 'order(s)'}</span></p>
+                                <div className="flex flex-wrap items-center gap-1.5">
+                                  {u.candidates.map((c) => (
+                                    <button key={c.id} type="button" disabled={prechecking} onClick={() => void approveMapping(u.entity, u.code, c.id, `${c.code} - ${c.name}`)} className="px-2 py-1 rounded-lg bg-emerald-50 border border-emerald-300 text-emerald-900 font-bold hover:bg-emerald-100 disabled:opacity-40 cursor-pointer">
+                                      {isAr ? 'ربط بـ' : 'Link to'} {c.code} - {c.name}
+                                    </button>
+                                  ))}
+                                  {u.candidates.length === 0 && <span className="text-slate-500">{isAr ? 'لا اقتراحات قريبة - اكتب الكود الصحيح:' : 'No close suggestion - type the right code:'}</span>}
+                                  <input
+                                    value={manualCodes[key] ?? ''}
+                                    onChange={(e) => setManualCodes((m) => ({ ...m, [key]: e.target.value }))}
+                                    placeholder={isAr ? 'كود في البيانات الأساسية' : 'Master Data code'}
+                                    className="w-44 bg-white border border-slate-200 rounded-lg px-2 py-1 font-mono"
+                                  />
+                                  <button type="button" disabled={prechecking || !(manualCodes[key] ?? '').trim()} onClick={() => void approveTypedCode(u.entity, u.code, manualCodes[key] ?? '')} className="px-2 py-1 rounded-lg bg-sky-50 border border-sky-300 text-sky-900 font-bold hover:bg-sky-100 disabled:opacity-40 cursor-pointer">{isAr ? 'ربط بهذا الكود' : 'Link to this code'}</button>
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </>
+                      )}
+                      {approved.length > 0 && (
+                        <div>
+                          <p className="font-black text-slate-800">{isAr ? `ربط اعتمدته (${approved.length}) - يُستخدم في الفحص والكتابة لهذه الجلسة فقط ولا يُغيّر البيانات الأساسية:` : `Links you approved (${approved.length}) - used by the check and the write for this screen session only; Master Data is not changed:`}</p>
+                          <div className="flex flex-wrap gap-1.5">
+                            {approved.map(([key, m]) => (
+                              <span key={key} className="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg bg-white border border-slate-200 font-mono">
+                                {key.replace('|', ' | ')} → {m.targetId}
+                                <button type="button" disabled={prechecking} onClick={() => void dropMapping(key)} className="text-rose-700 font-black cursor-pointer" title={isAr ? 'إلغاء هذا الربط' : 'Remove this link'}>×</button>
+                              </span>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })()}
                 {precheck.duplicates.length > 0 && (
                   <p className="font-semibold text-rose-800">
                     {isAr ? `أكواد مكررة في البيانات الأساسية (${precheck.duplicates.length}) - صحّحها من "تقرير جودة البيانات الأساسية" ثم أعد الفحص: ` : `Codes duplicated in Master Data (${precheck.duplicates.length}) - fix them in the Master Data quality report, then check again: `}

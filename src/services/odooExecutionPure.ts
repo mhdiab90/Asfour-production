@@ -213,40 +213,45 @@ export function groupReasons(issues: ReadonlyArray<{ reason: string; rowId: stri
   return [...groups.values()].sort((a, b) => b.count - a.count);
 }
 
-export interface UnmatchedSuggestion { code: string; suggestions: string[] }
+export interface UnmatchedCandidate { id: string; code: string; name: string }
+export interface UnmatchedSuggestion { code: string; entity: string; suggestions: string[]; candidates: UnmatchedCandidate[] }
 
 /**
  * The codes a row's resolution could not match exactly, each with the nearest Master Data records offered
  * (3.35.0) - "CODE - name (score)". Offered only: nothing here is ever applied; the owner decides.
  */
-export function unmatchedSuggestions(resolutions: ReadonlyArray<{ status?: string; sourceValue?: string; candidates?: ReadonlyArray<{ code?: string; name?: string; score?: number }> }> | undefined): UnmatchedSuggestion[] {
+export function unmatchedSuggestions(resolutions: ReadonlyArray<{ status?: string; entity?: string; sourceValue?: string; candidates?: ReadonlyArray<{ id?: string; code?: string; name?: string; score?: number }> }> | undefined): UnmatchedSuggestion[] {
   const out: UnmatchedSuggestion[] = [];
   for (const r of resolutions ?? []) {
     if (!r || r.status === 'RESOLVED' || r.status === 'EMPTY' || !r.sourceValue) continue;
-    const suggestions = (r.candidates ?? []).slice(0, 3).map((c) => {
+    const top = (r.candidates ?? []).slice(0, 5);
+    const candidates = top.filter((c) => c.id).map((c) => ({ id: String(c.id), code: c.code || '', name: c.name || '' }));
+    const suggestions = top.slice(0, 3).map((c) => {
       const score = typeof c.score === 'number' ? ` (${Math.round(c.score <= 1 ? c.score * 100 : c.score)}%)` : '';
       return `${c.code || '-'} - ${c.name || '-'}${score}`;
     });
-    out.push({ code: r.sourceValue, suggestions });
+    out.push({ code: r.sourceValue, entity: r.entity || 'product', suggestions, candidates });
   }
   return out;
 }
 
-export interface UnmatchedCodeRow { code: string; rows: number; orders: number; suggestions: string }
+export interface UnmatchedCodeRow { code: string; entity: string; rows: number; orders: number; suggestions: string; candidates: UnmatchedCandidate[] }
 
 /** One line per unmatched code: how many rows and orders it blocks, and its nearest suggestions - the sheet to decide from. */
 export function summariseUnmatched(found: ReadonlyArray<{ rowId: string; mo: string; unmatched?: UnmatchedSuggestion[] }>): UnmatchedCodeRow[] {
-  const map = new Map<string, { rows: Set<string>; orders: Set<string>; suggestions: string[] }>();
+  const map = new Map<string, { entity: string; rows: Set<string>; orders: Set<string>; suggestions: string[]; candidates: UnmatchedCandidate[] }>();
   for (const f of found) {
     for (const u of f.unmatched ?? []) {
-      const e = map.get(u.code) ?? { rows: new Set<string>(), orders: new Set<string>(), suggestions: [] };
+      const key = `${u.entity}|${u.code}`;
+      const e = map.get(key) ?? { entity: u.entity, rows: new Set<string>(), orders: new Set<string>(), suggestions: [], candidates: [] };
       e.rows.add(f.rowId); e.orders.add(f.mo);
       if (e.suggestions.length === 0) e.suggestions = u.suggestions;
-      map.set(u.code, e);
+      if (e.candidates.length === 0) e.candidates = u.candidates;
+      map.set(key, e);
     }
   }
   return [...map.entries()]
-    .map(([code, e]) => ({ code, rows: e.rows.size, orders: e.orders.size, suggestions: e.suggestions.join('  |  ') || '-' }))
+    .map(([key, e]) => ({ code: key.slice(key.indexOf('|') + 1), entity: e.entity, rows: e.rows.size, orders: e.orders.size, suggestions: e.suggestions.join('  |  ') || '-', candidates: e.candidates }))
     .sort((a, b) => b.rows - a.rows);
 }
 

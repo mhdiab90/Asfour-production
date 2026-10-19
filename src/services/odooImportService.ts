@@ -16,7 +16,7 @@
  * Each row is written on its own: one failure never touches another row, and the
  * staged row keeps the failure so it can be corrected and reprocessed.
  */
-import { collection, doc, getDocs, query, where, orderBy, limit as fsLimit, serverTimestamp, writeBatch } from 'firebase/firestore';
+import { collection, doc, getDoc, getDocs, query, where, orderBy, limit as fsLimit, serverTimestamp, writeBatch } from 'firebase/firestore';
 import { db, auth, handleFirestoreError, OperationType } from '../config/firebase';
 import { safeAddDoc, safeSetDoc, safeUpdateDoc, sanitizeForFirestore } from '../utils/firestoreSanitizer';
 import type {
@@ -139,6 +139,54 @@ export async function loadOdooImportSession(importSessionId: string): Promise<{ 
   } catch {
     return { session: null, rows: [] };
   }
+}
+
+export interface WrittenOdooSummary {
+  workOrders: number;
+  scrap: number;
+  /** One line per stage: how many work-order records, the first and last date, and a link check on a sample. */
+  byStage: Array<{ stage: string; count: number; firstDate: string | null; lastDate: string | null; sampled: number; found: number }>;
+  scrapFirstDate: string | null;
+  scrapLastDate: string | null;
+  sessions: string[];
+}
+
+/**
+ * What the Odoo import has REALLY written (3.37.0): the `workOrders` and `stockScrap` documents (each work
+ * order points at the production record it created), counted per stage with the dates they cover, and a
+ * sample of each stage's production records is read back to prove it is there. Read-only; answers "I wrote
+ * it - where is it?" with the database's own answer.
+ */
+export async function summariseWrittenOdooRecords(sampleSize = 5): Promise<WrittenOdooSummary> {
+  const [woSnap, scrapSnap] = await Promise.all([getDocs(collection(db, WORK_ORDER_COLLECTION)), getDocs(collection(db, STOCK_SCRAP_COLLECTION))]);
+  const stages = new Map<string, { count: number; first: string | null; last: string | null; links: Array<{ id: string; collection: string }> }>();
+  const sessions = new Set<string>();
+  woSnap.docs.forEach((d) => {
+    const w = d.data() as any;
+    const stage = String(w.stageType ?? '-');
+    const e = stages.get(stage) ?? { count: 0, first: null, last: null, links: [] };
+    e.count += 1;
+    const date = typeof w.date === 'string' ? w.date.slice(0, 10) : null;
+    if (date) { e.first = !e.first || date < e.first ? date : e.first; e.last = !e.last || date > e.last ? date : e.last; }
+    if (e.links.length < sampleSize && w.productionRecordId && w.productionCollection) e.links.push({ id: String(w.productionRecordId), collection: String(w.productionCollection) });
+    if (w.provenance?.importSessionId) sessions.add(String(w.provenance.importSessionId));
+    stages.set(stage, e);
+  });
+  let scrapFirst: string | null = null;
+  let scrapLast: string | null = null;
+  scrapSnap.docs.forEach((d) => {
+    const date = typeof (d.data() as any).date === 'string' ? String((d.data() as any).date).slice(0, 10) : null;
+    if (date) { scrapFirst = !scrapFirst || date < scrapFirst ? date : scrapFirst; scrapLast = !scrapLast || date > scrapLast ? date : scrapLast; }
+  });
+  const byStage: WrittenOdooSummary['byStage'] = [];
+  for (const [stage, e] of stages) {
+    let found = 0;
+    for (const link of e.links) {
+      try { if ((await getDoc(doc(db, link.collection, link.id))).exists()) found += 1; } catch { /* counted as not found */ }
+    }
+    byStage.push({ stage, count: e.count, firstDate: e.first, lastDate: e.last, sampled: e.links.length, found });
+  }
+  return { workOrders: woSnap.size, scrap: scrapSnap.size, byStage: byStage.sort((a, b) => b.count - a.count), scrapFirstDate: scrapFirst, scrapLastDate: scrapLast, sessions: [...sessions] };
 }
 
 /**

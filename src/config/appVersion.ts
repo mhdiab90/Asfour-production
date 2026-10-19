@@ -37,7 +37,7 @@ const DEPLOYMENT_ID_INJECTED = typeof __BUILD_DEPLOYMENT_ID__ === 'string' ? __B
 
 export const CURRENT_APP_VERSION: AppVersionInfo = {
   /** Set by the automatic release planner from the classified change set - see releasePlannerPure.ts. */
-  version: '3.36.0',
+  version: '3.37.0',
   buildId: BUILD_ID_INJECTED,
   buildTimestamp: BUILD_TIMESTAMP_INJECTED,
   gitCommit: COMMIT_SHA_INJECTED,
@@ -46,6 +46,14 @@ export const CURRENT_APP_VERSION: AppVersionInfo = {
   environment: 'production',
   releaseDate: '2026-08-22',
   changelog: [
+    {
+      version: '3.37.0',
+      date: '2026-10-19',
+      highlights: [
+        'استيراد أودو: ربط يدوي للأكواد غير المطابقة داخل لوحة الفحص المسبق - لكل كود بلا تطابق تام تظهر أزرار "ربط بـ كود - اسم" لأقرب الأصناف، وخانة لكتابة كود الصنف الصحيح من البيانات الأساسية (يُقبل فقط إن طابق سجلًا واحدًا بالضبط). الربط يُستخدم في الفحص وفي الكتابة معًا، ويُعاد الفحص فور الاعتماد، ويمكن إلغاء أي ربط. الربط لهذه الجلسة على الشاشة فقط ولا يُغيّر البيانات الأساسية',
+        'زر "تحقق مما كُتب فعلًا": يقرأ من قاعدة البيانات نفسها عدد أوامر العمل والهالك المكتوبة لكل مرحلة وفترة تواريخها، ويتأكد من وجود عيّنة من سجلات الإنتاج المرتبطة بها، ويدلّك على الفترة التي تضبطها في التقارير لرؤيتها (التواريخ تاريخية)'
+      ]
+    },
     {
       version: '3.36.0',
       date: '2026-10-19',
