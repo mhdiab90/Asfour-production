@@ -360,7 +360,7 @@ test('F3. presses can never be offered for a non-pressing stage', () => {
 test('F4. the Dashboard uses the shared cost-centre selector, not a press list', () => {
   const src = readCode('src/components/dashboard/DashboardView.tsx');
   assert.ok(/<CostCenterScopeSelector/.test(src), 'the shared selector is rendered');
-  assert.ok(/filterUniversalRecords\(allRecords, filters, productionScope\)/.test(src), 'its scope reaches the shared filter');
+  assert.ok(/filterUniversalRecords\(allRecords, filters, productionScope, stageRules\)/.test(src), 'its scope reaches the shared filter');
   assert.equal(/id="dashboard-equipment-filter"/.test(src), false, 'the legacy equipment dropdown is gone');
   assert.equal(/<option value="">\{language === 'ar' \? 'كل المكابس'/.test(src), false,
     'the fixed "All Presses" option must be gone');
