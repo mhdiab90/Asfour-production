@@ -156,7 +156,7 @@ test('C1b. the rotary kiln sub-centres are told apart by subCenterId (3.34.0)', 
   assert.deepEqual(ids({ subCenterId: engine.SUB_CENTER_MAIN }), ['k'], 'the kiln itself = records with no sub-centre');
   assert.deepEqual(ids({}), ['k', 's', 'c'], 'no sub-centre filter changes nothing');
   const view = viewSource;
-  assert.ok(/reports-sub-center/.test(view) && /stageFilter === 'rotary_furnace'/.test(view), 'the selector shows only for the rotary kiln');
+  assert.ok(/reports-sub-center/.test(view) && /includesRotaryKiln\(stageFilter\)/.test(view), 'the selector shows only for the rotary kiln and the kilns group (3.38.0)');
 });
 
 test('C2. ReportsView\'s own defaults produce the All Time path', () => {

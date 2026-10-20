@@ -46,6 +46,7 @@ import {
 } from 'recharts';
 import { ProductionStageType, NavigationPage, UniversalStageRecord, Press, Furnace, MultiDimensionFilter } from '../../types';
 import { fetchUniversalStageRecords } from '../../services/stageRecordService';
+import { expandStageFilter, STAGE_FILTER_GROUPS } from '../../services/stageFilterGroupsPure';
 import { fetchMasterData } from '../../services/masterDataService';
 /*
  * Which equipment a stage actually records - declared once on the shared
@@ -217,7 +218,9 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigate }) => {
   const [refreshTrigger, setRefreshTrigger] = useState<number>(0);
 
   const [dateSelection, setDateSelection] = useState<DashboardDateSelectionType>({ preset: DASHBOARD_DEFAULT_DATE_PRESET_VALUE });
-  const [stageType, setStageType] = useState<ProductionStageType | 'all'>('all');
+  // 'all', one stage, or a stage group (all mills / all kilns) - see stageFilterGroupsPure.
+  const [stageType, setStageType] = useState<string>('all');
+  const stageGroup = useMemo(() => expandStageFilter(stageType, ALL_STAGES), [stageType]);
   const [shiftId, setShiftId] = useState<string>('');
   const [entityFilters, setEntityFilters] = useState<DashboardEntityFilters>(DASHBOARD_DEFAULT_ENTITY_FILTERS);
   const [sortField, setSortField] = useState<RankingMetric>(DASHBOARD_DEFAULT_SORT_FIELD);
@@ -338,7 +341,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigate }) => {
   // what's actually on screen, same pattern as ReportsView/StageProductionEntryView.
   useEffect(() => {
     setAssistantSelection({
-      currentStage: stageType !== 'all' ? stageType : undefined,
+      currentStage: stageType !== 'all' && !stageType.startsWith('group:') ? (stageType as ProductionStageType) : undefined,
       selectedEntityType: 'dashboard',
       selectedDateRange: { startDate: resolvedDate.startDate, endDate: resolvedDate.endDate },
       selectedFilters: {
@@ -404,14 +407,15 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigate }) => {
   const filters: MultiDimensionFilter = useMemo(() => ({
     startDate: resolvedDate.startDate,
     endDate: resolvedDate.endDate,
-    stageType: stageType === 'all' ? undefined : stageType,
+    stageType: stageGroup && stageGroup.length === 1 ? stageGroup[0] : undefined,
+    stageTypes: stageGroup && stageGroup.length > 1 ? stageGroup : undefined,
     shiftId: shiftId || undefined,
     pressId: entityFilters.pressId,
     furnaceId: entityFilters.furnaceId,
     employeeId: entityFilters.employeeId,
     customerId: entityFilters.customerId,
     productId: entityFilters.productId,
-  }), [resolvedDate, stageType, shiftId, entityFilters]);
+  }), [resolvedDate, stageGroup, shiftId, entityFilters]);
 
   const filteredRecords = useMemo(
     () => filterUniversalRecords(allRecords, filters, productionScope),
@@ -483,7 +487,8 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigate }) => {
 
   // Human-readable filter summary (Dashboard Capability Upgrade §6).
   const filterSummary = useMemo(() => {
-    const stageLabel = stageType === 'all' ? (language === 'ar' ? 'كل المراحل' : 'All Stages') : getStageDisplayName(stageType, language);
+    const group = STAGE_FILTER_GROUPS.find((g) => g.id === stageType);
+    const stageLabel = stageType === 'all' ? (language === 'ar' ? 'كل المراحل' : 'All Stages') : group ? (language === 'ar' ? group.labelAr : group.labelEn) : getStageDisplayName(stageType as ProductionStageType, language);
     const shiftLabel = shiftId
       ? (shifts.find((s) => (s.id || s.code) === shiftId)?.name || shiftId)
       : (language === 'ar' ? 'كل الورديات' : 'All Shifts');
@@ -672,10 +677,11 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigate }) => {
           {/* Stage filter */}
           <select
             value={stageType}
-            onChange={(e) => setStageType(e.target.value as ProductionStageType | 'all')}
+            onChange={(e) => setStageType(e.target.value)}
             className={DASHBOARD_FILTER_SELECT}
           >
             <option value="all">{language === 'ar' ? 'كل المراحل' : 'All Stages'}</option>
+            {STAGE_FILTER_GROUPS.map((g) => (<option key={g.id} value={g.id}>{language === 'ar' ? g.labelAr : g.labelEn}</option>))}
             {ALL_STAGES.map((s) => (
               <option key={s} value={s}>{getStageDisplayName(s, language)}</option>
             ))}

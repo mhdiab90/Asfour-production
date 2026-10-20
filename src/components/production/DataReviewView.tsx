@@ -45,6 +45,8 @@ import {
   fetchRecordAuditHistory,
   STAGE_DISPLAY_NAMES 
 } from '../../services/stageRecordService';
+import { expandStageFilter, STAGE_FILTER_GROUPS } from '../../services/stageFilterGroupsPure';
+import { ALL_STAGES } from '../../services/reportingEngine';
 import {
   resolveDashboardDateSelection,
   type DashboardDatePreset,
@@ -111,7 +113,9 @@ export const DataReviewView: React.FC = () => {
   const [searchQuery, setSearchQuery] = useState('');
   
   // Filters
-  const [selectedStage, setSelectedStage] = useState<ProductionStageType | 'all'>('all');
+  // 'all', one stage, or a stage group (all mills / all kilns).
+  const [selectedStage, setSelectedStage] = useState<string>('all');
+  const selectedStages = useMemo(() => expandStageFilter(selectedStage, ALL_STAGES), [selectedStage]);
   const [selectedStatus, setSelectedStatus] = useState<RecordStatus | 'all'>('all');
   /**
    * PHASE 5E.3 - the date range is now a PRESET SELECTION rather than two
@@ -231,7 +235,8 @@ export const DataReviewView: React.FC = () => {
     setIsLoading(true);
     try {
       const data = await fetchUniversalStageRecords({
-        stageType: selectedStage,
+        // One stage is pushed down to the query; a group is fetched with all stages and narrowed below.
+        stageType: (selectedStages && selectedStages.length === 1 ? selectedStages[0] : 'all') as ProductionStageType | 'all',
         status: selectedStatus,
         startDate: startDate || undefined,
         endDate: endDate || undefined,
@@ -349,7 +354,8 @@ export const DataReviewView: React.FC = () => {
    */
   const visibleRecords = useMemo(
     () => {
-      const searched = filterDataReviewRecords(records, searchQuery);
+      const inStage = selectedStages && selectedStages.length > 1 ? records.filter((r) => selectedStages.includes(r.stageType)) : records;
+      const searched = filterDataReviewRecords(inStage, searchQuery);
       // Category/code narrowing runs over the already-bounded, already-fetched
       // set - no extra Firestore read, and never one query per selected code.
       const sel = normaliseSelection(filterCategoryId || null, filterCodes, filterAll);
@@ -378,7 +384,7 @@ export const DataReviewView: React.FC = () => {
         return true;
       });
     },
-    [records, searchQuery, filterCategoryId, filterCodes, filterAll, traceJobId, traceBatchId, traceOperationId, traceLists.jobs]
+    [records, selectedStages, searchQuery, filterCategoryId, filterCodes, filterAll, traceJobId, traceBatchId, traceOperationId, traceLists.jobs]
   );
 
   /**
@@ -660,6 +666,7 @@ export const DataReviewView: React.FC = () => {
             className="w-full px-3 py-2 text-xs bg-slate-50 border border-slate-300 rounded-xl font-bold text-slate-800 outline-none"
           >
             <option value="all">جميع مراحل الإنتاج (All Stages)</option>
+            {STAGE_FILTER_GROUPS.map((g) => (<option key={g.id} value={g.id}>{g.labelAr}</option>))}
             {Object.entries(STAGE_DISPLAY_NAMES).map(([st, name]) => (
               <option key={st} value={st}>{name}</option>
             ))}

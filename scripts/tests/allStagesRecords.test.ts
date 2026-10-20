@@ -123,6 +123,26 @@ test('S3. the stage records of other stages are not edited here; a pressing row 
   assert.ok(/r\.stageType === 'pressing' && onEditPressing/.test(sec) && /r\.stageType === 'pressing' && onDeletePressing/.test(sec));
 });
 
+test('S4. every records / reports screen takes the same stage groups, not just the records screen (3.38.1)', () => {
+  for (const [file, marker] of [
+    ['src/components/reports/ReportsView.tsx', /STAGE_FILTER_GROUPS\.map/],
+    ['src/components/production/DataReviewView.tsx', /STAGE_FILTER_GROUPS\.map/],
+    ['src/components/dashboard/DashboardView.tsx', /STAGE_FILTER_GROUPS\.map/],
+  ] as Array<[string, RegExp]>) {
+    const src = read(file);
+    assert.ok(marker.test(src), `${file} offers the stage groups`);
+    assert.ok(/expandStageFilter/.test(src), `${file} expands them through the one helper`);
+  }
+  assert.ok(/stageTypes: stageGroup && stageGroup\.length > 1/.test(read('src/components/dashboard/DashboardView.tsx')), 'a group reaches the Dashboard filters as stageTypes');
+  assert.ok(/stageTypes: \(expandStageFilter\(stageFilter, ALL_STAGES\) \?\? \[\]\)\.length > 1/.test(read('src/components/reports/ReportsView.tsx')), 'and the Reports filters');
+});
+
+test('S5. an Odoo record is recognised by any of the import own fields, and the stored data can be inspected', () => {
+  const sec = read('src/components/production/AllStagesRecordsSection.tsx');
+  for (const f of ['identityKey', 'provenance?.importSessionId', 'manufacturingOrderNumber', 'sourceDocumentReference', 'externalRefs']) assert.ok(sec.includes(f), f);
+  assert.ok(/id="all-stages-raw"/.test(sec) && /rawDataPreview/.test(sec));
+});
+
 (async () => {
   await bootstrap();
   for (const { name, fn } of registered) {

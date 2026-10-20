@@ -181,7 +181,8 @@ test('5b/8. searchQuery reaches NEITHER the Firestore fetch NOR its effect deps'
 // ---------------------------------------------------------------------------
 
 test('6a. stage/status/date filters still drive the query exactly as before', () => {
-  assert.match(viewCode, /stageType: selectedStage,/);
+  // 3.38.0: the stage filter may be a group (all mills / all kilns); one stage is still pushed down to the query as before, a group is fetched with all stages.
+  assert.match(viewCode, /stageType: \(selectedStages && selectedStages\.length === 1 \? selectedStages\[0\] : 'all'\)/);
   assert.match(viewCode, /status: selectedStatus,/);
   assert.match(viewCode, /startDate: startDate \|\| undefined,/);
   assert.match(viewCode, /endDate: endDate \|\| undefined,/);

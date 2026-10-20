@@ -60,6 +60,7 @@ import {
   SUB_CENTER_MAIN,
   AggregatedReportRow,
 } from '../../services/reportingEngine';
+import { expandStageFilter, includesRotaryKiln, STAGE_FILTER_GROUPS } from '../../services/stageFilterGroupsPure';
 import { Badge } from '../common/Badge';
 import { Modal } from '../common/Modal';
 import { formatNumber, formatDecimal } from '../../utils/formatters';
@@ -124,7 +125,8 @@ export const ReportsView: React.FC<ReportsViewProps> = () => {
   const [isLoading, setIsLoading] = useState<boolean>(true);
   const [prefill] = useState<ReportPrefill | null>(() => readReportPrefill());
   const [categoryId, setCategoryId] = useState<string>(prefill?.categoryId || 'production');
-  const [stageFilter, setStageFilter] = useState<ProductionStageType | 'all'>(prefill?.stageType || 'all');
+  // 'all', one stage, or a stage group (all mills / all kilns) - see stageFilterGroupsPure.
+  const [stageFilter, setStageFilter] = useState<string>(prefill?.stageType || 'all');
   const [startDate, setStartDate] = useState<string>(prefill?.startDate || '');
   const [endDate, setEndDate] = useState<string>(prefill?.endDate || '');
   const [drillDownRow, setDrillDownRow] = useState<AggregatedReportRow | null>(null);
@@ -162,7 +164,7 @@ export const ReportsView: React.FC<ReportsViewProps> = () => {
   // by StageProductionEntryView.tsx - never required, purely additive.
   useEffect(() => {
     setAssistantSelection({
-      currentStage: stageFilter !== 'all' ? stageFilter : undefined,
+      currentStage: stageFilter !== 'all' && !stageFilter.startsWith('group:') ? (stageFilter as ProductionStageType) : undefined,
       selectedEntityType: 'report',
       selectedFilters: { reportCategory: categoryId },
       selectedDateRange: (startDate || endDate) ? { startDate: startDate || undefined, endDate: endDate || undefined } : undefined,
@@ -193,13 +195,15 @@ export const ReportsView: React.FC<ReportsViewProps> = () => {
 
   // The rotary kiln's sub-centres (shakers, crushers) - only offered when that stage is selected.
   const [subCenterFilter, setSubCenterFilter] = useState('');
-  useEffect(() => { if (stageFilter !== 'rotary_furnace') setSubCenterFilter(''); }, [stageFilter]);
+  useEffect(() => { if (!includesRotaryKiln(stageFilter)) setSubCenterFilter(''); }, [stageFilter]);
 
   const filters: MultiDimensionFilter = useMemo(() => ({
     startDate: startDate || undefined,
     endDate: endDate || undefined,
-    stageType: stageFilter,
-    subCenterId: stageFilter === 'rotary_furnace' && subCenterFilter ? subCenterFilter : undefined,
+    // One stage is pushed down to the query; a group is fetched with all stages and narrowed by stageTypes.
+    stageType: ((expandStageFilter(stageFilter, ALL_STAGES) ?? []).length === 1 ? expandStageFilter(stageFilter, ALL_STAGES)![0] : 'all') as ProductionStageType | 'all',
+    stageTypes: (expandStageFilter(stageFilter, ALL_STAGES) ?? []).length > 1 ? expandStageFilter(stageFilter, ALL_STAGES)! : undefined,
+    subCenterId: includesRotaryKiln(stageFilter) && subCenterFilter ? subCenterFilter : undefined,
   }), [startDate, endDate, stageFilter, subCenterFilter]);
 
   /**
@@ -421,9 +425,10 @@ export const ReportsView: React.FC<ReportsViewProps> = () => {
           <span className="text-slate-500 font-bold">{t.stage}:</span>
           <select value={stageFilter} onChange={(e) => setStageFilter(e.target.value as any)} className="bg-slate-50 border border-slate-200 rounded-xl px-2.5 py-1.5 text-xs font-bold">
             <option value="all">{t.allStages}</option>
+            {STAGE_FILTER_GROUPS.map((g) => (<option key={g.id} value={g.id}>{language === 'ar' ? g.labelAr : g.labelEn}</option>))}
             {ALL_STAGES.map((s) => <option key={s} value={s}>{getStageDisplayName(s, language)}</option>)}
           </select>
-          {stageFilter === 'rotary_furnace' && (
+          {includesRotaryKiln(stageFilter) && (
             <select
               id="reports-sub-center"
               data-testid="reports-sub-center"

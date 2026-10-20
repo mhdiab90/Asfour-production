@@ -37,7 +37,7 @@ const DEPLOYMENT_ID_INJECTED = typeof __BUILD_DEPLOYMENT_ID__ === 'string' ? __B
 
 export const CURRENT_APP_VERSION: AppVersionInfo = {
   /** Set by the automatic release planner from the classified change set - see releasePlannerPure.ts. */
-  version: '3.38.0',
+  version: '3.39.0',
   buildId: BUILD_ID_INJECTED,
   buildTimestamp: BUILD_TIMESTAMP_INJECTED,
   gitCommit: COMMIT_SHA_INJECTED,
@@ -46,6 +46,14 @@ export const CURRENT_APP_VERSION: AppVersionInfo = {
   environment: 'production',
   releaseDate: '2026-08-22',
   changelog: [
+    {
+      version: '3.39.0',
+      date: '2026-10-20',
+      highlights: [
+        'فلتر المرحلة صار موحّدًا في كل شاشات السجلات والتقارير: لوحة التحكم، التقارير، التدقيق والاعتماد، وسجلات الإنتاج - كلها تقبل "كل المراحل" أو مرحلة واحدة أو مجموعة ("كل الطواحين" و"كل الأفران")، ولا شاشة مخصصة لمرحلة بعينها. فلتر المركز التابع للفرن الدوار (الفرن نفسه / الهزازات / الكسارات) يظهر عند اختيار الفرن الدوار أو الأفران',
+        'سجلات الإنتاج: علامة "Odoo" تُعرَف الآن بأي من حقول الاستيراد (رقم أمر التصنيع والمرجع والمصدر الخارجي)، وفي نافذة تفاصيل السجل عرض للبيانات المخزنة كما هي في قاعدة البيانات'
+      ]
+    },
     {
       version: '3.38.0',
       date: '2026-10-20',

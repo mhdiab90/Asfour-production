@@ -46,9 +46,30 @@ export function recordEquipmentLabel(r: UniversalStageRecord): string {
   return String(d.subCenterName || d.pressName || d.furnaceName || d.machineName || d.millName || d.equipmentName || d.workCenterName || d.workCenter?.equipmentName || d.workCenter?.mainCenterNameAr || '').trim();
 }
 
+/**
+ * A record the Odoo import wrote. The import's own fields survive in different shapes depending on the stage,
+ * so any one of them is enough: an external reference to odoo, the provenance / identity the import stamps, or
+ * the manufacturing-order number (only an Odoo work order carries one).
+ */
 export function isOdooRecord(r: UniversalStageRecord): boolean {
   const d = (r.rawData ?? {}) as Record<string, any>;
-  return Boolean(d.identityKey || d.provenance?.importSessionId || (Array.isArray(d.externalRefs) && d.externalRefs.some((x: any) => String(x?.system).toLowerCase() === SOURCE_ODOO)));
+  return Boolean(
+    d.identityKey
+    || d.provenance?.importSessionId
+    || d.manufacturingOrderNumber
+    || d.sourceDocumentReference
+    || (Array.isArray(d.externalRefs) && d.externalRefs.some((x: any) => String(x?.system).toLowerCase() === SOURCE_ODOO)),
+  );
+}
+
+/** The record's stored fields as readable JSON (long values cut), for the details window. */
+export function rawDataPreview(r: UniversalStageRecord, max = 6000): string {
+  try {
+    const text = JSON.stringify(r.rawData ?? {}, (_k, v) => (typeof v === 'string' && v.length > 200 ? `${v.slice(0, 200)}...` : v), 2);
+    return text.length > max ? `${text.slice(0, max)}\n...` : text;
+  } catch {
+    return '';
+  }
 }
 
 export const AllStagesRecordsSection: React.FC<AllStagesRecordsSectionProps> = ({
@@ -268,6 +289,10 @@ export const AllStagesRecordsSection: React.FC<AllStagesRecordsSectionProps> = (
                 <ul className="space-y-0.5">{((details.rawData as any).unattachedComponents as any[]).map((u, i) => (<li key={i} className="font-mono">{u.itemCode}: {u.quantity ?? '-'} - {u.reason}</li>))}</ul>
               </div>
             )}
+            <details className="rounded-lg border border-slate-200">
+              <summary className="px-2 py-1.5 cursor-pointer font-bold text-slate-700">{isAr ? 'عرض البيانات المخزنة للسجل (كما هي في قاعدة البيانات)' : 'Show the stored data of the record (as in the database)'}</summary>
+              <pre id="all-stages-raw" dir="ltr" className="p-2 max-h-64 overflow-auto text-[10px] text-slate-700 bg-slate-50">{rawDataPreview(details)}</pre>
+            </details>
             <p className="text-[10px] text-slate-500 font-bold">{isAr ? 'تصحيح سجلات المراحل غير الكبس يتم من "التدقيق والاعتماد".' : 'Records of stages other than pressing are corrected in Audit & Approval.'}</p>
           </div>
         )}
