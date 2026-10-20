@@ -1832,6 +1832,8 @@ export interface MultiDimensionFilter {
   startDate?: string;
   endDate?: string;
   stageType?: ProductionStageType | 'all';
+  /** Several stages at once (a stage group such as all mills); empty/absent = no restriction beyond stageType. */
+  stageTypes?: ProductionStageType[];
   employeeId?: string;
   departmentId?: string;
   shiftId?: string;

@@ -36,7 +36,11 @@ import { normaliseSelection } from '../../services/masterDataCategoryRegistry';
 import {
   asNodeSelection,
   filterLegacyProductionRecords,
+  resolveHierarchyEquipmentScope,
 } from '../../services/productionFilterEnginePure';
+import { AllStagesRecordsSection } from './AllStagesRecordsSection';
+import { ALL_STAGES, getStageDisplayName } from '../../services/reportingEngine';
+import { STAGE_FILTER_ALL, STAGE_FILTER_GROUPS } from '../../services/stageFilterGroupsPure';
 import {
   listCostCenterHierarchyNodes,
   buildCostCenterHierarchyIndex,
@@ -115,6 +119,13 @@ export const ProductionRecordsView: React.FC<ProductionRecordsViewProps> = ({ on
   const [costCenterNodeIds, setCostCenterNodeIds] = useState<string[]>([]);
   const [filterCustomer, setFilterCustomer] = useState<string>('all');
   const [filterProduct, setFilterProduct] = useState<string>('all');
+  /**
+   * The stage filter (3.38.0). This screen is not tied to pressing: "all", one stage, or a group of stages
+   * (all mills, all kilns) lists the records of every stage; only "pressing" keeps the legacy pressing table
+   * with its edit / bulk delete.
+   */
+  const [stageFilter, setStageFilter] = useState<string>(STAGE_FILTER_ALL);
+  const isPressingOnly = stageFilter === 'pressing';
   const [startDate, setStartDate] = useState<string>('');
   const [endDate, setEndDate] = useState<string>('');
 
@@ -229,6 +240,12 @@ export const ProductionRecordsView: React.FC<ProductionRecordsViewProps> = ({ on
   const costCenterSelection = useMemo(
     () => normaliseSelection('productionCenters', costCenterNodeIds.map(asNodeSelection), costCenterNodeIds.length === 0),
     [costCenterNodeIds],
+  );
+
+  /** The cost-centre selection as equipment ids, for the cross-stage list (null = nothing selected). */
+  const stageHierarchyScope = useMemo(
+    () => resolveHierarchyEquipmentScope(costCenterNodeIds.map(asNodeSelection), { index: hierarchyIndex }, { equipment: equipmentLinks }),
+    [costCenterNodeIds, hierarchyIndex, equipmentLinks],
   );
 
   // Filter logic
@@ -430,8 +447,8 @@ export const ProductionRecordsView: React.FC<ProductionRecordsViewProps> = ({ on
             id="export-records-btn"
             type="button"
             onClick={handleExport}
-            disabled={filteredRecords.length === 0}
-            className={`${DASHBOARD_PANEL_BUTTON} disabled:opacity-50`}
+            disabled={filteredRecords.length === 0 || !isPressingOnly}
+            className={`${DASHBOARD_PANEL_BUTTON} disabled:opacity-50 ${isPressingOnly ? '' : 'hidden'}`}
           >
             <Download className="w-3.5 h-3.5" />
             <span>{language === 'ar' ? 'تصدير إلى Excel' : 'Export to Excel'}</span>
@@ -448,6 +465,18 @@ export const ProductionRecordsView: React.FC<ProductionRecordsViewProps> = ({ on
         </div>
 
         <div id="production-records-filter-grid" className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2 text-xs">
+          <label className="block sm:col-span-2 lg:col-span-4">
+            <span className="block text-[11px] font-bold text-slate-400 mb-1">{language === 'ar' ? 'المرحلة الإنتاجية' : 'Production stage'}</span>
+            <select id="production-records-stage-filter" value={stageFilter} onChange={(e) => setStageFilter(e.target.value)} className={`${DASHBOARD_FILTER_SELECT} w-full`}>
+              <option value={STAGE_FILTER_ALL}>{language === 'ar' ? 'كل المراحل' : 'All stages'}</option>
+              {STAGE_FILTER_GROUPS.map((g) => (
+                <option key={g.id} value={g.id}>{language === 'ar' ? g.labelAr : g.labelEn}</option>
+              ))}
+              {ALL_STAGES.map((st) => (
+                <option key={st} value={st}>{getStageDisplayName(st, language)}</option>
+              ))}
+            </select>
+          </label>
           <label className="block">
             <span className="block text-[11px] font-bold text-slate-400 mb-1">{language === 'ar' ? 'من تاريخ' : 'From Date'}</span>
             <input type="date" value={startDate} max={endDate || undefined} onChange={(e) => setStartDate(e.target.value)} className={`${DASHBOARD_DATE_INPUT} border-slate-700 w-full py-1.5`} />
@@ -513,6 +542,23 @@ export const ProductionRecordsView: React.FC<ProductionRecordsViewProps> = ({ on
         </div>
       </div>
 
+      {!isPressingOnly && (
+        <AllStagesRecordsSection
+          language={language === 'ar' ? 'ar' : 'en'}
+          startDate={startDate}
+          endDate={endDate}
+          stageValue={stageFilter}
+          productId={filterProduct}
+          customerId={filterCustomer}
+          shiftId={filterShift}
+          searchQuery={searchQuery}
+          hierarchyScope={stageHierarchyScope}
+          onEditPressing={(id) => { const rec = records.find((r) => r.id === id); if (rec) handleOpenEdit(rec); }}
+          onDeletePressing={(id) => { const rec = records.find((r) => r.id === id); if (rec) setDeleteConfirmRecord(rec); }}
+        />
+      )}
+
+      {isPressingOnly && (<>
       {/* Aggregate KPI Strip for Filtered Results */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
         <div className="bg-white rounded-xl p-3.5 border border-slate-200 shadow-xs">
@@ -806,6 +852,8 @@ export const ProductionRecordsView: React.FC<ProductionRecordsViewProps> = ({ on
           </>
         )}
       </div>
+
+      </>)}
 
       {/* Edit Record Modal */}
       <Modal

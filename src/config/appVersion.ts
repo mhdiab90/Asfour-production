@@ -37,7 +37,7 @@ const DEPLOYMENT_ID_INJECTED = typeof __BUILD_DEPLOYMENT_ID__ === 'string' ? __B
 
 export const CURRENT_APP_VERSION: AppVersionInfo = {
   /** Set by the automatic release planner from the classified change set - see releasePlannerPure.ts. */
-  version: '3.37.0',
+  version: '3.38.0',
   buildId: BUILD_ID_INJECTED,
   buildTimestamp: BUILD_TIMESTAMP_INJECTED,
   gitCommit: COMMIT_SHA_INJECTED,
@@ -46,6 +46,15 @@ export const CURRENT_APP_VERSION: AppVersionInfo = {
   environment: 'production',
   releaseDate: '2026-08-22',
   changelog: [
+    {
+      version: '3.38.0',
+      date: '2026-10-20',
+      highlights: [
+        'شاشة "سجلات الإنتاج" لم تعد مخصصة للكبس: الافتراضي الآن "كل المراحل" وتعرض سجلات كل المراحل (بما فيها المستورد من أودو) من نفس مصدر لوحة التحكم والتقارير، مع عدّاد وإجماليات وتصدير Excel وتفاصيل كل سجل',
+        'فلتر المرحلة يقبل: كل المراحل، أو مرحلة واحدة، أو مجموعة - "كل الطواحين" (الصيني + الأنابيب والكرات) و"كل الأفران" (الدوار بمراكزه + النفقي). وعند اختيار الفرن الدوار أو الأفران يظهر فلتر المركز التابع (الفرن نفسه / الهزازات / الكسارات)',
+        'باقي فلاتر الشاشة (الفترة، مراكز التكاليف/المعدات، الوردية، المنتج، العميل، البحث) تُطبَّق على القائمة الجديدة. فلتر "الكبس" يُبقي الجدول القديم بتعديله وحذفه الجماعي كما هو، وصف الكبس في عرض "كل المراحل" يفتح نفس نوافذ التعديل والحذف'
+      ]
+    },
     {
       version: '3.37.0',
       date: '2026-10-19',

@@ -232,6 +232,7 @@ export function filterUniversalRecords(
     if (filters.startDate && r.date < filters.startDate) return false;
     if (filters.endDate && r.date > filters.endDate) return false;
     if (filters.stageType && filters.stageType !== 'all' && r.stageType !== filters.stageType) return false;
+    if (filters.stageTypes && filters.stageTypes.length > 0 && !filters.stageTypes.includes(r.stageType)) return false;
     if (filters.productId && r.productId !== filters.productId) return false;
     if (filters.customerId && r.customerId !== filters.customerId) return false;
     if (filters.employeeId && !r.workers?.some((w) => w.employeeId === filters.employeeId)) return false;
