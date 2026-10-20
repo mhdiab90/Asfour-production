@@ -44,6 +44,40 @@ import {
 } from './stageQueryBoundsPure';
 import { runCacheFirstRead } from './localCacheStore';
 import { stageListQuantityUnit } from './uomReadinessPure';
+import { attachOdooEquipment, type OdooEquipmentLink } from './odooMachinePure';
+
+/**
+ * The machine each Odoo-imported production record ran on (3.41.0): the `workOrders` documents written beside
+ * them name it. Read once per five minutes and only when a fetched record is an Odoo one; a failed read just
+ * leaves the records without a machine, never fails the fetch.
+ */
+const ODOO_LINKS_TTL_MS = 5 * 60 * 1000;
+let odooLinksCache: { at: number; links: Map<string, OdooEquipmentLink> } | null = null;
+async function loadOdooEquipmentLinks(): Promise<Map<string, OdooEquipmentLink>> {
+  if (odooLinksCache && Date.now() - odooLinksCache.at < ODOO_LINKS_TTL_MS) return odooLinksCache.links;
+  const links = new Map<string, OdooEquipmentLink>();
+  const snap = await getDocs(collection(db, 'workOrders'));
+  snap.docs.forEach((d) => {
+    const w = d.data() as any;
+    const id = String(w.productionRecordId ?? '');
+    if (!id) return;
+    const wc = (w.workCenter ?? {}) as Record<string, any>;
+    links.set(id, { equipmentName: String(wc.equipmentName ?? ''), raw: String(wc.raw ?? wc.workCenterRaw ?? w.rawWorkOrder ?? '') });
+  });
+  odooLinksCache = { at: Date.now(), links };
+  return links;
+}
+
+/** The records with their Odoo machine attached; a failed read leaves them as they are and never fails the fetch. */
+async function withOdooMachines(records: UniversalStageRecord[]): Promise<UniversalStageRecord[]> {
+  if (!records.some((r) => (r.rawData as any)?.manufacturingOrderNumber)) return records;
+  try {
+    return attachOdooEquipment(records, await loadOdooEquipmentLinks());
+  } catch (err) {
+    console.warn('Note: the Odoo machine links could not be read:', err);
+    return records;
+  }
+}
 
 // Re-exported verbatim (defined in stageQueryBoundsPure.ts, which has zero
 // Firebase dependency and is directly unit-testable) so every existing
@@ -457,7 +491,8 @@ async function fetchUniversalStageRecordsUncached(
 
   // Sort descending by date
   results.sort((a, b) => new Date(b.date || b.createdAt).getTime() - new Date(a.date || a.createdAt).getTime());
-  return results;
+  // Odoo-imported records learn their machine from the work order written beside them.
+  return withOdooMachines(results);
 }
 
 /**

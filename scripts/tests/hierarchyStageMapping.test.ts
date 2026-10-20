@@ -88,15 +88,15 @@ test('R4. the press department is pressing AND the hand-made brick below it; the
   assert.deepEqual(stagesOf(map.resolveStageRulesForNodes(['51352'], index())), [], 'a leaf under it has no rule of its own');
 });
 
-test('R5. one machine (a single mill, a single press) stands for no stage - it narrows by its equipment link only', () => {
-  assert.deepEqual(map.resolveStageRulesForNodes(['5101'], index()), []);
+test('R5. a single press or a single ball mill stands for no machine rule - it narrows by its equipment link only', () => {
   assert.deepEqual(map.resolveStageRulesForNodes(['51311'], index()), []);
+  assert.deepEqual(map.resolveStageRulesForNodes(['51111'], index()), [], 'one ball mill: Odoo names the kind, not the mill');
   assert.deepEqual(map.resolveStageRulesForNodes(['517'], index()), [], 'a service department is not a production stage');
 });
 
 test('R6. several nodes together are one deduplicated union', () => {
   const rules = map.resolveStageRulesForNodes(['501', '5012', '510'], index());
-  assert.equal(rules.length, new Set(rules.map((r: any) => `${r.stage}|${r.subCenter ?? ''}`)).size);
+  assert.equal(rules.length, new Set(rules.map((r: any) => `${r.stage}|${r.subCenter ?? ''}|${r.machine ?? ''}`)).size);
   assert.ok(stagesOf(rules).includes('chinese_mills') && stagesOf(rules).includes('rotary_furnace'));
 });
 
@@ -111,6 +111,24 @@ const RECORDS = [
   REC('mill', 'chinese_mills'), REC('tube', 'tube_ball_mills'), REC('press', 'pressing', { pressId: 'P1' }), REC('press2', 'pressing', { pressId: 'P2' }), REC('hand', 'handmade_brick'),
 ];
 const pick = (nodes: string[], scope: Set<string> | null = null) => engine.filterUniversalRecords(RECORDS, {}, scope, map.resolveStageRulesForNodes(nodes, index())).map((r: any) => r.id);
+
+test('M1. a single Chinese mill node stands for that machine; the department for all five', () => {
+  assert.deepEqual(map.resolveStageRulesForNodes(['5103'], index()), [{ stage: 'chinese_mills', machine: 'chinese_mills:3' }]);
+  const dept = map.resolveStageRulesForNodes(['510'], index());
+  assert.ok(dept.some((r: any) => r.stage === 'chinese_mills' && !r.machine), 'the whole stage is in the union');
+  assert.equal(dept.filter((r: any) => r.machine).length, 5);
+});
+
+test('M2. choosing one mill shows only the records its work order named', () => {
+  const rows = [1, 2, 3].map((n) => REC(`m${n}`, 'chinese_mills', { odooMachineKey: `chinese_mills:${n}` })).concat([REC('direct', 'chinese_mills'), REC('ball', 'tube_ball_mills', { odooMachineKey: 'tube_ball_mills:ball' }), REC('tube', 'tube_ball_mills', { odooMachineKey: 'tube_ball_mills:tube' })]);
+  const ids = (nodes: string[]) => engine.filterUniversalRecords(rows, {}, null, map.resolveStageRulesForNodes(nodes, index())).map((r: any) => r.id);
+  assert.deepEqual(ids(['5102']), ['m2']);
+  assert.deepEqual(ids(['5101', '5103']), ['m1', 'm3']);
+  assert.deepEqual(ids(['510']), ['m1', 'm2', 'm3', 'direct'], 'the department shows every record of the stage');
+  assert.deepEqual(ids(['5111']), ['ball']);
+  assert.deepEqual(ids(['5112']), ['tube']);
+  assert.deepEqual(ids(['511']), ['ball', 'tube']);
+});
 
 test('A1. choosing the rotary kiln node shows ALL its records; a child shows only that centre', () => {
   assert.deepEqual(pick(['501']), ['kiln', 'crush', 'shake']);

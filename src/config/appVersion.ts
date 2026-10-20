@@ -37,7 +37,7 @@ const DEPLOYMENT_ID_INJECTED = typeof __BUILD_DEPLOYMENT_ID__ === 'string' ? __B
 
 export const CURRENT_APP_VERSION: AppVersionInfo = {
   /** Set by the automatic release planner from the classified change set - see releasePlannerPure.ts. */
-  version: '3.40.0',
+  version: '3.41.0',
   buildId: BUILD_ID_INJECTED,
   buildTimestamp: BUILD_TIMESTAMP_INJECTED,
   gitCommit: COMMIT_SHA_INJECTED,
@@ -46,6 +46,14 @@ export const CURRENT_APP_VERSION: AppVersionInfo = {
   environment: 'production',
   releaseDate: '2026-08-22',
   changelog: [
+    {
+      version: '3.41.0',
+      date: '2026-10-20',
+      highlights: [
+        'اختيار آلة بعينها في "مراكز التكاليف" يفلتر سجلات أودو: الطاحونة الصيني 1 إلى 5 (5101-5105) تعرض سجلات كل طاحونة، وبول ميل (5111) وتيوب ميل (5112) يعرضان سجلاتهما. اسم الآلة يُقرأ من أمر العمل المكتوب بجانب كل سجل (مستند workOrders) ويظهر في عمود المعدة وتتأكد به علامة Odoo',
+        'الآلات التي لا يحدد اسمها في أودو أيها (الخلاطات، الأفران النفقية، كسارة/هزاز بالتفصيل) لا تُخمَّن: تُفلتر بالقسم أو المركز التابع كما كانت'
+      ]
+    },
     {
       version: '3.40.0',
       date: '2026-10-20',

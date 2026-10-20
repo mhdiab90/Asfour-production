@@ -18,6 +18,8 @@ export type RotarySubCentre = 'MAIN' | 'rotary_shakers' | 'rotary_crushers';
 
 export interface NodeStageRule {
   stage: ProductionStageType;
+  /** Set where the node is ONE machine the Odoo work-centre name identifies (odooMachinePure.odooMachineKey). */
+  machine?: string;
   /** Set only where the node is one centre of a stage that has several (the rotary kiln). */
   subCenter?: RotarySubCentre;
 }
@@ -29,7 +31,16 @@ export const NODE_STAGE_RULES: Readonly<Record<string, readonly NodeStageRule[]>
   '5012': [{ stage: 'rotary_furnace', subCenter: 'rotary_crushers' }],
   '5013': [{ stage: 'rotary_furnace', subCenter: 'rotary_shakers' }],
   '510': [{ stage: 'chinese_mills' }],
+  // Single Chinese mills: Odoo names them "الطاحونه الصينيه رقم N".
+  '5101': [{ stage: 'chinese_mills', machine: 'chinese_mills:1' }],
+  '5102': [{ stage: 'chinese_mills', machine: 'chinese_mills:2' }],
+  '5103': [{ stage: 'chinese_mills', machine: 'chinese_mills:3' }],
+  '5104': [{ stage: 'chinese_mills', machine: 'chinese_mills:4' }],
+  '5105': [{ stage: 'chinese_mills', machine: 'chinese_mills:5' }],
   '511': [{ stage: 'tube_ball_mills' }],
+  // The ball mills and the tube mills: Odoo has one work centre for each kind, not per mill.
+  '5111': [{ stage: 'tube_ball_mills', machine: 'tube_ball_mills:ball' }],
+  '5112': [{ stage: 'tube_ball_mills', machine: 'tube_ball_mills:tube' }],
   '512': [{ stage: 'mixing' }],
   '513': [{ stage: 'pressing' }],
   '5135': [{ stage: 'handmade_brick' }],
@@ -45,7 +56,7 @@ export function resolveStageRulesForNodes<T extends HierarchyNodeInput>(nodeIds:
   const seen = new Set<string>();
   for (const code of resolveHierarchyCodes(index, nodeIds)) {
     for (const rule of NODE_STAGE_RULES[code] ?? []) {
-      const key = `${rule.stage}|${rule.subCenter ?? ''}`;
+      const key = `${rule.stage}|${rule.subCenter ?? ''}|${rule.machine ?? ''}`;
       if (seen.has(key)) continue;
       seen.add(key);
       out.push(rule);
@@ -59,6 +70,7 @@ export function recordMatchesStageRules(record: { stageType?: string; rawData?: 
   const own = String(record.rawData?.subCenterId ?? '');
   return rules.some((rule) => {
     if (record.stageType !== rule.stage) return false;
+    if (rule.machine) return String(record.rawData?.odooMachineKey ?? '') === rule.machine;
     if (!rule.subCenter) return true;
     return rule.subCenter === 'MAIN' ? own === '' : own === rule.subCenter;
   });

@@ -46,7 +46,7 @@ const SOURCE_ODOO = 'odoo';
 /** The machine / centre a record ran on, wherever its stage keeps it. */
 export function recordEquipmentLabel(r: UniversalStageRecord): string {
   const d = (r.rawData ?? {}) as Record<string, any>;
-  return String(d.subCenterName || d.pressName || d.furnaceName || d.machineName || d.millName || d.equipmentName || d.workCenterName || d.workCenter?.equipmentName || d.workCenter?.mainCenterNameAr || '').trim();
+  return String(d.odooEquipmentName || d.subCenterName || d.pressName || d.furnaceName || d.machineName || d.millName || d.equipmentName || d.workCenterName || d.workCenter?.equipmentName || d.workCenter?.mainCenterNameAr || '').trim();
 }
 
 /**

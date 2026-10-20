@@ -1,9 +1,9 @@
 {
   "_doc": "Release Manifest precursor. Describes WHAT is being released so the gate checks a committed declaration rather than whatever flags an operator typed. commitSha/buildId/deploymentId are left null until a release is cut - the gate fills the comparison from the build itself, and only enforces a field that is set here. This is NOT the Change Registry: no change IDs, no Firestore, no UI.",
-  "version": "3.40.0",
-  "releaseId": "REL-2026-0051",
+  "version": "3.41.0",
+  "releaseId": "REL-2026-0052",
   "changeIds": [
-    "MOD-0067"
+    "MOD-0068"
   ],
   "commitSha": null,
   "buildId": null,
@@ -214,11 +214,13 @@
     "odooExecution",
     "odooSeparateUploads",
     "allStagesRecords",
-    "hierarchyStageMapping"
+    "hierarchyStageMapping",
+    "odooMachine"
   ],
   "deployCommand": "firebase deploy --only hosting --project asfourproduction-70e6e",
   "treeClean": true,
   "_changeNotes": {
+    "MOD-0068": "Owner request: choosing ONE machine in the cost-centre selector must narrow the Odoo records. The production record the import writes carries no machine (checked live: the stored fields of a tunnel-kiln record have no work centre or equipment name; externalRefs is empty); the machine is on the workOrders document written beside it (workCenter.equipmentName, linked by productionRecordId). fetchUniversalStageRecords now reads those documents (once per five minutes, only when a fetched record has a manufacturingOrderNumber, never failing the fetch) and stamps each Odoo record with its equipment name and a machine key (odooMachinePure): chinese_mills:N from 'الطاحونه الصينيه رقم N', tube_ball_mills:ball / :tube from the ball-mill and tube-mill work centres. The node table maps 5101-5105 and 5111/5112 to those keys. Names that do not say which machine (الخلاطات, الافران النفقية) get no key - never guessed. Verified LOCALLY against the real database before this release: mills 1-5 = 47/45/46/45/39 (sum 222 = what the import wrote), ball 9 + tube 26 = 35, rotary 346. The older 'unchanged vs HEAD' guards flag the dirty tree until committed. Limits: pressing and mixing machines are not keyed (no Odoo pressing record written yet; one work centre for all mixers). No data written",
     "MOD-0067": "Owner clarification: the filter meant is the EXISTING cost-centre selector ('مراكز التكاليف': الفرن الدوار 501 > 5011/5012/5013, الطواحين الصينى 510 > 5101.., ...), not the stage select or the sub-centre select added earlier. It narrowed records by the equipment linked beneath the nodes, and only pressing / furnace records carry an equipment id (stageRecordEquipmentIds), so choosing the kiln or a mills department matched no record of those stages - above all none of the Odoo import's (stage + sub-centre, no equipment id). hierarchyStageMappingPure holds an explicit table of production-department node codes -> stage (501 rotary kiln, 5011 the kiln itself, 5012 crushers, 5013 shakers, 510 Chinese mills, 511 tube/ball mills, 512 mixing, 513 pressing, 5135 hand-made brick, 514 tunnel kilns, 515 lightweight foam, 516 mortar and concrete) and resolveStageRulesForNodes takes the union over the selected node and everything below it; filterUniversalRecords takes the rules as an optional fourth argument and keeps a record when its equipment is in scope OR it belongs to a selected stage (and sub-centre). A single machine node (one mill, one press) has no rule and narrows by its equipment link as before; nothing selected leaves the records untouched. Applied in Production Records, Reports and the classic Dashboard. Limits: a single machine of a non-pressing stage cannot narrow Odoo records (they carry no machine id); sorting and thermal concrete have no node in the table; custom dashboards and the assistant tools keep the equipment scope only. No data written",
     "MOD-0066": "Owner request: no records / reports screen may be tied to one stage - all of them are the cross-stage list narrowed by filters, with a stage choice that can also be a group (all mills, all kilns). 3.38.0 did this for the Production Records screen (verified live: 4,221 records across stages, 346 rotary-kiln records = the Odoo import's 346, sub-centres shakers / crushers shown, mills 3,471, kilns 477). This release gives the same stage selector (all / group / one stage) to the Dashboard, Reports and Audit & Approval through the one helper (stageFilterGroupsPure.expandStageFilter) and the stageTypes filter; one stage is still pushed down to the query as before, a group is fetched with all stages and narrowed client-side. The rotary sub-centre filter shows for the rotary kiln and the kilns group. Also: the Odoo badge on the all-stages list matched only identityKey / provenance / externalRefs and showed on none of the 346 Odoo rows live, so it now matches any import field (manufacturingOrderNumber, sourceDocumentReference too), and the record details window can show the stored data as it is in the database to see which fields the write kept. Not covered: custom (saved) dashboards' widgets keep their own stage setting. No data written",
     "MOD-0065": "Owner request: the imported Odoo records must appear in the Production Records screen and the Dashboard, and no records/reports screen may be tied to one stage - every screen is the cross-stage list, narrowed by filters (a stage, a group such as all mills / all kilns, equipment). The Production Records screen read only the pressing collection (subscribeProductionRecords), so records of the other ten stages were never in it. It now has a stage filter, default 'all stages', and renders AllStagesRecordsSection: fetchUniversalStageRecords (the same normalised records the Dashboard and Reports read) narrowed by filterUniversalRecords with the new stageTypes list, the screen's period / product / customer / shift / search / cost-centre equipment scope, and the rotary sub-centre filter for the rotary kiln and the kilns group. The legacy pressing table (edit, single and bulk delete) is kept untouched for the 'pressing' filter, and a pressing row in the all-stages list opens the same edit / delete dialogs. Other stages are not edited here (Audit & Approval, as before). Quantities are shown in their own unit; tons are never mixed with pieces. Not done here: the same group options on the Dashboard / Reports / Audit stage selectors. No data written",
@@ -280,8 +282,8 @@
     "UI-0010": "Financial Accounts import opens a dedicated Master Data importer instead of the Historical Excel Import screen: the action no longer navigates to the bulk-entry route (which App.tsx renders as DataImportView); a new in-place modal reuses the existing financialAccounts schema, XLSX reader, row validation, duplicate detection and chunked commit, adds sheet selection and parent/cycle relationship checks, and keeps partial import so invalid rows never block valid ones",
     "DB-0009": "Category-first Master Data over an extensible registry; Financial Accounts master data with Excel import and hierarchical editing (new financialAccounts collection and its Firestore rule); one shared generic hierarchy resolver reused by Master Data, Production Review and production aggregation; hierarchical cost-centre editing with cycle, self-parent and unknown-parent protection"
   },
-  "previousVersion": "3.39.0",
+  "previousVersion": "3.40.0",
   "versionBump": "MINOR",
   "classificationConfidence": "HIGH",
-  "previousReleaseId": "REL-2026-0050"
+  "previousReleaseId": "REL-2026-0051"
 }
