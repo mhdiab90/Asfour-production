@@ -22,7 +22,8 @@
  */
 import { UniversalStageRecord, ProductionStageType, MultiDimensionFilter } from '../types';
 import { STAGE_DISPLAY_NAMES, STAGE_COLLECTION_NAMES } from './stageRecordService';
-import { applyHierarchyScopeToStageRecords } from './productionFilterEnginePure';
+import { applyHierarchyScopeToStageRecords, stageRecordEquipmentIds } from './productionFilterEnginePure';
+import { applyHierarchySelection, type NodeStageRule } from './hierarchyStageMappingPure';
 
 /** English counterpart to STAGE_DISPLAY_NAMES (stageRecordService.ts), which is Arabic-only. Additive - existing Arabic-only call sites are untouched. */
 export const STAGE_DISPLAY_NAMES_EN: Record<ProductionStageType, string> = {
@@ -226,8 +227,15 @@ export function filterUniversalRecords(
   records: UniversalStageRecord[],
   filters: MultiDimensionFilter,
   hierarchyScope?: Set<string> | null,
+  /**
+   * 3.40.0 - the stage rules of the selected cost-centre nodes (hierarchyStageMappingPure): a record also
+   * passes when it belongs to a stage a selected node stands for. Omitted = the equipment scope alone.
+   */
+  stageRules?: readonly NodeStageRule[] | null,
 ): UniversalStageRecord[] {
-  const scoped = applyHierarchyScopeToStageRecords(records, hierarchyScope ?? null);
+  const scoped = stageRules && stageRules.length > 0
+    ? applyHierarchySelection<UniversalStageRecord>(records, hierarchyScope ?? null, stageRules, (r) => stageRecordEquipmentIds(r))
+    : applyHierarchyScopeToStageRecords(records, hierarchyScope ?? null);
   return scoped.filter((r) => {
     if (filters.startDate && r.date < filters.startDate) return false;
     if (filters.endDate && r.date > filters.endDate) return false;

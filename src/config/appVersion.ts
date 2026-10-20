@@ -37,7 +37,7 @@ const DEPLOYMENT_ID_INJECTED = typeof __BUILD_DEPLOYMENT_ID__ === 'string' ? __B
 
 export const CURRENT_APP_VERSION: AppVersionInfo = {
   /** Set by the automatic release planner from the classified change set - see releasePlannerPure.ts. */
-  version: '3.39.0',
+  version: '3.40.0',
   buildId: BUILD_ID_INJECTED,
   buildTimestamp: BUILD_TIMESTAMP_INJECTED,
   gitCommit: COMMIT_SHA_INJECTED,
@@ -46,6 +46,14 @@ export const CURRENT_APP_VERSION: AppVersionInfo = {
   environment: 'production',
   releaseDate: '2026-08-22',
   changelog: [
+    {
+      version: '3.40.0',
+      date: '2026-10-20',
+      highlights: [
+        'فلتر "مراكز التكاليف" صار يفلتر سجلات كل المراحل: اختيار "الفرن الدوار 501" يعرض كل سجلات الفرن الدوار، واختيار "كسارت الفرن الدوار 5012" أو "قسم الهزازات 5013" أو "الفرن الدوار 5011" يعرض مركزه فقط، واختيار "الطواحين الصينى 510" أو "الطواحين (التهوية) 511" أو الخلط أو الكبس أو الفرن النفقي أو الشاموت والجبس أو المونة والخرسانة يعرض سجلات مرحلته - بما فيها المستورد من أودو الذي لا يحمل رقم معدة',
+        'اختيار القسم الأب يشمل كل ما تحته (قسم الكبس يشمل الطوب اليدوي)، واختيار آلة بعينها (مكبس أو طاحونة) يفلتر بربط المعدة كما كان. يعمل في سجلات الإنتاج والتقارير ولوحة التحكم، وتظهر ملاحظة بالنطاق المطبَّق'
+      ]
+    },
     {
       version: '3.39.0',
       date: '2026-10-20',

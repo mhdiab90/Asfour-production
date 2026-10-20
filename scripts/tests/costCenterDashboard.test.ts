@@ -299,9 +299,9 @@ test('C3. the concrete selections produce the expected records', () => {
 });
 
 test('C4. both Dashboards and Reports pass the scope into the SAME shared record filter', () => {
-  assert.ok(/filterUniversalRecords\(allRecords, filters, productionScope\)/.test(readCode('src/components/dashboard/DashboardView.tsx')));
+  assert.ok(/filterUniversalRecords\(allRecords, filters, productionScope, stageRules\)/.test(readCode('src/components/dashboard/DashboardView.tsx')));
   assert.ok(/\}, hierarchyScope\);/.test(readCode('src/components/dashboard/WidgetRenderer.tsx')));
-  assert.ok(/filterUniversalRecords\(records, filters, hierarchyScope\)/.test(readCode('src/components/reports/ReportsView.tsx')));
+  assert.ok(/filterUniversalRecords\(records, filters, hierarchyScope, stageRules\)/.test(readCode('src/components/reports/ReportsView.tsx')));
   assert.ok(/\}, hierarchyScope\);/.test(readCode('src/services/exportService.ts')), 'the Builder Excel export matches the screen');
 });
 

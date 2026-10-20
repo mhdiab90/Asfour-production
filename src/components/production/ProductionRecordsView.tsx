@@ -39,6 +39,7 @@ import {
   resolveHierarchyEquipmentScope,
 } from '../../services/productionFilterEnginePure';
 import { AllStagesRecordsSection } from './AllStagesRecordsSection';
+import { resolveStageRulesForNodes } from '../../services/hierarchyStageMappingPure';
 import { ALL_STAGES, getStageDisplayName } from '../../services/reportingEngine';
 import { STAGE_FILTER_ALL, STAGE_FILTER_GROUPS } from '../../services/stageFilterGroupsPure';
 import {
@@ -246,6 +247,12 @@ export const ProductionRecordsView: React.FC<ProductionRecordsViewProps> = ({ on
   const stageHierarchyScope = useMemo(
     () => resolveHierarchyEquipmentScope(costCenterNodeIds.map(asNodeSelection), { index: hierarchyIndex }, { equipment: equipmentLinks }),
     [costCenterNodeIds, hierarchyIndex, equipmentLinks],
+  );
+
+  /** The selected cost-centre nodes that stand for a production stage (3.40.0). */
+  const stageHierarchyRules = useMemo(
+    () => resolveStageRulesForNodes(costCenterNodeIds, hierarchyIndex),
+    [costCenterNodeIds, hierarchyIndex],
   );
 
   // Filter logic
@@ -553,6 +560,7 @@ export const ProductionRecordsView: React.FC<ProductionRecordsViewProps> = ({ on
           shiftId={filterShift}
           searchQuery={searchQuery}
           hierarchyScope={stageHierarchyScope}
+          stageRules={stageHierarchyRules}
           onEditPressing={(id) => { const rec = records.find((r) => r.id === id); if (rec) handleOpenEdit(rec); }}
           onDeletePressing={(id) => { const rec = records.find((r) => r.id === id); if (rec) setDeleteConfirmRecord(rec); }}
         />

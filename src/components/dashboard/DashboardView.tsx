@@ -47,6 +47,7 @@ import {
 import { ProductionStageType, NavigationPage, UniversalStageRecord, Press, Furnace, MultiDimensionFilter } from '../../types';
 import { fetchUniversalStageRecords } from '../../services/stageRecordService';
 import { expandStageFilter, STAGE_FILTER_GROUPS } from '../../services/stageFilterGroupsPure';
+import { resolveStageRulesForNodes } from '../../services/hierarchyStageMappingPure';
 import { fetchMasterData } from '../../services/masterDataService';
 /*
  * Which equipment a stage actually records - declared once on the shared
@@ -263,6 +264,12 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigate }) => {
     [costCenterNodeIds, hierarchyIndex, equipmentLinks],
   );
 
+  /** The selected nodes that stand for a production stage (3.40.0). */
+  const stageRules = useMemo(
+    () => resolveStageRulesForNodes(costCenterNodeIds, hierarchyIndex),
+    [costCenterNodeIds, hierarchyIndex],
+  );
+
   /** For FINANCIAL: the cost-centre codes beneath the selected nodes. */
   const costCenterCodeScope = useMemo(
     () => resolveCostCenterCodeScope(costCenterNodeIds, hierarchyIndex),
@@ -418,8 +425,8 @@ export const DashboardView: React.FC<DashboardViewProps> = ({ onNavigate }) => {
   }), [resolvedDate, stageGroup, shiftId, entityFilters]);
 
   const filteredRecords = useMemo(
-    () => filterUniversalRecords(allRecords, filters, productionScope),
-    [allRecords, filters, productionScope],
+    () => filterUniversalRecords(allRecords, filters, productionScope, stageRules),
+    [allRecords, filters, productionScope, stageRules],
   );
 
   /*

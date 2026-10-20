@@ -17,6 +17,7 @@ import type { ProductionStageType, UniversalStageRecord } from '../../types';
 import { fetchUniversalStageRecords } from '../../services/stageRecordService';
 import { ALL_STAGES, filterUniversalRecords, getStageDisplayName, SUB_CENTER_MAIN } from '../../services/reportingEngine';
 import { expandStageFilter, includesRotaryKiln } from '../../services/stageFilterGroupsPure';
+import type { NodeStageRule } from '../../services/hierarchyStageMappingPure';
 import { Modal } from '../common/Modal';
 import { formatDecimal, formatNumber } from '../../utils/formatters';
 import { DASHBOARD_FILTER_SELECT } from '../dashboard/dashboardFilterStyles';
@@ -33,6 +34,8 @@ export interface AllStagesRecordsSectionProps {
   searchQuery: string;
   /** The cost-centre selection resolved to equipment ids; null = none selected. */
   hierarchyScope: Set<string> | null;
+  /** The stages the selected cost-centre nodes stand for (hierarchyStageMappingPure); null = none selected. */
+  stageRules?: readonly NodeStageRule[] | null;
   /** Pressing rows only: open the legacy edit / delete dialogs the screen already has. */
   onEditPressing?: (id: string) => void;
   onDeletePressing?: (id: string) => void;
@@ -73,7 +76,7 @@ export function rawDataPreview(r: UniversalStageRecord, max = 6000): string {
 }
 
 export const AllStagesRecordsSection: React.FC<AllStagesRecordsSectionProps> = ({
-  language, startDate, endDate, stageValue, productId, customerId, shiftId, searchQuery, hierarchyScope, onEditPressing, onDeletePressing,
+  language, startDate, endDate, stageValue, productId, customerId, shiftId, searchQuery, hierarchyScope, stageRules, onEditPressing, onDeletePressing,
 }) => {
   const isAr = language === 'ar';
   const [records, setRecords] = useState<UniversalStageRecord[]>([]);
@@ -109,12 +112,12 @@ export const AllStagesRecordsSection: React.FC<AllStagesRecordsSectionProps> = (
       customerId: customerId !== 'all' ? customerId : undefined,
       shiftId: shiftId !== 'all' ? shiftId : undefined,
       subCenterId: subCenter || undefined,
-    }, hierarchyScope);
+    }, hierarchyScope, stageRules);
     const q = searchQuery.trim().toLowerCase();
     if (!q) return base;
     return base.filter((r) => [r.productCode, r.productName, r.customerName, r.stageNameAr, recordEquipmentLabel(r), ...(r.workers ?? []).map((w) => w.employeeName)]
       .some((v) => String(v ?? '').toLowerCase().includes(q)));
-  }, [records, startDate, endDate, stages, productId, customerId, shiftId, subCenter, hierarchyScope, searchQuery]);
+  }, [records, startDate, endDate, stages, productId, customerId, shiftId, subCenter, hierarchyScope, stageRules, searchQuery]);
 
   const totals = useMemo(() => {
     const production = shown.reduce((s, r) => s + (r.productionTons || 0), 0);
@@ -177,11 +180,16 @@ export const AllStagesRecordsSection: React.FC<AllStagesRecordsSectionProps> = (
               </select>
             </label>
           )}
-          {hierarchyScope && (
-            <span className="font-bold text-amber-700">
-              {hierarchyScope.size === 0
-                ? (isAr ? 'المراكز المختارة بلا معدات مرتبطة بها.' : 'The selected cost centres have no linked equipment.')
-                : (isAr ? `نطاق مراكز التكاليف: ${hierarchyScope.size} معدة (السجلات غير المرتبطة بمعدة لا تظهر).` : `Cost-centre scope: ${hierarchyScope.size} equipment record(s) (records not tied to equipment are not shown).`)}
+          {(hierarchyScope || (stageRules && stageRules.length > 0)) && (
+            <span id="all-stages-scope-note" className="font-bold text-amber-700">
+              {(() => {
+                const stagesNamed = [...new Set((stageRules ?? []).map((r) => getStageDisplayName(r.stage, language)))];
+                const equipmentCount = hierarchyScope?.size ?? 0;
+                if (stagesNamed.length === 0 && equipmentCount === 0) return isAr ? 'المراكز المختارة بلا معدات ولا مرحلة مرتبطة بها.' : 'The selected cost centres have no linked equipment or stage.';
+                return isAr
+                  ? `نطاق مراكز التكاليف: ${stagesNamed.length ? `مراحل (${stagesNamed.join('، ')})` : ''}${stagesNamed.length && equipmentCount ? ' + ' : ''}${equipmentCount ? `${equipmentCount} معدة مرتبطة` : ''}.`
+                  : `Cost-centre scope: ${stagesNamed.length ? `stages (${stagesNamed.join(', ')})` : ''}${stagesNamed.length && equipmentCount ? ' + ' : ''}${equipmentCount ? `${equipmentCount} linked equipment` : ''}.`;
+              })()}
             </span>
           )}
           <div className="flex-grow" />

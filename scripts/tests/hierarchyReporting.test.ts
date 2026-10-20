@@ -384,7 +384,7 @@ test('G4. the LEGACY AI production path is still untouched by hierarchy work', (
 test('G5. §35 - exports flow from the same filtered dataset, with no separate implementation', () => {
   const rv = readCode('src/components/reports/ReportsView.tsx');
   // filteredRecords -> reportRows -> export. One chain.
-  assert.ok(/filterUniversalRecords\(records, filters, hierarchyScope\)/.test(rv),
+  assert.ok(/filterUniversalRecords\(records, filters, hierarchyScope, stageRules\)/.test(rv),
     'the scope must be applied in the single filtering memo');
   assert.ok(/aggregateByDimension\(filteredRecords/.test(rv), 'aggregation reads the filtered set');
   assert.ok(/exportAggregatedReportToExcel\(\s*reportRows/.test(rv), 'export reads the aggregated rows');

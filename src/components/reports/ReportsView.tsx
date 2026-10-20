@@ -49,7 +49,7 @@ import { exportAggregatedReportToExcel } from '../../services/exportService';
 import { fetchMasterData } from '../../services/masterDataService';
 import { listCostCenterHierarchyNodes, CostCenterHierarchyRecord } from '../../services/costCenterHierarchyService';
 import { buildHierarchyIndex, getNodePath } from '../../services/hierarchyResolverPure';
-import { asNodeSelection, resolveHierarchyEquipmentScope } from '../../services/productionFilterEnginePure';
+import { asNodeSelection, isNodeSelection, nodeIdFromSelection, resolveHierarchyEquipmentScope } from '../../services/productionFilterEnginePure';
 import { Press, Furnace } from '../../types';
 import {
   REPORT_CATEGORIES,
@@ -61,6 +61,7 @@ import {
   AggregatedReportRow,
 } from '../../services/reportingEngine';
 import { expandStageFilter, includesRotaryKiln, STAGE_FILTER_GROUPS } from '../../services/stageFilterGroupsPure';
+import { resolveStageRulesForNodes } from '../../services/hierarchyStageMappingPure';
 import { Badge } from '../common/Badge';
 import { Modal } from '../common/Modal';
 import { formatNumber, formatDecimal } from '../../utils/formatters';
@@ -301,9 +302,15 @@ export const ReportsView: React.FC<ReportsViewProps> = () => {
     [hierarchyNodes, hierarchyIndex],
   );
 
+  /** The selected nodes that stand for a production stage (3.40.0) - choosing "الفرن الدوار" narrows the kiln's records. */
+  const stageRules = useMemo(
+    () => resolveStageRulesForNodes(selectedNodes.filter(isNodeSelection).map(nodeIdFromSelection), hierarchyIndex),
+    [selectedNodes, hierarchyIndex],
+  );
+
   const filteredRecords = useMemo(
-    () => filterUniversalRecords(records, filters, hierarchyScope),
-    [records, filters, hierarchyScope],
+    () => filterUniversalRecords(records, filters, hierarchyScope, stageRules),
+    [records, filters, hierarchyScope, stageRules],
   );
 
   const reportRows = useMemo(
